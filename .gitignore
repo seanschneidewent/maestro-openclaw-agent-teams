@@ -1,0 +1,23 @@
+# Knowledge store (large, per-project output)
+knowledge_store/
+
+# Environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Thumbnail caches
+.cache/
+
+# OS
+.DS_Store
+Thumbs.db
