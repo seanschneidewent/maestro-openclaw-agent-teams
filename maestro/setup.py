@@ -165,16 +165,47 @@ class SetupWizard:
                 border_style="yellow",
                 width=60,
             ))
-            if Confirm.ask(f"  [{CYAN}]Have you installed OpenClaw?[/]", default=False, console=console):
+            console.print()
+            choice = Prompt.ask(
+                f"  [{CYAN}]What would you like to do?[/]\n"
+                f"  [{DIM}][1] Try again  [2] Skip for now  [3] Quit & reopen terminal[/]\n"
+                f"  [{CYAN}]Choice[/]",
+                choices=["1", "2", "3"],
+                default="1",
+                console=console,
+            )
+
+            if choice == "1":
                 result = self.run_command("openclaw --version", check=False)
                 if result.returncode != 0:
-                    error("Still can't find OpenClaw. Make sure npm is in your PATH.")
+                    console.print()
+                    error("Still can't find OpenClaw.")
+                    console.print(Panel(
+                        "Your new terminal may not have loaded the updated PATH yet.\n"
+                        "Close this terminal, open a fresh one, and run:\n\n"
+                        "[bold white]  maestro-setup[/]\n\n"
+                        f"[{DIM}]Your progress is saved automatically.[/]",
+                        border_style="yellow",
+                        width=60,
+                    ))
                     return False
-            else:
-                return False
+            elif choice == "2":
+                warning("Skipping OpenClaw — you'll need it before starting the gateway")
+                self.progress['openclaw_skip'] = True
+                self.save_progress()
+                self.progress['prerequisites'] = True
+                self.save_progress()
+                return True
+            else:  # choice == "3"
+                console.print()
+                info("Close this terminal, open a fresh one, and run:")
+                console.print(f"  [bold white]maestro-setup[/]")
+                console.print(f"  [{DIM}]Your progress is saved automatically.[/]")
+                sys.exit(0)
 
-        version = result.stdout.strip()
-        success(f"OpenClaw {version}")
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            success(f"OpenClaw {version}")
 
         self.progress['prerequisites'] = True
         self.save_progress()
@@ -784,6 +815,11 @@ MAESTRO_STORE=knowledge_store/
             title=f"[bold {BRIGHT_CYAN}]Next Steps[/]",
             width=64,
         ))
+
+        if self.progress.get('openclaw_skip'):
+            console.print()
+            warning("OpenClaw not installed — install it before starting the gateway:")
+            console.print(f"  [bold white]npm install -g openclaw[/]")
 
         if self.progress.get('tailscale_skip'):
             console.print()
