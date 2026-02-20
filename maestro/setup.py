@@ -246,12 +246,21 @@ class SetupWizard:
         # OpenClaw not found — show install walkthrough
         console.print()
 
+        # Platform-specific terminal hint
+        if system == "Darwin":
+            terminal_hint = f"[{DIM}italic]Tip: Press [bold]⌘T[/bold] for a new tab, or [bold]⌘N[/bold] for a new window.[/]"
+        elif system == "Windows":
+            terminal_hint = f"[{DIM}italic]Tip: Press [bold]Ctrl+Shift+T[/bold] for a new tab, or [bold]Win+R[/bold] → type \"cmd\" → Enter.[/]"
+        else:
+            terminal_hint = f"[{DIM}italic]Tip: Press [bold]Ctrl+Shift+T[/bold] for a new terminal tab.[/]"
+
         if has_node and has_npm:
             panel_body = (
                 f"OpenClaw is the AI agent platform that powers Maestro.\n"
                 f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
                 f"\n"
                 f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
+                f"  {terminal_hint}\n"
                 f"\n"
                 f"[bold {BRIGHT_CYAN}]Step 1:[/] Open a new terminal and run:\n"
                 f"  [bold white]npm install -g openclaw[/]\n"
@@ -264,6 +273,7 @@ class SetupWizard:
                 f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
                 f"\n"
                 f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
+                f"  {terminal_hint}\n"
                 f"\n"
                 f"[bold {BRIGHT_CYAN}]Step 1:[/] Install Node.js\n"
                 f"  Download from: [bold white]https://nodejs.org[/]\n"
