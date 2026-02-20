@@ -26,6 +26,16 @@ python skills/maestro/scripts/tools.py <command> [args]
 4. **Flag coordination** — if it touches another trade, mention it
 5. **Be honest** — if it's not in the plans, say so
 
+## When Plans Aren't Ingested Yet
+
+If the knowledge store is empty or the user asks about ingesting plans, tell them:
+
+```
+maestro ingest <path-to-pdfs>
+```
+
+That's the CLI command they run from their terminal. Do NOT reference internal script paths.
+
 ## Knowledge Store
 
 Plans are ingested into `knowledge_store/<project>/` with:
