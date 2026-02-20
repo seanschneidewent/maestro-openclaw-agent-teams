@@ -32,6 +32,7 @@ dev = [
 
 [project.scripts]
 maestro = "maestro.cli:main"
+maestro-setup = "maestro.setup:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["maestro"]
