@@ -443,11 +443,19 @@ class SetupWizard:
         if 'channels' not in config:
             config['channels'] = {}
         
+        bot_token = self.progress['telegram_token']
         config['channels']['telegram'] = {
-            "provider": "telegram",
+            "enabled": True,
+            "botToken": bot_token,
+            "dmPolicy": "pairing",
+            "groupPolicy": "allowlist",
+            "streamMode": "partial",
             "accounts": {
                 "maestro": {
-                    "token": self.progress['telegram_token']
+                    "botToken": bot_token,
+                    "dmPolicy": "pairing",
+                    "groupPolicy": "allowlist",
+                    "streamMode": "partial"
                 }
             }
         }
