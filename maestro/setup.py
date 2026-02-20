@@ -430,7 +430,7 @@ class SetupWizard:
             )
 
             providers = {
-                '1': ('google', 'google/gemini-2.5-pro', 'GEMINI_API_KEY'),
+                '1': ('google', 'google/gemini-3.1-pro', 'GEMINI_API_KEY'),
                 '2': ('anthropic', 'anthropic/claude-opus-4-6', 'ANTHROPIC_API_KEY'),
                 '3': ('openai', 'openai/gpt-5.2', 'OPENAI_API_KEY'),
             }
