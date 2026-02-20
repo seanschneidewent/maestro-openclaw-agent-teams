@@ -138,7 +138,7 @@ def main():
     gen_project = lic_sub.add_parser("generate-project", help="Generate a test project license key")
     gen_project.add_argument("company_id", help="Company ID")
     gen_project.add_argument("project_id", help="Project ID (e.g., PRJ4B2C9A1F)")
-    gen_project.add_argument("project_slug", help="Project slug (e.g., chick-fil-a-love-field)")
+    gen_project.add_argument("project_slug", nargs="?", default=None, help="Project slug (auto-derived from project.json if omitted)")
     gen_project.add_argument("--store", help="Knowledge store path (defaults to MAESTRO_STORE or knowledge_store)")
 
     lic_sub.add_parser("validate", help="Validate current license")
@@ -206,17 +206,28 @@ def _run_license(args):
 
     elif args.license_command == "generate-project":
         store_path = args.store or os.environ.get("MAESTRO_STORE") or get_store_path()
+        project_slug = args.project_slug
+        if not project_slug:
+            # Auto-derive from project.json using same logic as tools.py
+            from .utils import slugify_underscore
+            from .loader import load_project
+            project = load_project(str(store_path))
+            project_slug = project.get("slug") or slugify_underscore(project.get("name", ""))
+            if not project_slug:
+                print("[X] Could not derive project slug. Pass it explicitly.")
+                sys.exit(1)
+            print(f"Auto-derived slug: {project_slug}")
         key = generate_project_key(
             args.company_id,
             args.project_id,
-            args.project_slug,
+            project_slug,
             str(store_path),
         )
         print(f"\n[OK] Project License Generated:\n")
         print(f"   {key}\n")
-        print(f"Project: {args.project_slug}")
+        print(f"Project: {project_slug}")
         print(f"Store:   {store_path}")
-        fp = generate_project_fingerprint(args.project_slug, str(store_path))
+        fp = generate_project_fingerprint(project_slug, str(store_path))
         print(f"Machine: {fp['machine_id']}")
         print(f"Fingerprint: {fp['fingerprint']}\n")
         print(f"Set this as MAESTRO_LICENSE_KEY environment variable.\n")

@@ -53,7 +53,7 @@ def requires_license(func):
     def wrapper(self, *args, **kwargs):
         if not getattr(self, "licensed", False):
             return (
-                f"❌ License required to use {func.__name__}.\n"
+                f"[X] License required to use {func.__name__}.\n"
                 f"Set MAESTRO_LICENSE_KEY environment variable with a valid project license.\n"
                 f"Generate a test key with: maestro license generate-project"
             )
@@ -103,8 +103,8 @@ class MaestroTools:
         license_key = os.environ.get("MAESTRO_LICENSE_KEY")
         
         if not license_key:
-            print("⚠️  No MAESTRO_LICENSE_KEY found in environment")
-            print("   Tools will be disabled. Set a valid project license to enable.")
+            print("[!] No MAESTRO_LICENSE_KEY found in environment")
+            print("    Tools will be disabled. Set a valid project license to enable.")
             self.licensed = False
             return
         
@@ -127,12 +127,12 @@ class MaestroTools:
             self.licensed = True
             
         except LicenseError as e:
-            print(f"❌ License validation failed: {e}")
-            print(f"   Tools will be disabled.")
+            print(f"[X] License validation failed: {e}")
+            print(f"    Tools will be disabled.")
             self.licensed = False
         except Exception as e:
-            print(f"⚠️  Could not validate license: {e}")
-            print(f"   Tools will be disabled.")
+            print(f"[!] Could not validate license: {e}")
+            print(f"    Tools will be disabled.")
             self.licensed = False
 
     @property
