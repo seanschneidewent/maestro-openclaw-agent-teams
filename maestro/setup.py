@@ -181,43 +181,116 @@ class SetupWizard:
         self.save_progress()
         return True
     
-    def step_anthropic_key(self) -> bool:
-        """Step 3: Anthropic API key"""
-        print_header("=== Anthropic API Key ===")
+    def step_ai_provider(self) -> bool:
+        """Step 3: Choose AI provider and get API key"""
+        print_header("=== Choose Your AI Provider ===")
         
-        if self.progress.get('anthropic_key'):
-            print_info("Using saved Anthropic API key")
-            if not self.confirm("Keep this key?", True):
-                self.progress.pop('anthropic_key', None)
+        if self.progress.get('provider') and self.progress.get('provider_key'):
+            provider = self.progress['provider']
+            print_info(f"Using saved provider: {provider}")
+            if not self.confirm("Keep this provider?", True):
+                self.progress.pop('provider', None)
+                self.progress.pop('provider_key', None)
         
-        if not self.progress.get('anthropic_key'):
-            print("Maestro uses Claude (Anthropic's AI) for understanding construction plans.")
+        if not self.progress.get('provider'):
+            print("Maestro works with any of these AI providers.")
+            print("Choose based on your budget and preference:")
             print()
-            print(f"1. Visit {Color.BOLD}https://console.anthropic.com{Color.END}")
-            print("2. Sign in or create an account")
-            print("3. Go to API Keys and create a new key")
+            print(f"  {Color.BOLD}1. Google Gemini 3.1 Pro{Color.END}")
+            print(f"     $2 input / $12 output per million tokens")
+            print(f"     {Color.GREEN}Best value — also powers plan vision analysis{Color.END}")
+            print()
+            print(f"  {Color.BOLD}2. Anthropic Claude Opus 4.6{Color.END}")
+            print(f"     $5 input / $25 output per million tokens")
+            print(f"     Top-tier reasoning")
+            print()
+            print(f"  {Color.BOLD}3. OpenAI GPT-5.2{Color.END}")
+            print(f"     $20 input / $60 output per million tokens")
+            print(f"     Most expensive")
             print()
             
-            api_key = self.get_input("Paste your Anthropic API key")
+            choice = self.get_input("Enter 1, 2, or 3")
             
-            if not api_key or not api_key.startswith('sk-ant-'):
-                print_error("That doesn't look like an Anthropic API key (should start with 'sk-ant-')")
+            providers = {
+                '1': ('google', 'google/gemini-2.5-pro', 'GEMINI_API_KEY'),
+                '2': ('anthropic', 'anthropic/claude-opus-4-6', 'ANTHROPIC_API_KEY'),
+                '3': ('openai', 'openai/gpt-5.2', 'OPENAI_API_KEY'),
+            }
+            
+            if choice not in providers:
+                print_error("Invalid choice. Enter 1, 2, or 3.")
+                return False
+            
+            provider, model, env_key = providers[choice]
+            self.progress['provider'] = provider
+            self.progress['model'] = model
+            self.progress['provider_env_key'] = env_key
+            self.save_progress()
+        
+        provider = self.progress['provider']
+        
+        # Get API key for chosen provider
+        if not self.progress.get('provider_key'):
+            if provider == 'google':
+                print()
+                print(f"Get your Google Gemini API key:")
+                print(f"  1. Visit {Color.BOLD}https://aistudio.google.com/apikey{Color.END}")
+                print(f"  2. Sign in with Google")
+                print(f"  3. Create an API key")
+            elif provider == 'anthropic':
+                print()
+                print(f"Get your Anthropic API key:")
+                print(f"  1. Visit {Color.BOLD}https://console.anthropic.com{Color.END}")
+                print(f"  2. Sign in or create an account")
+                print(f"  3. Go to API Keys and create a new key")
+            elif provider == 'openai':
+                print()
+                print(f"Get your OpenAI API key:")
+                print(f"  1. Visit {Color.BOLD}https://platform.openai.com/api-keys{Color.END}")
+                print(f"  2. Sign in or create an account")
+                print(f"  3. Create a new secret key")
+            
+            print()
+            api_key = self.get_input("Paste your API key")
+            
+            if not api_key or len(api_key) < 8:
+                print_error("That doesn't look like a valid API key")
+                return False
+            
+            # Validate key format
+            if provider == 'anthropic' and not api_key.startswith('sk-ant-'):
+                print_error("Anthropic keys start with 'sk-ant-'")
+                return False
+            if provider == 'openai' and not api_key.startswith('sk-'):
+                print_error("OpenAI keys start with 'sk-'")
                 return False
             
             # Test the key
             print("Testing API key...")
             try:
                 import httpx
-                response = httpx.get(
-                    "https://api.anthropic.com/v1/messages",
-                    headers={
-                        "x-api-key": api_key,
-                        "anthropic-version": "2023-06-01"
-                    },
-                    timeout=10
-                )
-                # We expect a 400 (bad request) not a 401 (unauthorized)
-                if response.status_code == 401:
+                if provider == 'google':
+                    response = httpx.get(
+                        f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
+                        timeout=10
+                    )
+                    valid = response.status_code == 200
+                elif provider == 'anthropic':
+                    response = httpx.get(
+                        "https://api.anthropic.com/v1/messages",
+                        headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                        timeout=10
+                    )
+                    valid = response.status_code != 401
+                elif provider == 'openai':
+                    response = httpx.get(
+                        "https://api.openai.com/v1/models",
+                        headers={"Authorization": f"Bearer {api_key}"},
+                        timeout=10
+                    )
+                    valid = response.status_code == 200
+                
+                if not valid:
                     print_error("API key is invalid")
                     return False
             except Exception as e:
@@ -225,15 +298,25 @@ class SetupWizard:
                 if not self.confirm("Use this key anyway?", False):
                     return False
             
-            self.progress['anthropic_key'] = api_key
+            self.progress['provider_key'] = api_key
+            # If Google chosen, same key powers vision — store as gemini_key too
+            if provider == 'google':
+                self.progress['gemini_key'] = api_key
             self.save_progress()
         
-        print_success("Anthropic API key configured")
+        print_success(f"{provider.title()} API key configured")
         return True
     
     def step_gemini_key(self) -> bool:
-        """Step 4: Gemini API key"""
-        print_header("=== Gemini API Key ===")
+        """Step 4: Gemini API key (for vision — skipped if Google is the main provider)"""
+        # If they chose Google as provider, the same key works for vision
+        if self.progress.get('provider') == 'google':
+            self.progress['gemini_key'] = self.progress['provider_key']
+            self.save_progress()
+            print_info("Using your Gemini key for plan vision analysis too")
+            return True
+        
+        print_header("=== Gemini Vision Key ===")
         
         if self.progress.get('gemini_key'):
             print_info("Using saved Gemini API key")
@@ -241,7 +324,8 @@ class SetupWizard:
                 self.progress.pop('gemini_key', None)
         
         if not self.progress.get('gemini_key'):
-            print("Maestro uses Google's Gemini for vision analysis (highlighting details on plans).")
+            print("Maestro also uses Google Gemini for vision analysis")
+            print("(highlighting details on your plans).")
             print()
             print(f"1. Visit {Color.BOLD}https://aistudio.google.com/apikey{Color.END}")
             print("2. Sign in with Google")
@@ -273,7 +357,7 @@ class SetupWizard:
             self.progress['gemini_key'] = api_key
             self.save_progress()
         
-        print_success("Gemini API key configured")
+        print_success("Gemini vision key configured")
         return True
     
     def step_telegram_bot(self) -> bool:
@@ -416,7 +500,12 @@ class SetupWizard:
         # Set env (API keys at top level so all agents can use them)
         if 'env' not in config:
             config['env'] = {}
-        config['env']['ANTHROPIC_API_KEY'] = self.progress['anthropic_key']
+        
+        # Set provider API key
+        env_key = self.progress['provider_env_key']
+        config['env'][env_key] = self.progress['provider_key']
+        
+        # Set Gemini key for vision (may be same as provider key)
         config['env']['GEMINI_API_KEY'] = self.progress['gemini_key']
         
         # Add Maestro agent using agents.list array format
@@ -430,12 +519,12 @@ class SetupWizard:
             a for a in config['agents']['list'] if a.get('id') != 'maestro'
         ]
         
-        # Add maestro agent
+        # Add maestro agent with selected model
         config['agents']['list'].append({
             "id": "maestro",
             "name": "Maestro",
             "default": True,
-            "model": "anthropic/claude-sonnet-4-5",
+            "model": self.progress['model'],
             "workspace": workspace_path
         })
         
@@ -645,8 +734,8 @@ MAESTRO_STORE=knowledge_store/
         steps = [
             ("Welcome", self.step_welcome),
             ("Prerequisites", self.step_prerequisites),
-            ("Anthropic API Key", self.step_anthropic_key),
-            ("Gemini API Key", self.step_gemini_key),
+            ("AI Provider", self.step_ai_provider),
+            ("Gemini Vision Key", self.step_gemini_key),
             ("Telegram Bot", self.step_telegram_bot),
             ("Tailscale", self.step_tailscale),
             ("Configure OpenClaw", self.step_configure_openclaw),
