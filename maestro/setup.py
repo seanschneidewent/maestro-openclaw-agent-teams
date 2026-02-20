@@ -158,24 +158,44 @@ class SetupWizard:
         if result.returncode != 0:
             warning("OpenClaw is not installed")
             console.print()
+
+            # Check if Node.js is available
+            node_check = self.run_command("node --version", check=False)
+            has_node = node_check.returncode == 0
+
+            if has_node:
+                panel_body = (
+                    f"OpenClaw is the AI agent platform that powers Maestro.\n"
+                    f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
+                    f"\n"
+                    f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
+                    f"\n"
+                    f"[bold {BRIGHT_CYAN}]Step 1:[/] Open a new terminal and run:\n"
+                    f"  [bold white]npm install -g openclaw[/]\n"
+                    f"\n"
+                    f"[bold {BRIGHT_CYAN}]Step 2:[/] Come back here and press Enter"
+                )
+            else:
+                panel_body = (
+                    f"OpenClaw is the AI agent platform that powers Maestro.\n"
+                    f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
+                    f"\n"
+                    f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
+                    f"\n"
+                    f"[bold {BRIGHT_CYAN}]Step 1:[/] Install Node.js\n"
+                    f"  Download from: [bold white]https://nodejs.org[/]\n"
+                    f"  Choose the LTS version and run the installer.\n"
+                    f"\n"
+                    f"[bold {BRIGHT_CYAN}]Step 2:[/] Open a new terminal and run:\n"
+                    f"  [bold white]npm install -g openclaw[/]\n"
+                    f"\n"
+                    f"[bold {BRIGHT_CYAN}]Step 3:[/] Come back here and press Enter"
+                )
+
             console.print(Panel(
-                f"Maestro runs on OpenClaw — an AI agent platform.\n"
-                f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
-                f"\n"
-                f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
-                f"\n"
-                f"[bold {BRIGHT_CYAN}]Step 1:[/] Install Node.js (if you don't have it)\n"
-                f"  Download from: [bold white]https://nodejs.org[/]\n"
-                f"  Choose the LTS version and run the installer.\n"
-                f"\n"
-                f"[bold {BRIGHT_CYAN}]Step 2:[/] Install OpenClaw\n"
-                f"  [bold white]npm install -g openclaw[/]\n"
-                f"\n"
-                f"[bold {BRIGHT_CYAN}]Step 3:[/] Come back to THIS terminal\n"
-                f"  Once the install finishes in the other terminal,\n"
-                f"  come back here and press Enter.",
+                panel_body,
                 border_style=CYAN,
-                title=f"[bold {BRIGHT_CYAN}]Install OpenClaw[/]",
+                title=f"[bold {BRIGHT_CYAN}]\U0001f99e Install OpenClaw[/]",
                 width=60,
             ))
             console.print()
