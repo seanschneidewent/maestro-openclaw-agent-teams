@@ -2,6 +2,7 @@
 """
 Maestro Setup Wizard
 Interactive CLI to get construction superintendents up and running with Maestro.
+Premium Tron-inspired UI powered by rich.
 """
 
 import json
@@ -14,58 +15,44 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-# Fix Windows Unicode encoding
-if platform.system() == "Windows":
-    try:
-        import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-    except:
-        pass
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
+from rich.prompt import Prompt, Confirm
+from rich.rule import Rule
+from rich.markdown import Markdown
+from rich.style import Style
+from rich.text import Text
+from rich.traceback import install as install_rich_traceback
 
-# ANSI color codes
-class Color:
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    RED = '\033[91m'
-    BLUE = '\033[94m'
-    CYAN = '\033[96m'
-    BOLD = '\033[1m'
-    END = '\033[0m'
+# Install rich traceback handler
+install_rich_traceback(show_locals=False)
 
-# Symbols with ASCII fallbacks
-CHECK = '✓' if sys.stdout.encoding and 'utf' in sys.stdout.encoding.lower() else '+'
-CROSS = '✗' if sys.stdout.encoding and 'utf' in sys.stdout.encoding.lower() else 'x'
-WARNING = '⚠' if sys.stdout.encoding and 'utf' in sys.stdout.encoding.lower() else '!'
-INFO = 'ℹ' if sys.stdout.encoding and 'utf' in sys.stdout.encoding.lower() else 'i'
+# Initialize console with Tron-inspired theme
+console = Console()
 
-def print_header(text: str):
-    """Print a bold header"""
-    print(f"\n{Color.BOLD}{Color.CYAN}{text}{Color.END}\n")
+# Tron color scheme
+THEME = {
+    'primary': 'bright_cyan',
+    'secondary': 'cyan',
+    'success': 'green',
+    'warning': 'yellow',
+    'error': 'red',
+    'header': 'bold bright_cyan',
+    'panel_border': 'cyan',
+}
 
-def print_success(text: str):
-    """Print success message with checkmark"""
-    print(f"{Color.GREEN}{CHECK}{Color.END} {text}")
-
-def print_warning(text: str):
-    """Print warning message"""
-    print(f"{Color.YELLOW}{WARNING}{Color.END} {text}")
-
-def print_error(text: str):
-    """Print error message"""
-    print(f"{Color.RED}{CROSS}{Color.END} {text}")
-
-def print_info(text: str):
-    """Print info message"""
-    print(f"{Color.BLUE}{INFO}{Color.END} {text}")
 
 class SetupWizard:
-    """Maestro setup wizard"""
+    """Maestro setup wizard with premium Tron UI"""
     
     def __init__(self):
         self.progress_file = Path.home() / ".maestro-setup.json"
         self.progress = self.load_progress()
         self.is_windows = platform.system() == "Windows"
+        self.total_steps = 10
+        self.current_step = 1
         
     def load_progress(self) -> Dict[str, Any]:
         """Load saved progress if exists"""
@@ -82,21 +69,23 @@ class SetupWizard:
         with open(self.progress_file, 'w') as f:
             json.dump(self.progress, f, indent=2)
     
-    def get_input(self, prompt: str, default: Optional[str] = None) -> str:
-        """Get user input with optional default"""
-        if default:
-            full_prompt = f"{prompt} [{default}]: "
-        else:
-            full_prompt = f"{prompt}: "
+    def show_progress_bar(self, step_name: str):
+        """Show progress indicator at the top"""
+        progress_pct = (self.current_step / self.total_steps) * 100
         
-        value = input(full_prompt).strip()
-        return value if value else (default or "")
-    
-    def confirm(self, prompt: str, default: bool = False) -> bool:
-        """Ask yes/no question"""
-        default_str = "Y/n" if default else "y/N"
-        response = self.get_input(f"{prompt} ({default_str})", "y" if default else "n").lower()
-        return response in ['y', 'yes'] if response else default
+        # Create progress bar text
+        bar_length = 30
+        filled_length = int(bar_length * self.current_step // self.total_steps)
+        bar = '━' * filled_length + '╸' + '━' * (bar_length - filled_length - 1)
+        
+        progress_text = Text()
+        progress_text.append(f"Step {self.current_step} of {self.total_steps} ", style=THEME['primary'])
+        progress_text.append(bar, style=THEME['primary'])
+        progress_text.append(f" {progress_pct:.0f}%", style=THEME['primary'])
+        
+        console.print()
+        console.print(progress_text)
+        console.print()
     
     def run_command(self, cmd: str, check: bool = True) -> subprocess.CompletedProcess:
         """Run shell command and return result"""
@@ -106,7 +95,8 @@ class SetupWizard:
                 shell=True,
                 capture_output=True,
                 text=True,
-                check=check
+                check=check,
+                encoding='utf-8' if self.is_windows else None
             )
             return result
         except subprocess.CalledProcessError as e:
@@ -116,110 +106,195 @@ class SetupWizard:
     
     def step_welcome(self) -> bool:
         """Step 1: Welcome and license key"""
-        print_header("=== Welcome to Maestro Setup ===")
-        print("This wizard will get you up and running with Maestro,")
-        print("your AI assistant for construction plans.")
-        print()
+        self.show_progress_bar("Welcome")
+        
+        # ASCII art welcome
+        welcome_art = """
+███╗   ███╗ █████╗ ███████╗███████╗████████╗██████╗  ██████╗ 
+████╗ ████║██╔══██╗██╔════╝██╔════╝╚══██╔══╝██╔══██╗██╔═══██╗
+██╔████╔██║███████║█████╗  ███████╗   ██║   ██████╔╝██║   ██║
+██║╚██╔╝██║██╔══██║██╔══╝  ╚════██║   ██║   ██╔══██╗██║   ██║
+██║ ╚═╝ ██║██║  ██║███████╗███████║   ██║   ██║  ██║╚██████╔╝
+╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝ 
+"""
+        
+        welcome_panel = Panel(
+            welcome_art + "\n[bright_cyan]Your AI Assistant for Construction Plans[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Welcome to Maestro Setup[/bold bright_cyan]",
+            title_align="center"
+        )
+        console.print(welcome_panel)
+        console.print()
+        
+        console.print("This wizard will get you up and running with Maestro,", style=THEME['primary'])
+        console.print("your AI assistant for construction plans.", style=THEME['primary'])
+        console.print()
         
         if self.progress.get('license_key'):
-            print_info(f"Using saved license key: {self.progress['license_key'][:8]}...")
-            if not self.confirm("Continue with this key?", True):
+            console.print(f"[{THEME['primary']}]ℹ Using saved license key: {self.progress['license_key'][:8]}...[/{THEME['primary']}]")
+            if not Confirm.ask("[cyan]Continue with this key?[/cyan]", default=True):
                 self.progress.pop('license_key', None)
         
         if not self.progress.get('license_key'):
-            print()
-            print("First, let's verify your license key.")
-            license_key = self.get_input("Enter your Maestro license key")
+            console.print()
+            console.print("First, let's verify your license key.", style=THEME['secondary'])
+            license_key = Prompt.ask("[cyan]Enter your Maestro license key[/cyan]")
             
             # Basic validation - just check it looks like a key
             if not license_key or len(license_key) < 8:
-                print_error("That doesn't look like a valid license key.")
+                console.print(f"[{THEME['error']}]✗ That doesn't look like a valid license key.[/{THEME['error']}]")
                 return False
             
             self.progress['license_key'] = license_key
             self.save_progress()
         
-        print_success("License key verified")
+        console.print(f"[{THEME['success']}]✓ License key verified[/{THEME['success']}]")
+        self.current_step += 1
         return True
     
     def step_prerequisites(self) -> bool:
         """Step 2: Check prerequisites"""
-        print_header("=== Checking Prerequisites ===")
+        self.show_progress_bar("Prerequisites")
+        
+        prereq_panel = Panel(
+            "[bright_cyan]Checking system requirements[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Prerequisites[/bold bright_cyan]"
+        )
+        console.print(prereq_panel)
+        console.print()
         
         # Check Python version
         py_version = sys.version_info
         if py_version < (3, 11):
-            print_error(f"Python 3.11+ required, you have {py_version.major}.{py_version.minor}")
+            console.print(f"[{THEME['error']}]✗ Python 3.11+ required, you have {py_version.major}.{py_version.minor}[/{THEME['error']}]")
             return False
-        print_success(f"Python {py_version.major}.{py_version.minor}.{py_version.micro}")
+        console.print(f"[{THEME['success']}]✓ Python {py_version.major}.{py_version.minor}.{py_version.micro}[/{THEME['success']}]")
         
         # Check OpenClaw
         result = self.run_command("openclaw --version", check=False)
         if result.returncode != 0:
-            print_warning("OpenClaw is not installed")
-            print()
-            print("OpenClaw is the AI agent platform that powers Maestro.")
-            print("Open a separate terminal window and run:")
-            print()
-            print(f"  {Color.BOLD}npm install -g openclaw{Color.END}")
-            print()
-            print("Then come back here when it's done.")
-            print()
-            if self.confirm("Have you installed OpenClaw?", False):
+            console.print(f"[{THEME['warning']}]⚠ OpenClaw is not installed[/{THEME['warning']}]")
+            console.print()
+            console.print("OpenClaw is the AI agent platform that powers Maestro.")
+            console.print("Open a separate terminal window and run:")
+            console.print()
+            console.print("  [bold bright_cyan]npm install -g openclaw[/bold bright_cyan]")
+            console.print()
+            console.print("Then come back here when it's done.")
+            console.print()
+            if Confirm.ask("[cyan]Have you installed OpenClaw?[/cyan]", default=False):
                 # Check again
                 result = self.run_command("openclaw --version", check=False)
                 if result.returncode != 0:
-                    print_error("Still can't find OpenClaw. Make sure npm is in your PATH.")
+                    console.print(f"[{THEME['error']}]✗ Still can't find OpenClaw. Make sure npm is in your PATH.[/{THEME['error']}]")
                     return False
             else:
                 return False
         
         version = result.stdout.strip()
-        print_success(f"OpenClaw {version}")
+        console.print(f"[{THEME['success']}]✓ OpenClaw {version}[/{THEME['success']}]")
         
         self.progress['prerequisites'] = True
         self.save_progress()
+        self.current_step += 1
         return True
     
     def step_ai_provider(self) -> bool:
         """Step 3: Choose AI provider and get API key"""
-        print_header("=== Choose Your AI Provider ===")
+        self.show_progress_bar("AI Provider")
+        
+        provider_panel = Panel(
+            "[bright_cyan]Select the AI model that will power Maestro[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Choose Your AI Provider[/bold bright_cyan]"
+        )
+        console.print(provider_panel)
+        console.print()
         
         if self.progress.get('provider') and self.progress.get('provider_key'):
             provider = self.progress['provider']
-            print_info(f"Using saved provider: {provider}")
-            if not self.confirm("Keep this provider?", True):
+            console.print(f"[{THEME['primary']}]ℹ Using saved provider: {provider}[/{THEME['primary']}]")
+            if not Confirm.ask("[cyan]Keep this provider?[/cyan]", default=True):
                 self.progress.pop('provider', None)
                 self.progress.pop('provider_key', None)
         
         if not self.progress.get('provider'):
-            print("Maestro works with any of these AI providers.")
-            print("Choose based on your budget and preference:")
-            print()
-            print(f"  {Color.BOLD}1. Google Gemini 3.1 Pro{Color.END}")
-            print(f"     $2 input / $12 output per million tokens")
-            print(f"     {Color.GREEN}Best value — same key powers plan vision (saves a step){Color.END}")
-            print()
-            print(f"  {Color.BOLD}2. Anthropic Claude Opus 4.6{Color.END}")
-            print(f"     $5 input / $25 output per million tokens")
-            print(f"     Top-tier reasoning")
-            print()
-            print(f"  {Color.BOLD}3. OpenAI GPT-5.2{Color.END}")
-            print(f"     $1.75 input / $14 output per million tokens")
-            print(f"     Great all-rounder")
-            print()
+            # Create fancy model comparison table
+            table = Table(
+                show_header=True,
+                header_style=f"bold {THEME['header']}",
+                border_style=THEME['panel_border'],
+                title="[bold bright_cyan]Model Comparison[/bold bright_cyan]",
+                title_style=THEME['header']
+            )
             
-            choice = self.get_input("Enter 1, 2, or 3")
+            table.add_column("Option", style=THEME['primary'], width=8)
+            table.add_column("Provider", style="bold bright_cyan", width=25)
+            table.add_column("Cost/M tokens", style="cyan", width=18)
+            table.add_column("Best For", style="white", width=35)
+            table.add_column("Context", style="cyan", width=10)
+            
+            table.add_row(
+                "1",
+                "Google Gemini 3.1 Pro",
+                "$2 / $12",
+                "Vision + reasoning • [green]★ Recommended[/green]",
+                "1M"
+            )
+            table.add_row(
+                " ",
+                "[dim]Same key powers plan analysis (saves a step)[/dim]",
+                "",
+                "",
+                ""
+            )
+            
+            table.add_row(
+                "2",
+                "Anthropic Claude Opus 4.6",
+                "$5 / $25",
+                "Best instruction following",
+                "1M"
+            )
+            table.add_row(
+                " ",
+                "[dim]Most reliable for complex coordination[/dim]",
+                "",
+                "",
+                ""
+            )
+            
+            table.add_row(
+                "3",
+                "OpenAI GPT-5.2",
+                "$1.75 / $14",
+                "Fastest + lowest hallucination",
+                "400K"
+            )
+            table.add_row(
+                " ",
+                "[dim]Best value for quick jobsite answers[/dim]",
+                "",
+                "",
+                ""
+            )
+            
+            console.print(table)
+            console.print()
+            
+            choice = Prompt.ask(
+                "[cyan]Enter 1, 2, or 3[/cyan]",
+                choices=["1", "2", "3"],
+                show_choices=False
+            )
             
             providers = {
                 '1': ('google', 'google/gemini-2.5-pro', 'GEMINI_API_KEY'),
                 '2': ('anthropic', 'anthropic/claude-opus-4-6', 'ANTHROPIC_API_KEY'),
                 '3': ('openai', 'openai/gpt-5.2', 'OPENAI_API_KEY'),
             }
-            
-            if choice not in providers:
-                print_error("Invalid choice. Enter 1, 2, or 3.")
-                return False
             
             provider, model, env_key = providers[choice]
             self.progress['provider'] = provider
@@ -231,72 +306,71 @@ class SetupWizard:
         
         # Get API key for chosen provider
         if not self.progress.get('provider_key'):
-            if provider == 'google':
-                print()
-                print(f"Get your Google Gemini API key:")
-                print(f"  1. Visit {Color.BOLD}https://aistudio.google.com/apikey{Color.END}")
-                print(f"  2. Sign in with Google")
-                print(f"  3. Create an API key")
-            elif provider == 'anthropic':
-                print()
-                print(f"Get your Anthropic API key:")
-                print(f"  1. Visit {Color.BOLD}https://console.anthropic.com{Color.END}")
-                print(f"  2. Sign in or create an account")
-                print(f"  3. Go to API Keys and create a new key")
-            elif provider == 'openai':
-                print()
-                print(f"Get your OpenAI API key:")
-                print(f"  1. Visit {Color.BOLD}https://platform.openai.com/api-keys{Color.END}")
-                print(f"  2. Sign in or create an account")
-                print(f"  3. Create a new secret key")
+            console.print()
             
-            print()
-            api_key = self.get_input("Paste your API key")
+            if provider == 'google':
+                console.print("Get your Google Gemini API key:")
+                console.print("  1. Visit [bold bright_cyan]https://aistudio.google.com/apikey[/bold bright_cyan]")
+                console.print("  2. Sign in with Google")
+                console.print("  3. Create an API key")
+            elif provider == 'anthropic':
+                console.print("Get your Anthropic API key:")
+                console.print("  1. Visit [bold bright_cyan]https://console.anthropic.com[/bold bright_cyan]")
+                console.print("  2. Sign in or create an account")
+                console.print("  3. Go to API Keys and create a new key")
+            elif provider == 'openai':
+                console.print("Get your OpenAI API key:")
+                console.print("  1. Visit [bold bright_cyan]https://platform.openai.com/api-keys[/bold bright_cyan]")
+                console.print("  2. Sign in or create an account")
+                console.print("  3. Create a new secret key")
+            
+            console.print()
+            api_key = Prompt.ask("[cyan]Paste your API key[/cyan]", password=True)
             
             if not api_key or len(api_key) < 8:
-                print_error("That doesn't look like a valid API key")
+                console.print(f"[{THEME['error']}]✗ That doesn't look like a valid API key[/{THEME['error']}]")
                 return False
             
             # Validate key format
             if provider == 'anthropic' and not api_key.startswith('sk-ant-'):
-                print_error("Anthropic keys start with 'sk-ant-'")
+                console.print(f"[{THEME['error']}]✗ Anthropic keys start with 'sk-ant-'[/{THEME['error']}]")
                 return False
             if provider == 'openai' and not api_key.startswith('sk-'):
-                print_error("OpenAI keys start with 'sk-'")
+                console.print(f"[{THEME['error']}]✗ OpenAI keys start with 'sk-'[/{THEME['error']}]")
                 return False
             
-            # Test the key
-            print("Testing API key...")
-            try:
-                import httpx
-                if provider == 'google':
-                    response = httpx.get(
-                        f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
-                        timeout=10
-                    )
-                    valid = response.status_code == 200
-                elif provider == 'anthropic':
-                    response = httpx.get(
-                        "https://api.anthropic.com/v1/messages",
-                        headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-                        timeout=10
-                    )
-                    valid = response.status_code != 401
-                elif provider == 'openai':
-                    response = httpx.get(
-                        "https://api.openai.com/v1/models",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        timeout=10
-                    )
-                    valid = response.status_code == 200
-                
-                if not valid:
-                    print_error("API key is invalid")
-                    return False
-            except Exception as e:
-                print_warning(f"Couldn't validate key (network issue?): {e}")
-                if not self.confirm("Use this key anyway?", False):
-                    return False
+            # Test the key with spinner
+            with console.status("[cyan]Testing API key...[/cyan]", spinner="dots"):
+                try:
+                    import httpx
+                    if provider == 'google':
+                        response = httpx.get(
+                            f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
+                            timeout=10
+                        )
+                        valid = response.status_code == 200
+                    elif provider == 'anthropic':
+                        response = httpx.get(
+                            "https://api.anthropic.com/v1/messages",
+                            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                            timeout=10
+                        )
+                        valid = response.status_code != 401
+                    elif provider == 'openai':
+                        response = httpx.get(
+                            "https://api.openai.com/v1/models",
+                            headers={"Authorization": f"Bearer {api_key}"},
+                            timeout=10
+                        )
+                        valid = response.status_code == 200
+                    
+                    if not valid:
+                        console.print(f"[{THEME['error']}]✗ API key is invalid[/{THEME['error']}]")
+                        return False
+                except Exception as e:
+                    console.print(f"[{THEME['warning']}]⚠ Couldn't validate key (network issue?): {e}[/{THEME['warning']}]")
+                    if not Confirm.ask("[cyan]Use this key anyway?[/cyan]", default=False):
+                        return False
             
             self.progress['provider_key'] = api_key
             # If Google chosen, same key powers vision — store as gemini_key too
@@ -304,7 +378,8 @@ class SetupWizard:
                 self.progress['gemini_key'] = api_key
             self.save_progress()
         
-        print_success(f"{provider.title()} API key configured")
+        console.print(f"[{THEME['success']}]✓ {provider.title()} API key configured[/{THEME['success']}]")
+        self.current_step += 1
         return True
     
     def step_gemini_key(self) -> bool:
@@ -313,169 +388,207 @@ class SetupWizard:
         if self.progress.get('provider') == 'google':
             self.progress['gemini_key'] = self.progress['provider_key']
             self.save_progress()
-            print_info("Using your Gemini key for plan vision analysis too")
+            console.print(f"[{THEME['primary']}]ℹ Using your Gemini key for plan vision analysis too[/{THEME['primary']}]")
+            self.current_step += 1
             return True
         
-        print_header("=== Gemini Vision Key ===")
+        self.show_progress_bar("Gemini Vision Key")
+        
+        gemini_panel = Panel(
+            "[bright_cyan]Gemini powers the plan vision analysis and highlighting[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Gemini Vision Key[/bold bright_cyan]"
+        )
+        console.print(gemini_panel)
+        console.print()
         
         if self.progress.get('gemini_key'):
-            print_info("Using saved Gemini API key")
-            if not self.confirm("Keep this key?", True):
+            console.print(f"[{THEME['primary']}]ℹ Using saved Gemini API key[/{THEME['primary']}]")
+            if not Confirm.ask("[cyan]Keep this key?[/cyan]", default=True):
                 self.progress.pop('gemini_key', None)
         
         if not self.progress.get('gemini_key'):
-            print("Maestro also uses Google Gemini for vision analysis")
-            print("(highlighting details on your plans).")
-            print()
-            print(f"1. Visit {Color.BOLD}https://aistudio.google.com/apikey{Color.END}")
-            print("2. Sign in with Google")
-            print("3. Create an API key")
-            print()
+            console.print("Maestro also uses Google Gemini for vision analysis")
+            console.print("(highlighting details on your plans).")
+            console.print()
+            console.print("1. Visit [bold bright_cyan]https://aistudio.google.com/apikey[/bold bright_cyan]")
+            console.print("2. Sign in with Google")
+            console.print("3. Create an API key")
+            console.print()
             
-            api_key = self.get_input("Paste your Gemini API key")
+            api_key = Prompt.ask("[cyan]Paste your Gemini API key[/cyan]", password=True)
             
             if not api_key or len(api_key) < 20:
-                print_error("That doesn't look like a valid API key")
+                console.print(f"[{THEME['error']}]✗ That doesn't look like a valid API key[/{THEME['error']}]")
                 return False
             
             # Test the key
-            print("Testing API key...")
-            try:
-                import httpx
-                response = httpx.get(
-                    f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
-                    timeout=10
-                )
-                if response.status_code != 200:
-                    print_error("API key is invalid")
-                    return False
-            except Exception as e:
-                print_warning(f"Couldn't validate key (network issue?): {e}")
-                if not self.confirm("Use this key anyway?", False):
-                    return False
+            with console.status("[cyan]Testing API key...[/cyan]", spinner="dots"):
+                try:
+                    import httpx
+                    response = httpx.get(
+                        f"https://generativelanguage.googleapis.com/v1/models?key={api_key}",
+                        timeout=10
+                    )
+                    if response.status_code != 200:
+                        console.print(f"[{THEME['error']}]✗ API key is invalid[/{THEME['error']}]")
+                        return False
+                except Exception as e:
+                    console.print(f"[{THEME['warning']}]⚠ Couldn't validate key (network issue?): {e}[/{THEME['warning']}]")
+                    if not Confirm.ask("[cyan]Use this key anyway?[/cyan]", default=False):
+                        return False
             
             self.progress['gemini_key'] = api_key
             self.save_progress()
         
-        print_success("Gemini vision key configured")
+        console.print(f"[{THEME['success']}]✓ Gemini vision key configured[/{THEME['success']}]")
+        self.current_step += 1
         return True
     
     def step_telegram_bot(self) -> bool:
         """Step 5: Telegram bot setup"""
-        print_header("=== Telegram Bot Setup ===")
+        self.show_progress_bar("Telegram Bot")
+        
+        telegram_panel = Panel(
+            "[bright_cyan]Chat with Maestro from the job site[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Telegram Bot Setup[/bold bright_cyan]"
+        )
+        console.print(telegram_panel)
+        console.print()
         
         if self.progress.get('telegram_token'):
-            print_info("Using saved Telegram bot token")
-            if not self.confirm("Keep this bot?", True):
+            console.print(f"[{THEME['primary']}]ℹ Using saved Telegram bot token[/{THEME['primary']}]")
+            if not Confirm.ask("[cyan]Keep this bot?[/cyan]", default=True):
                 self.progress.pop('telegram_token', None)
         
         if not self.progress.get('telegram_token'):
-            print("Maestro runs as a Telegram bot so you can text it from the job site.")
-            print()
-            print("To create a bot:")
-            print(f"1. Open Telegram and message {Color.BOLD}@BotFather{Color.END}")
-            print("2. Send /newbot")
-            print("3. Follow prompts to name your bot")
-            print("4. Copy the bot token (long string with numbers and letters)")
-            print()
+            console.print("Maestro runs as a Telegram bot so you can text it from the job site.")
+            console.print()
+            console.print("To create a bot:")
+            console.print("1. Open Telegram and message [bold bright_cyan]@BotFather[/bold bright_cyan]")
+            console.print("2. Send /newbot")
+            console.print("3. Follow prompts to name your bot")
+            console.print("4. Copy the bot token (long string with numbers and letters)")
+            console.print()
             
-            bot_token = self.get_input("Paste your bot token")
+            bot_token = Prompt.ask("[cyan]Paste your bot token[/cyan]", password=True)
             
             # Validate format: should be like 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
             if not re.match(r'^\d+:[A-Za-z0-9_-]+$', bot_token):
-                print_error("That doesn't look like a valid bot token")
+                console.print(f"[{THEME['error']}]✗ That doesn't look like a valid bot token[/{THEME['error']}]")
                 return False
             
             # Test the token
-            print("Testing bot token...")
-            try:
-                import httpx
-                response = httpx.get(
-                    f"https://api.telegram.org/bot{bot_token}/getMe",
-                    timeout=10
-                )
-                if response.status_code != 200:
-                    print_error("Bot token is invalid")
-                    return False
-                
-                bot_info = response.json()
-                bot_username = bot_info['result']['username']
-                print_success(f"Bot verified: @{bot_username}")
-                self.progress['bot_username'] = bot_username
-            except Exception as e:
-                print_warning(f"Couldn't validate token (network issue?): {e}")
-                if not self.confirm("Use this token anyway?", False):
-                    return False
+            with console.status("[cyan]Testing bot token...[/cyan]", spinner="dots"):
+                try:
+                    import httpx
+                    response = httpx.get(
+                        f"https://api.telegram.org/bot{bot_token}/getMe",
+                        timeout=10
+                    )
+                    if response.status_code != 200:
+                        console.print(f"[{THEME['error']}]✗ Bot token is invalid[/{THEME['error']}]")
+                        return False
+                    
+                    bot_info = response.json()
+                    bot_username = bot_info['result']['username']
+                    console.print(f"[{THEME['success']}]✓ Bot verified: @{bot_username}[/{THEME['success']}]")
+                    self.progress['bot_username'] = bot_username
+                except Exception as e:
+                    console.print(f"[{THEME['warning']}]⚠ Couldn't validate token (network issue?): {e}[/{THEME['warning']}]")
+                    if not Confirm.ask("[cyan]Use this token anyway?[/cyan]", default=False):
+                        return False
             
             self.progress['telegram_token'] = bot_token
             self.save_progress()
         
-        print_success("Telegram bot configured")
+        console.print(f"[{THEME['success']}]✓ Telegram bot configured[/{THEME['success']}]")
+        self.current_step += 1
         return True
     
     def step_tailscale(self) -> bool:
         """Step 6: Tailscale setup"""
-        print_header("=== Tailscale Setup ===")
+        self.show_progress_bar("Tailscale")
         
-        print("Tailscale creates a secure private network so you can access")
-        print("your plan viewer from anywhere.")
-        print()
+        tailscale_panel = Panel(
+            "[bright_cyan]Access your plan viewer from anywhere securely[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Tailscale Setup[/bold bright_cyan]"
+        )
+        console.print(tailscale_panel)
+        console.print()
+        
+        console.print("Tailscale creates a secure private network so you can access")
+        console.print("your plan viewer from anywhere.")
+        console.print()
         
         # Check if Tailscale is installed
         result = self.run_command("tailscale --version", check=False)
         if result.returncode != 0:
-            print_warning("Tailscale is not installed")
-            print()
+            console.print(f"[{THEME['warning']}]⚠ Tailscale is not installed[/{THEME['warning']}]")
+            console.print()
             if self.is_windows:
-                print(f"Download from: {Color.BOLD}https://tailscale.com/download/windows{Color.END}")
+                console.print(f"Download from: [bold bright_cyan]https://tailscale.com/download/windows[/bold bright_cyan]")
             else:
-                print(f"Download from: {Color.BOLD}https://tailscale.com/download{Color.END}")
-            print()
+                console.print(f"Download from: [bold bright_cyan]https://tailscale.com/download[/bold bright_cyan]")
+            console.print()
             
-            if not self.confirm("Have you installed Tailscale?", False):
-                print_warning("Skipping Tailscale setup - you can add it later")
+            if not Confirm.ask("[cyan]Have you installed Tailscale?[/cyan]", default=False):
+                console.print(f"[{THEME['warning']}]⚠ Skipping Tailscale setup - you can add it later[/{THEME['warning']}]")
                 self.progress['tailscale_skip'] = True
                 self.save_progress()
+                self.current_step += 1
                 return True
             
             # Check again
             result = self.run_command("tailscale --version", check=False)
             if result.returncode != 0:
-                print_error("Still can't find Tailscale")
+                console.print(f"[{THEME['error']}]✗ Still can't find Tailscale[/{THEME['error']}]")
                 return False
         
-        print_success("Tailscale is installed")
+        console.print(f"[{THEME['success']}]✓ Tailscale is installed[/{THEME['success']}]")
         
         # Check if logged in
         result = self.run_command("tailscale status", check=False)
         if "Logged out" in result.stdout or result.returncode != 0:
-            print_warning("Not logged into Tailscale")
-            print()
-            print("Run this command to log in:")
-            print(f"  {Color.BOLD}tailscale up{Color.END}")
-            print()
+            console.print(f"[{THEME['warning']}]⚠ Not logged into Tailscale[/{THEME['warning']}]")
+            console.print()
+            console.print("Run this command to log in:")
+            console.print("  [bold bright_cyan]tailscale up[/bold bright_cyan]")
+            console.print()
             
-            if not self.confirm("Have you logged in?", False):
-                print_warning("Skipping Tailscale - you can configure it later")
+            if not Confirm.ask("[cyan]Have you logged in?[/cyan]", default=False):
+                console.print(f"[{THEME['warning']}]⚠ Skipping Tailscale - you can configure it later[/{THEME['warning']}]")
                 self.progress['tailscale_skip'] = True
                 self.save_progress()
+                self.current_step += 1
                 return True
         
         # Get Tailscale IP
         result = self.run_command("tailscale ip -4", check=False)
         if result.returncode == 0:
             tailscale_ip = result.stdout.strip()
-            print_success(f"Tailscale IP: {tailscale_ip}")
+            console.print(f"[{THEME['success']}]✓ Tailscale IP: {tailscale_ip}[/{THEME['success']}]")
             self.progress['tailscale_ip'] = tailscale_ip
             self.save_progress()
         
         self.progress['tailscale_enabled'] = True
         self.save_progress()
+        self.current_step += 1
         return True
     
     def step_configure_openclaw(self) -> bool:
         """Step 7: Configure OpenClaw"""
-        print_header("=== Configuring OpenClaw ===")
+        self.show_progress_bar("Configure OpenClaw")
+        
+        openclaw_panel = Panel(
+            "[bright_cyan]Writing OpenClaw configuration[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Configuring OpenClaw[/bold bright_cyan]"
+        )
+        console.print(openclaw_panel)
+        console.print()
         
         # OpenClaw reads from ~/.openclaw/openclaw.json on all platforms
         config_dir = Path.home() / ".openclaw"
@@ -488,7 +601,7 @@ class SetupWizard:
         if config_file.exists():
             with open(config_file, 'r') as f:
                 config = json.load(f)
-            print_info("Found existing OpenClaw config, merging...")
+            console.print(f"[{THEME['primary']}]ℹ Found existing OpenClaw config, merging...[/{THEME['primary']}]")
         else:
             config = {}
         
@@ -553,15 +666,24 @@ class SetupWizard:
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
         
-        print_success(f"OpenClaw config written to {config_file}")
+        console.print(f"[{THEME['success']}]✓ OpenClaw config written to {config_file}[/{THEME['success']}]")
         self.progress['openclaw_configured'] = True
         self.progress['workspace'] = workspace_path
         self.save_progress()
+        self.current_step += 1
         return True
     
     def step_configure_maestro(self) -> bool:
         """Step 8: Configure Maestro workspace"""
-        print_header("=== Setting Up Maestro Workspace ===")
+        self.show_progress_bar("Configure Maestro")
+        
+        workspace_panel = Panel(
+            "[bright_cyan]Setting up your Maestro workspace[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Setting Up Maestro Workspace[/bold bright_cyan]"
+        )
+        console.print(workspace_panel)
+        console.print()
         
         # Get workspace path
         if self.is_windows:
@@ -569,14 +691,15 @@ class SetupWizard:
         else:
             default_workspace = Path.home() / ".openclaw" / "workspace-maestro"
         
-        workspace_input = self.get_input(
-            "Workspace directory",
-            str(default_workspace)
+        workspace_input = Prompt.ask(
+            "[cyan]Workspace directory[/cyan]",
+            default=str(default_workspace)
         )
         workspace = Path(workspace_input)
         workspace.mkdir(parents=True, exist_ok=True)
         
-        print_info(f"Using workspace: {workspace}")
+        console.print(f"[{THEME['primary']}]ℹ Using workspace: {workspace}[/{THEME['primary']}]")
+        console.print()
         
         # Find soul files - check multiple locations
         maestro_pkg = Path(__file__).parent  # maestro/ package dir
@@ -595,9 +718,9 @@ class SetupWizard:
             
             if src:
                 shutil.copy2(src, workspace / filename)
-                print_success(f"Copied {filename}")
+                console.print(f"[{THEME['success']}]✓ Copied {filename}[/{THEME['success']}]")
             else:
-                print_warning(f"Couldn't find {filename} - you can add it later")
+                console.print(f"[{THEME['warning']}]⚠ Couldn't find {filename} - you can add it later[/{THEME['warning']}]")
         
         # Generate TOOLS.md with project-specific config
         tools_md = f"""# TOOLS.md — Maestro Local Notes
@@ -617,12 +740,12 @@ class SetupWizard:
 """
         with open(workspace / "TOOLS.md", 'w') as f:
             f.write(tools_md)
-        print_success("Generated TOOLS.md")
+        console.print(f"[{THEME['success']}]✓ Generated TOOLS.md[/{THEME['success']}]")
         
         # Create knowledge_store directory
         knowledge_store = workspace / "knowledge_store"
         knowledge_store.mkdir(exist_ok=True)
-        print_success("Created knowledge_store/")
+        console.print(f"[{THEME['success']}]✓ Created knowledge_store/[/{THEME['success']}]")
         
         # Create skills directory structure
         skills_dir = workspace / "skills" / "maestro"
@@ -634,9 +757,9 @@ class SetupWizard:
             if skills_dir.exists():
                 shutil.rmtree(skills_dir)
             shutil.copytree(skill_src, skills_dir)
-            print_success("Copied Maestro skill")
+            console.print(f"[{THEME['success']}]✓ Copied Maestro skill[/{THEME['success']}]")
         else:
-            print_warning("Couldn't find skill files - tools will still work via CLI")
+            console.print(f"[{THEME['warning']}]⚠ Couldn't find skill files - tools will still work via CLI[/{THEME['warning']}]")
         
         # Write .env file
         env_file = workspace / ".env"
@@ -646,120 +769,179 @@ MAESTRO_STORE=knowledge_store/
 """
         with open(env_file, 'w') as f:
             f.write(env_content)
-        print_success("Created .env")
+        console.print(f"[{THEME['success']}]✓ Created .env[/{THEME['success']}]")
         
         # Build frontend if it exists (repo layout only — bundled installs ship pre-built)
         frontend_dir = repo_root / "frontend"
         if frontend_dir.exists() and (frontend_dir / "package.json").exists():
-            print()
-            print("Building plan viewer...")
+            console.print()
             
-            # Check for npm
-            npm_check = self.run_command("npm --version", check=False)
-            if npm_check.returncode == 0:
-                install_result = self.run_command(
-                    f'cd "{frontend_dir}" && npm install', check=False
-                )
-                if install_result.returncode == 0:
-                    build_result = self.run_command(
-                        f'cd "{frontend_dir}" && npm run build', check=False
+            with console.status("[cyan]Building plan viewer...[/cyan]", spinner="dots"):
+                # Check for npm
+                npm_check = self.run_command("npm --version", check=False)
+                if npm_check.returncode == 0:
+                    install_result = self.run_command(
+                        f'cd "{frontend_dir}" && npm install', check=False
                     )
-                    if build_result.returncode == 0:
-                        print_success("Plan viewer built")
+                    if install_result.returncode == 0:
+                        build_result = self.run_command(
+                            f'cd "{frontend_dir}" && npm run build', check=False
+                        )
+                        if build_result.returncode == 0:
+                            console.print(f"[{THEME['success']}]✓ Plan viewer built[/{THEME['success']}]")
+                        else:
+                            console.print(f"[{THEME['warning']}]⚠ Frontend build failed — you can try later:[/{THEME['warning']}]")
+                            console.print(f"  cd {frontend_dir} && npm run build")
                     else:
-                        print_warning("Frontend build failed — you can try later:")
-                        print(f"  cd {frontend_dir} && npm run build")
+                        console.print(f"[{THEME['warning']}]⚠ npm install failed — you can try later:[/{THEME['warning']}]")
+                        console.print(f"  cd {frontend_dir} && npm install && npm run build")
                 else:
-                    print_warning("npm install failed — you can try later:")
-                    print(f"  cd {frontend_dir} && npm install && npm run build")
-            else:
-                print_warning("npm not found — plan viewer needs Node.js to build")
-                print(f"  Install Node.js from https://nodejs.org")
-                print(f"  Then: cd {frontend_dir} && npm install && npm run build")
+                    console.print(f"[{THEME['warning']}]⚠ npm not found — plan viewer needs Node.js to build[/{THEME['warning']}]")
+                    console.print(f"  Install Node.js from https://nodejs.org")
+                    console.print(f"  Then: cd {frontend_dir} && npm install && npm run build")
         
         self.progress['workspace'] = str(workspace)
         self.save_progress()
-        print_success(f"Workspace ready at {workspace}")
+        console.print()
+        console.print(f"[{THEME['success']}]✓ Workspace ready at {workspace}[/{THEME['success']}]")
+        self.current_step += 1
         return True
     
     def step_ingest_plans(self) -> bool:
         """Step 9: First plans ingest"""
-        print_header("=== Ingest Construction Plans ===")
+        self.show_progress_bar("Ingest Plans")
         
-        print("Maestro needs to analyze your PDF plans before you can ask questions.")
-        print()
+        ingest_panel = Panel(
+            "[bright_cyan]Import your construction plans for AI analysis[/bright_cyan]",
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Ingest Construction Plans[/bold bright_cyan]"
+        )
+        console.print(ingest_panel)
+        console.print()
         
-        if not self.confirm("Do you have PDF plans ready to ingest?", False):
-            print_info("No problem - you can ingest plans later with:")
-            print(f"  {Color.BOLD}maestro ingest <path-to-pdfs>{Color.END}")
+        console.print("Maestro needs to analyze your PDF plans before you can ask questions.")
+        console.print()
+        
+        if not Confirm.ask("[cyan]Do you have PDF plans ready to ingest?[/cyan]", default=False):
+            console.print(f"[{THEME['primary']}]ℹ No problem - you can ingest plans later with:[/{THEME['primary']}]")
+            console.print("  [bold bright_cyan]maestro ingest <path-to-pdfs>[/bold bright_cyan]")
             self.progress['ingest_skip'] = True
             self.save_progress()
+            self.current_step += 1
             return True
         
-        pdf_path = self.get_input("Path to PDF file or directory")
+        pdf_path = Prompt.ask("[cyan]Path to PDF file or directory[/cyan]")
         pdf_path = Path(pdf_path).expanduser().resolve()
         
         if not pdf_path.exists():
-            print_error(f"Path not found: {pdf_path}")
+            console.print(f"[{THEME['error']}]✗ Path not found: {pdf_path}[/{THEME['error']}]")
             return False
         
-        print()
-        print(f"Ingesting plans from {pdf_path}...")
-        print("This may take a few minutes depending on plan size.")
-        print()
+        console.print()
+        console.print(f"Ingesting plans from {pdf_path}...")
+        console.print("This may take a few minutes depending on plan size.")
+        console.print()
         
         # Run ingest
         workspace = Path(self.progress['workspace'])
         os.chdir(workspace)
         
-        result = self.run_command(f"maestro ingest {pdf_path}", check=False)
+        with console.status("[cyan]Analyzing plans...[/cyan]", spinner="dots"):
+            result = self.run_command(f"maestro ingest {pdf_path}", check=False)
         
         if result.returncode != 0:
-            print_error("Ingest failed")
-            print(result.stderr)
+            console.print(f"[{THEME['error']}]✗ Ingest failed[/{THEME['error']}]")
+            console.print(result.stderr)
             return False
         
-        print_success("Plans ingested successfully!")
+        console.print(f"[{THEME['success']}]✓ Plans ingested successfully![/{THEME['success']}]")
         self.progress['plans_ingested'] = True
         self.save_progress()
+        self.current_step += 1
         return True
     
     def step_done(self):
         """Step 10: Show summary and next steps"""
-        print_header("=== Maestro is Ready! ===")
+        console.print()
+        console.print(Rule(style=THEME['panel_border']))
+        console.print()
         
-        print(f"{Color.GREEN}Setup complete!{Color.END}")
-        print()
+        # Create completion panel
+        completion_art = """
+╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║   [green]✓[/green]  [bold bright_cyan]MAESTRO IS READY![/bold bright_cyan]                                  ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+"""
+        console.print(completion_art)
+        console.print()
         
-        # Show bot link
+        # Build summary markdown
+        summary_parts = ["## Configuration Summary\n"]
+        
+        # Bot link
         if self.progress.get('bot_username'):
             bot_link = f"https://t.me/{self.progress['bot_username']}"
-            print(f"Your Maestro bot: {Color.BOLD}{bot_link}{Color.END}")
+            summary_parts.append(f"**Your Maestro Bot:** [{bot_link}]({bot_link})")
         
-        # Show plan viewer URL
+        # Provider
+        if self.progress.get('provider'):
+            provider = self.progress['provider'].title()
+            model = self.progress.get('model', '').split('/')[-1]
+            summary_parts.append(f"**AI Provider:** {provider} ({model})")
+        
+        # Workspace
+        if self.progress.get('workspace'):
+            summary_parts.append(f"**Workspace:** `{self.progress['workspace']}`")
+        
+        # Tailscale IP
         if self.progress.get('tailscale_ip'):
             viewer_url = f"http://{self.progress['tailscale_ip']}:3000"
-            print(f"Plan viewer: {Color.BOLD}{viewer_url}{Color.END}")
+            summary_parts.append(f"**Plan Viewer:** [{viewer_url}]({viewer_url})")
         
-        print()
-        print("Next steps:")
-        print(f"  1. Start OpenClaw gateway: {Color.BOLD}openclaw gateway start{Color.END}")
-        print(f"  2. Start plan viewer: {Color.BOLD}maestro serve{Color.END}")
+        summary_parts.append("\n## Next Steps\n")
+        
+        steps = [
+            ("Start OpenClaw gateway", "`openclaw gateway start`"),
+            ("Start plan viewer", "`maestro serve`"),
+        ]
         
         if self.progress.get('bot_username'):
-            print(f"  3. Message your bot on Telegram: @{self.progress['bot_username']}")
+            steps.append((
+                "Message your bot on Telegram",
+                f"`@{self.progress['bot_username']}`"
+            ))
         
         if not self.progress.get('plans_ingested'):
-            print(f"  4. Ingest your plans: {Color.BOLD}maestro ingest <pdf-path>{Color.END}")
+            steps.append((
+                "Ingest your plans",
+                "`maestro ingest <pdf-path>`"
+            ))
+        
+        for i, (desc, cmd) in enumerate(steps, 1):
+            summary_parts.append(f"{i}. **{desc}:** {cmd}")
         
         if self.progress.get('tailscale_skip'):
-            print()
-            print(f"  {Color.YELLOW}Tailscale skipped{Color.END} — to access the viewer from your phone,")
-            print(f"  ask your Maestro bot: \"How do I set up Tailscale?\"")
+            summary_parts.append("\n---\n")
+            summary_parts.append("⚠️ **Tailscale skipped** — to access the viewer from your phone,")
+            summary_parts.append('ask your Maestro bot: "How do I set up Tailscale?"')
         
-        print()
-        print(f"{Color.CYAN}Questions? Check the docs or ask on the Maestro community.{Color.END}")
-        print()
+        summary_parts.append("\n---\n")
+        summary_parts.append("💡 Questions? Check the docs or ask on the Maestro community.")
+        
+        summary_md = "\n".join(summary_parts)
+        
+        # Render as panel
+        summary_panel = Panel(
+            Markdown(summary_md),
+            border_style=THEME['panel_border'],
+            title="[bold bright_cyan]Setup Complete[/bold bright_cyan]",
+            title_align="center",
+            padding=(1, 2)
+        )
+        console.print(summary_panel)
+        console.print()
         
         # Clean up progress file
         if self.progress_file.exists():
@@ -782,19 +964,25 @@ MAESTRO_STORE=knowledge_store/
         for step_name, step_func in steps:
             try:
                 if not step_func():
-                    print()
-                    print_error(f"Setup failed at: {step_name}")
-                    print(f"Progress saved. Run {Color.BOLD}maestro-setup{Color.END} again to resume.")
+                    console.print()
+                    console.print(f"[{THEME['error']}]✗ Setup failed at: {step_name}[/{THEME['error']}]")
+                    console.print(f"Progress saved. Run [bold bright_cyan]maestro-setup[/bold bright_cyan] again to resume.")
                     sys.exit(1)
             except KeyboardInterrupt:
-                print()
-                print_warning("Setup interrupted")
-                print(f"Progress saved. Run {Color.BOLD}maestro-setup{Color.END} again to resume.")
+                console.print()
+                console.print(f"[{THEME['warning']}]⚠ Setup interrupted[/{THEME['warning']}]")
+                console.print(f"Progress saved. Run [bold bright_cyan]maestro-setup[/bold bright_cyan] again to resume.")
                 sys.exit(0)
             except Exception as e:
-                print()
-                print_error(f"Unexpected error in {step_name}: {e}")
-                print(f"Progress saved. Run {Color.BOLD}maestro-setup{Color.END} again to resume.")
+                console.print()
+                console.print(Panel(
+                    f"[{THEME['error']}]Unexpected error in {step_name}:\n{e}[/{THEME['error']}]",
+                    border_style=THEME['error'],
+                    title=f"[bold {THEME['error']}]Error[/bold {THEME['error']}]"
+                ))
+                console.print(f"Progress saved. Run [bold bright_cyan]maestro-setup[/bold bright_cyan] again to resume.")
+                import traceback
+                traceback.print_exc()
                 sys.exit(1)
         
         # All steps complete
