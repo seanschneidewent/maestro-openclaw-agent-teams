@@ -58,6 +58,34 @@ Plans are ingested into `knowledge_store/<project>/` with:
 - `pages/<name>/page.png` — full page render
 - `pages/<name>/pointers/<region>/crop.png` — cropped detail image
 
+## Frontend & Workspaces
+
+Maestro has a plan viewer frontend that lets the super see workspaces, highlighted sheets, and generated images on their phone or laptop.
+
+**Starting the viewer:**
+```bash
+maestro serve
+```
+This starts the web server. By default it runs on `http://localhost:3000`.
+
+**Workspace deep links:**
+When you create a workspace and want to share it, send the link:
+`http://<server-ip>:3000/<project-slug>?workspace=<workspace-slug>`
+
+**Tailscale (remote access):**
+If the super wants to access the viewer from their phone or another device (like on the jobsite), they need Tailscale — a simple VPN that creates a private network.
+
+When someone asks to set up remote access or Tailscale, walk them through it:
+
+1. Download Tailscale: https://tailscale.com/download
+2. Install it and sign in (they can use Google login)
+3. Run `tailscale up` in a terminal to connect
+4. Run `tailscale ip -4` to get their Tailscale IP
+5. The viewer is now accessible at `http://<tailscale-ip>:3000` from any device on their tailnet
+6. They can share that link with anyone else on their Tailscale network (like other supers or PMs)
+
+After Tailscale is set up, always use the Tailscale IP in workspace links you send.
+
 ## Messaging Discipline
 
 - **One message, not many.** Compose the full content first, then send ONE message.

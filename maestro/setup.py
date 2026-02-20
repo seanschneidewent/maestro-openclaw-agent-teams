@@ -647,6 +647,35 @@ MAESTRO_STORE=knowledge_store/
             f.write(env_content)
         print_success("Created .env")
         
+        # Build frontend if it exists
+        frontend_dir = repo_root / "frontend"
+        if frontend_dir.exists() and (frontend_dir / "package.json").exists():
+            print()
+            print("Building plan viewer...")
+            
+            # Check for npm
+            npm_check = self.run_command("npm --version", check=False)
+            if npm_check.returncode == 0:
+                install_result = self.run_command(
+                    f'cd "{frontend_dir}" && npm install', check=False
+                )
+                if install_result.returncode == 0:
+                    build_result = self.run_command(
+                        f'cd "{frontend_dir}" && npm run build', check=False
+                    )
+                    if build_result.returncode == 0:
+                        print_success("Plan viewer built")
+                    else:
+                        print_warning("Frontend build failed — you can try later:")
+                        print(f"  cd {frontend_dir} && npm run build")
+                else:
+                    print_warning("npm install failed — you can try later:")
+                    print(f"  cd {frontend_dir} && npm install && npm run build")
+            else:
+                print_warning("npm not found — plan viewer needs Node.js to build")
+                print(f"  Install Node.js from https://nodejs.org")
+                print(f"  Then: cd {frontend_dir} && npm install && npm run build")
+        
         self.progress['workspace'] = str(workspace)
         self.save_progress()
         print_success(f"Workspace ready at {workspace}")
@@ -714,12 +743,18 @@ MAESTRO_STORE=knowledge_store/
         print()
         print("Next steps:")
         print(f"  1. Start OpenClaw gateway: {Color.BOLD}openclaw gateway start{Color.END}")
+        print(f"  2. Start plan viewer: {Color.BOLD}maestro serve{Color.END}")
         
         if self.progress.get('bot_username'):
-            print(f"  2. Message your bot on Telegram: @{self.progress['bot_username']}")
+            print(f"  3. Message your bot on Telegram: @{self.progress['bot_username']}")
         
         if not self.progress.get('plans_ingested'):
-            print(f"  3. Ingest your plans: {Color.BOLD}maestro ingest <pdf-path>{Color.END}")
+            print(f"  4. Ingest your plans: {Color.BOLD}maestro ingest <pdf-path>{Color.END}")
+        
+        if self.progress.get('tailscale_skip'):
+            print()
+            print(f"  {Color.YELLOW}Tailscale skipped{Color.END} — to access the viewer from your phone,")
+            print(f"  ask your Maestro bot: \"How do I set up Tailscale?\"")
         
         print()
         print(f"{Color.CYAN}Questions? Check the docs or ask on the Maestro community.{Color.END}")
