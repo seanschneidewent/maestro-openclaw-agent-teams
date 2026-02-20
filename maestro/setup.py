@@ -192,51 +192,61 @@ class SetupWizard:
                 self.progress.pop('provider_key', None)
 
         if not self.progress.get('provider'):
-            # Model comparison table
-            table = Table(
-                box=box.DOUBLE_EDGE,
-                border_style=CYAN,
-                title=f"[bold {BRIGHT_CYAN}]AI Provider Comparison[/]",
-                title_style=BRIGHT_CYAN,
-                width=72,
-                pad_edge=True,
-            )
-            table.add_column("", style="bold white", width=3, justify="center")
-            table.add_column("Provider", style="bold white", min_width=12)
-            table.add_column("Cost (per 1M tokens)", style=DIM, min_width=16)
-            table.add_column("Best For", min_width=16)
-            table.add_column("Context", justify="right", min_width=8)
-
-            table.add_row(
-                f"[bold {BRIGHT_CYAN}]★[/]",
-                f"[bold {BRIGHT_CYAN}]Google Gemini 3.1 Pro[/]",
-                "$2 in / $12 out",
-                f"[{BRIGHT_CYAN}]Knows the most. Best vision —\nsees your plans natively.\nSame key for agent + vision.[/]",
-                "1M",
-            )
-            table.add_row(
-                "2",
-                "Anthropic Claude Opus 4.6",
-                "$5 in / $25 out",
-                "Best instruction follower.\nMost creative + reliable for\ncomplex coordination.",
-                "1M",
-            )
-            table.add_row(
-                "3",
-                "OpenAI GPT-5.2",
-                "$1.75 in / $14 out",
-                "Cheapest + fastest responses.\nLowest hallucination rate.\nBest for quick jobsite Q&A.",
-                "400K",
-            )
-
+            # Stacked provider cards
             console.print()
-            console.print(table)
+            console.print(Panel(
+                f"[{DIM}]$2 / $12 per M tokens  •  1M context[/]\n"
+                "\n"
+                "The broadest knowledge base of any model. Native\n"
+                "vision means it actually reads your drawings — not\n"
+                "just text descriptions of them. Strong at synthesizing\n"
+                "information across many sheets at once. One API key\n"
+                "powers both the agent and plan analysis.\n"
+                "\n"
+                f"[{DIM}]Watch for: Can occasionally drift on very specific\n"
+                f"multi-step instructions.[/]",
+                border_style=BRIGHT_CYAN,
+                title=f"[bold {BRIGHT_CYAN}]★ Recommended: Google Gemini 3.1 Pro[/]",
+                width=72,
+            ))
+            console.print()
+            console.print(Panel(
+                f"[{DIM}]$5 / $25 per M tokens  •  1M context[/]\n"
+                "\n"
+                "The most precise instruction follower available.\n"
+                "Excels at complex coordination questions that span\n"
+                "multiple trades and disciplines. Maintains accuracy\n"
+                "across massive context with minimal drift. Creative\n"
+                "at finding connections others miss.\n"
+                "\n"
+                f"[{DIM}]Watch for: Most expensive option. Still needs a\n"
+                f"separate Gemini key for plan vision.[/]",
+                border_style=DIM,
+                title="[bold white]2. Anthropic Claude Opus 4.6[/]",
+                width=72,
+            ))
+            console.print()
+            console.print(Panel(
+                f"[{DIM}]$1.75 / $14 per M tokens  •  400K context[/]\n"
+                "\n"
+                "Fastest responses and the lowest hallucination rate\n"
+                "of any frontier model. Gives clean, direct answers.\n"
+                "Great for rapid-fire jobsite questions where speed\n"
+                "matters more than deep analysis.\n"
+                "\n"
+                f"[{DIM}]Watch for: Smaller context window may limit\n"
+                f"performance on very large plan sets. Needs separate\n"
+                f"Gemini key for vision.[/]",
+                border_style=DIM,
+                title="[bold white]3. OpenAI GPT-5.2[/]",
+                width=72,
+            ))
             console.print()
 
             # Recommended callout
             console.print(Panel(
-                f"[bold {BRIGHT_CYAN}]★ Recommended:[/] [white]Google Gemini — best vision for construction plans, "
-                "strong reasoning, and the same API key powers plan analysis (saves a setup step).[/]",
+                f"[bold {BRIGHT_CYAN}]★ Recommended:[/] [white]Google Gemini — best price-to-performance, "
+                "and the same API key powers plan vision analysis (saves a step).[/]",
                 border_style=CYAN,
                 width=72,
             ))
