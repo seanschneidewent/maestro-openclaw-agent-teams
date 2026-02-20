@@ -392,7 +392,7 @@ class SetupWizard:
                 f"[{DIM}]Watch for: Most expensive option. Still needs a\n"
                 f"separate Gemini key for plan vision.[/]",
                 border_style=DIM,
-                title="[bold white]2. Anthropic Claude Opus 4.6[/]",
+                title=f"[{DIM}]2.[/] [bold {BRIGHT_CYAN}]Anthropic Claude Opus 4.6[/]",
                 width=72,
             ))
             console.print()
@@ -408,7 +408,7 @@ class SetupWizard:
                 f"performance on very large plan sets. Needs separate\n"
                 f"Gemini key for vision.[/]",
                 border_style=DIM,
-                title="[bold white]3. OpenAI GPT-5.2[/]",
+                title=f"[{DIM}]3.[/] [bold {BRIGHT_CYAN}]OpenAI GPT-5.2[/]",
                 width=72,
             ))
             console.print()
