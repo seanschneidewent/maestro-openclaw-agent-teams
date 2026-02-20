@@ -156,7 +156,44 @@ class SetupWizard:
         has_npm = False
         has_openclaw = False
 
-        # 1. Python
+        # 1. OS detection
+        time.sleep(0.3)
+        system = platform.system()
+        release = platform.release()
+        machine = platform.machine()
+
+        if system == "Darwin":
+            # macOS — get version from platform.mac_ver()
+            mac_ver = platform.mac_ver()[0] or release
+            chip = "Apple Silicon" if machine == "arm64" else "Intel"
+            os_label = f"macOS {mac_ver} ({chip})"
+        elif system == "Windows":
+            # Windows 11 has build >= 22000
+            try:
+                build = int(release) if release.isdigit() else int(platform.version().split(".")[-1])
+                win_ver = "11" if build >= 22000 else "10"
+            except (ValueError, IndexError):
+                win_ver = release
+            arch = "x64" if machine in ("AMD64", "x86_64") else machine
+            os_label = f"Windows {win_ver} ({arch})"
+        else:
+            # Linux — try to get distro name
+            distro_name = ""
+            try:
+                os_release = platform.freedesktop_os_release()
+                distro_name = os_release.get("PRETTY_NAME", "")
+            except (OSError, AttributeError):
+                pass
+            if distro_name:
+                os_label = f"{distro_name} ({machine})"
+            else:
+                os_label = f"Linux {release} ({machine})"
+
+        success(os_label)
+        self.progress['os'] = os_label
+        self.save_progress()
+
+        # 2. Python
         time.sleep(0.3)
         py_version = sys.version_info
         if py_version < (3, 11):
@@ -164,7 +201,7 @@ class SetupWizard:
             return False
         success(f"Python {py_version.major}.{py_version.minor}.{py_version.micro}")
 
-        # 2. Node.js
+        # 3. Node.js
         time.sleep(0.3)
         node_result = self.run_command("node --version", check=False)
         if node_result.returncode == 0:
@@ -173,7 +210,7 @@ class SetupWizard:
         else:
             error(f"Node.js — not installed  [{DIM}]https://nodejs.org[/]")
 
-        # 3. npm
+        # 4. npm
         time.sleep(0.3)
         npm_result = self.run_command("npm --version", check=False)
         if npm_result.returncode == 0:
@@ -182,7 +219,7 @@ class SetupWizard:
         else:
             error(f"npm — not installed  [{DIM}](comes with Node.js)[/]")
 
-        # 4. git
+        # 5. git
         time.sleep(0.3)
         git_result = self.run_command("git --version", check=False)
         if git_result.returncode == 0:
@@ -191,7 +228,7 @@ class SetupWizard:
         else:
             warning(f"git — not installed  [{DIM}](recommended but not required)[/]")
 
-        # 5. OpenClaw
+        # 6. OpenClaw
         time.sleep(0.3)
         oc_result = self.run_command("openclaw --version", check=False)
         if oc_result.returncode == 0:
