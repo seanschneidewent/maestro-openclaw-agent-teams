@@ -211,22 +211,22 @@ class SetupWizard:
                 f"[bold {BRIGHT_CYAN}]★[/]",
                 f"[bold {BRIGHT_CYAN}]Google Gemini 3.1 Pro[/]",
                 "$2 in / $12 out",
-                f"[{BRIGHT_CYAN}]Best value — same key\npowers plan vision[/]",
-                "2M",
+                f"[{BRIGHT_CYAN}]Knows the most. Best vision —\nsees your plans natively.\nSame key for agent + vision.[/]",
+                "1M",
             )
             table.add_row(
                 "2",
                 "Anthropic Claude Opus 4.6",
                 "$5 in / $25 out",
-                "Top-tier reasoning",
-                "200K",
+                "Best instruction follower.\nMost creative + reliable for\ncomplex coordination.",
+                "1M",
             )
             table.add_row(
                 "3",
                 "OpenAI GPT-5.2",
                 "$1.75 in / $14 out",
-                "Great all-rounder",
-                "128K",
+                "Cheapest + fastest responses.\nLowest hallucination rate.\nBest for quick jobsite Q&A.",
+                "400K",
             )
 
             console.print()
@@ -235,8 +235,8 @@ class SetupWizard:
 
             # Recommended callout
             console.print(Panel(
-                f"[bold {BRIGHT_CYAN}]★ Recommended:[/] [white]Google Gemini — best price-to-performance, "
-                "and the same API key powers plan vision analysis (saves a step).[/]",
+                f"[bold {BRIGHT_CYAN}]★ Recommended:[/] [white]Google Gemini — best vision for construction plans, "
+                "strong reasoning, and the same API key powers plan analysis (saves a setup step).[/]",
                 border_style=CYAN,
                 width=72,
             ))
