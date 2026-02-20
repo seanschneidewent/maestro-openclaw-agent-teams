@@ -33,7 +33,7 @@ BLUE = "blue"
 BRIGHT_CYAN = "bright_cyan"
 DIM = "dim"
 
-console = Console()
+console = Console(force_terminal=True if platform.system() == "Windows" else None)
 
 TOTAL_STEPS = 10
 
@@ -168,10 +168,18 @@ class SetupWizard:
             chip = "Apple Silicon" if machine == "arm64" else "Intel"
             os_label = f"macOS {mac_ver} ({chip})"
         elif system == "Windows":
-            # Windows 11 has build >= 22000
+            # Detect Windows version: release may be "11" or "10" directly,
+            # or a build number. Also check build from platform.version().
             try:
-                build = int(release) if release.isdigit() else int(platform.version().split(".")[-1])
-                win_ver = "11" if build >= 22000 else "10"
+                if release == "11":
+                    win_ver = "11"
+                elif release == "10":
+                    # Could still be Windows 11 — check build number
+                    build = int(platform.version().split(".")[-1])
+                    win_ver = "11" if build >= 22000 else "10"
+                else:
+                    build = int(release)
+                    win_ver = "11" if build >= 22000 else "10"
             except (ValueError, IndexError):
                 win_ver = release
             arch = "x64" if machine in ("AMD64", "x86_64") else machine
