@@ -205,8 +205,8 @@ class SetupWizard:
             print(f"     Top-tier reasoning")
             print()
             print(f"  {Color.BOLD}3. OpenAI GPT-5.2{Color.END}")
-            print(f"     $20 input / $60 output per million tokens")
-            print(f"     Most expensive")
+            print(f"     $1.75 input / $14 output per million tokens")
+            print(f"     Great all-rounder")
             print()
             
             choice = self.get_input("Enter 1, 2, or 3")
