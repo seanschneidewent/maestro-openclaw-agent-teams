@@ -159,8 +159,11 @@ class SetupWizard:
             print_warning("OpenClaw is not installed")
             print()
             print("OpenClaw is the AI agent platform that powers Maestro.")
-            print("Install it with:")
+            print("Open a separate terminal window and run:")
+            print()
             print(f"  {Color.BOLD}npm install -g openclaw{Color.END}")
+            print()
+            print("Then come back here when it's done.")
             print()
             if self.confirm("Have you installed OpenClaw?", False):
                 # Check again
@@ -390,41 +393,51 @@ class SetupWizard:
         """Step 7: Configure OpenClaw"""
         print_header("=== Configuring OpenClaw ===")
         
-        # Determine config location
-        if self.is_windows:
-            config_dir = Path.home() / "AppData" / "Roaming" / "openclaw"
-        else:
-            config_dir = Path.home() / ".config" / "openclaw"
-        
+        # OpenClaw reads from ~/.openclaw/openclaw.json on all platforms
+        config_dir = Path.home() / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / "openclaw.json"
+        
+        workspace_path = str(Path.home() / ".openclaw" / "workspace-maestro")
         
         # Load existing config or create new
         if config_file.exists():
             with open(config_file, 'r') as f:
                 config = json.load(f)
-            print_info("Found existing OpenClaw config, updating...")
+            print_info("Found existing OpenClaw config, merging...")
         else:
-            config = {
-                "version": "1.0",
-                "gateway": {
-                    "enabled": True,
-                    "port": 3050
-                }
-            }
+            config = {}
         
-        # Add Maestro agent
+        # Ensure gateway config
+        if 'gateway' not in config:
+            config['gateway'] = {}
+        config['gateway']['mode'] = 'local'
+        
+        # Set env (API keys at top level so all agents can use them)
+        if 'env' not in config:
+            config['env'] = {}
+        config['env']['ANTHROPIC_API_KEY'] = self.progress['anthropic_key']
+        config['env']['GEMINI_API_KEY'] = self.progress['gemini_key']
+        
+        # Add Maestro agent using agents.list array format
         if 'agents' not in config:
             config['agents'] = {}
+        if 'list' not in config['agents']:
+            config['agents']['list'] = []
         
-        config['agents']['maestro'] = {
-            "label": "Maestro",
+        # Remove existing maestro agent if present
+        config['agents']['list'] = [
+            a for a in config['agents']['list'] if a.get('id') != 'maestro'
+        ]
+        
+        # Add maestro agent
+        config['agents']['list'].append({
+            "id": "maestro",
+            "name": "Maestro",
+            "default": True,
             "model": "anthropic/claude-sonnet-4-5",
-            "env": {
-                "ANTHROPIC_API_KEY": self.progress['anthropic_key'],
-                "GEMINI_API_KEY": self.progress['gemini_key']
-            }
-        }
+            "workspace": workspace_path
+        })
         
         # Add Telegram channel
         if 'channels' not in config:
@@ -439,16 +452,13 @@ class SetupWizard:
             }
         }
         
-        # Enable Tailscale if configured
-        if self.progress.get('tailscale_enabled'):
-            config['gateway']['tailscale'] = True
-        
         # Write config
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
         
         print_success(f"OpenClaw config written to {config_file}")
         self.progress['openclaw_configured'] = True
+        self.progress['workspace'] = workspace_path
         self.save_progress()
         return True
     
@@ -471,19 +481,45 @@ class SetupWizard:
         
         print_info(f"Using workspace: {workspace}")
         
-        # Get maestro package directory (where this file is)
-        maestro_pkg = Path(__file__).parent.parent
+        # Find soul files - check multiple locations
+        maestro_pkg = Path(__file__).parent  # maestro/ package dir
+        repo_root = maestro_pkg.parent       # repo root
+        agent_dir = repo_root / "agent"      # agent/ directory
         
-        # Copy soul files
-        soul_files = ['SOUL.md', 'AGENTS.md', 'TOOLS.md']
-        for filename in soul_files:
-            src = maestro_pkg / filename
-            if src.exists():
-                dst = workspace / filename
-                shutil.copy2(src, dst)
+        # Copy SOUL.md and AGENTS.md from agent/ dir (shipped with repo)
+        for filename in ['SOUL.md', 'AGENTS.md']:
+            src = None
+            for search_dir in [agent_dir, repo_root, maestro_pkg]:
+                candidate = search_dir / filename
+                if candidate.exists():
+                    src = candidate
+                    break
+            
+            if src:
+                shutil.copy2(src, workspace / filename)
                 print_success(f"Copied {filename}")
             else:
-                print_warning(f"Couldn't find {filename} in package")
+                print_warning(f"Couldn't find {filename} - you can add it later")
+        
+        # Generate TOOLS.md with project-specific config
+        tools_md = f"""# TOOLS.md — Maestro Local Notes
+
+## Active Project
+- **Name:** (not yet configured — ingest plans to set this)
+- **Knowledge Store:** knowledge_store/
+- **Status:** Awaiting first ingest
+
+## Key Paths
+- **Knowledge store:** `knowledge_store/` (relative to workspace)
+- **Scripts:** `skills/maestro/scripts/` (tools.py, loader.py)
+
+## Environment Variables
+- `MAESTRO_STORE` — Path to knowledge_store/ (set to workspace `knowledge_store/`)
+- `GEMINI_API_KEY` — Required for highlight tool (Gemini vision calls)
+"""
+        with open(workspace / "TOOLS.md", 'w') as f:
+            f.write(tools_md)
+        print_success("Generated TOOLS.md")
         
         # Create knowledge_store directory
         knowledge_store = workspace / "knowledge_store"
@@ -494,14 +530,15 @@ class SetupWizard:
         skills_dir = workspace / "skills" / "maestro"
         skills_dir.mkdir(parents=True, exist_ok=True)
         
-        # Copy scripts if they exist
-        scripts_src = maestro_pkg / "maestro" / "scripts"
-        if scripts_src.exists():
-            scripts_dst = skills_dir / "scripts"
-            if scripts_dst.exists():
-                shutil.rmtree(scripts_dst)
-            shutil.copytree(scripts_src, scripts_dst)
-            print_success("Copied Maestro skills")
+        # Copy skill files (SKILL.md + scripts shims)
+        skill_src = agent_dir / "skills" / "maestro"
+        if skill_src.exists():
+            if skills_dir.exists():
+                shutil.rmtree(skills_dir)
+            shutil.copytree(skill_src, skills_dir)
+            print_success("Copied Maestro skill")
+        else:
+            print_warning("Couldn't find skill files - tools will still work via CLI")
         
         # Write .env file
         env_file = workspace / ".env"
