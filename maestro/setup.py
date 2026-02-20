@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -148,105 +149,153 @@ class SetupWizard:
         """Step 2: Check prerequisites"""
         step_header(2, "Prerequisites")
 
+        console.print(f"  [{DIM}]Checking system requirements...[/]")
+        console.print()
+
+        has_node = False
+        has_npm = False
+        has_openclaw = False
+
+        # 1. Python
+        time.sleep(0.3)
         py_version = sys.version_info
         if py_version < (3, 11):
-            error(f"Python 3.11+ required, you have {py_version.major}.{py_version.minor}")
+            error(f"Python {py_version.major}.{py_version.minor} — version 3.11+ required")
             return False
         success(f"Python {py_version.major}.{py_version.minor}.{py_version.micro}")
 
-        result = self.run_command("openclaw --version", check=False)
-        if result.returncode != 0:
-            warning("OpenClaw is not installed")
+        # 2. Node.js
+        time.sleep(0.3)
+        node_result = self.run_command("node --version", check=False)
+        if node_result.returncode == 0:
+            has_node = True
+            success(f"Node.js {node_result.stdout.strip()}")
+        else:
+            error(f"Node.js — not installed  [{DIM}]https://nodejs.org[/]")
+
+        # 3. npm
+        time.sleep(0.3)
+        npm_result = self.run_command("npm --version", check=False)
+        if npm_result.returncode == 0:
+            has_npm = True
+            success(f"npm {npm_result.stdout.strip()}")
+        else:
+            error(f"npm — not installed  [{DIM}](comes with Node.js)[/]")
+
+        # 4. git
+        time.sleep(0.3)
+        git_result = self.run_command("git --version", check=False)
+        if git_result.returncode == 0:
+            git_ver = git_result.stdout.strip().replace("git version ", "")
+            success(f"git {git_ver}")
+        else:
+            warning(f"git — not installed  [{DIM}](recommended but not required)[/]")
+
+        # 5. OpenClaw
+        time.sleep(0.3)
+        oc_result = self.run_command("openclaw --version", check=False)
+        if oc_result.returncode == 0:
+            has_openclaw = True
+            success(f"OpenClaw {oc_result.stdout.strip()}")
+        else:
+            warning("OpenClaw — not installed")
+
+        # If OpenClaw is found, we're done
+        if has_openclaw:
+            self.progress['prerequisites'] = True
+            self.save_progress()
+            return True
+
+        # OpenClaw not found — show install walkthrough
+        console.print()
+
+        if has_node and has_npm:
+            panel_body = (
+                f"OpenClaw is the AI agent platform that powers Maestro.\n"
+                f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
+                f"\n"
+                f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
+                f"\n"
+                f"[bold {BRIGHT_CYAN}]Step 1:[/] Open a new terminal and run:\n"
+                f"  [bold white]npm install -g openclaw[/]\n"
+                f"\n"
+                f"[bold {BRIGHT_CYAN}]Step 2:[/] Come back here and press Enter"
+            )
+        else:
+            panel_body = (
+                f"OpenClaw is the AI agent platform that powers Maestro.\n"
+                f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
+                f"\n"
+                f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
+                f"\n"
+                f"[bold {BRIGHT_CYAN}]Step 1:[/] Install Node.js\n"
+                f"  Download from: [bold white]https://nodejs.org[/]\n"
+                f"  Choose the LTS version and run the installer.\n"
+                f"\n"
+                f"[bold {BRIGHT_CYAN}]Step 2:[/] Open a new terminal and run:\n"
+                f"  [bold white]npm install -g openclaw[/]\n"
+                f"\n"
+                f"[bold {BRIGHT_CYAN}]Step 3:[/] Come back here and press Enter"
+            )
+
+        console.print(Panel(
+            panel_body,
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]\U0001f99e Install OpenClaw[/]",
+            width=60,
+        ))
+        console.print()
+        Prompt.ask(f"  [{CYAN}]Press Enter when you're done[/]", default="", console=console)
+
+        # Re-check
+        oc_result = self.run_command("openclaw --version", check=False)
+        if oc_result.returncode == 0:
+            success(f"OpenClaw {oc_result.stdout.strip()}")
+            self.progress['prerequisites'] = True
+            self.save_progress()
+            return True
+
+        # Still not found
+        console.print()
+        console.print(Panel(
+            "Still can't find OpenClaw.\n"
+            "\n"
+            "This usually means your terminal hasn't picked up\n"
+            "the new PATH yet. Try this:\n"
+            "\n"
+            "  1. Close [bold white]BOTH[/] terminals\n"
+            "  2. Open a fresh terminal\n"
+            f"  3. Run: [bold white]maestro-setup[/]\n"
+            f"     [{DIM}](your progress is saved — it'll resume here)[/]",
+            border_style="yellow",
+            width=60,
+        ))
+        console.print()
+        choice = Prompt.ask(
+            f"  [{CYAN}][1] Try again  [2] Skip for now  [3] Quit[/]",
+            choices=["1", "2", "3"],
+            default="1",
+            console=console,
+        )
+
+        if choice == "1":
+            oc_result = self.run_command("openclaw --version", check=False)
+            if oc_result.returncode != 0:
+                error("Still can't find OpenClaw. Close both terminals, reopen, and run maestro-setup.")
+                return False
+            success(f"OpenClaw {oc_result.stdout.strip()}")
+        elif choice == "2":
+            warning("Skipping OpenClaw — you'll need it before starting the gateway")
+            self.progress['openclaw_skip'] = True
+            self.progress['prerequisites'] = True
+            self.save_progress()
+            return True
+        else:
             console.print()
-
-            # Check if Node.js is available
-            node_check = self.run_command("node --version", check=False)
-            has_node = node_check.returncode == 0
-
-            if has_node:
-                panel_body = (
-                    f"OpenClaw is the AI agent platform that powers Maestro.\n"
-                    f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
-                    f"\n"
-                    f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
-                    f"\n"
-                    f"[bold {BRIGHT_CYAN}]Step 1:[/] Open a new terminal and run:\n"
-                    f"  [bold white]npm install -g openclaw[/]\n"
-                    f"\n"
-                    f"[bold {BRIGHT_CYAN}]Step 2:[/] Come back here and press Enter"
-                )
-            else:
-                panel_body = (
-                    f"OpenClaw is the AI agent platform that powers Maestro.\n"
-                    f"Let's get it installed. [bold white]Keep this terminal open.[/]\n"
-                    f"\n"
-                    f"Open a [bold white]NEW[/] terminal window and follow these steps:\n"
-                    f"\n"
-                    f"[bold {BRIGHT_CYAN}]Step 1:[/] Install Node.js\n"
-                    f"  Download from: [bold white]https://nodejs.org[/]\n"
-                    f"  Choose the LTS version and run the installer.\n"
-                    f"\n"
-                    f"[bold {BRIGHT_CYAN}]Step 2:[/] Open a new terminal and run:\n"
-                    f"  [bold white]npm install -g openclaw[/]\n"
-                    f"\n"
-                    f"[bold {BRIGHT_CYAN}]Step 3:[/] Come back here and press Enter"
-                )
-
-            console.print(Panel(
-                panel_body,
-                border_style=CYAN,
-                title=f"[bold {BRIGHT_CYAN}]\U0001f99e Install OpenClaw[/]",
-                width=60,
-            ))
-            console.print()
-            Prompt.ask(f"  [{CYAN}]Press Enter when you're done[/]", default="", console=console)
-
-            # Re-check
-            result = self.run_command("openclaw --version", check=False)
-            if result.returncode != 0:
-                console.print()
-                console.print(Panel(
-                    "Still can't find OpenClaw.\n"
-                    "\n"
-                    "This usually means your terminal hasn't picked up\n"
-                    "the new PATH yet. Try this:\n"
-                    "\n"
-                    "  1. Close [bold white]BOTH[/] terminals\n"
-                    "  2. Open a fresh terminal\n"
-                    f"  3. Run: [bold white]maestro-setup[/]\n"
-                    f"     [{DIM}](your progress is saved — it'll resume here)[/]",
-                    border_style="yellow",
-                    width=60,
-                ))
-                console.print()
-                choice = Prompt.ask(
-                    f"  [{CYAN}][1] Try again  [2] Skip for now  [3] Quit[/]",
-                    choices=["1", "2", "3"],
-                    default="1",
-                    console=console,
-                )
-
-                if choice == "1":
-                    result = self.run_command("openclaw --version", check=False)
-                    if result.returncode != 0:
-                        error("Still can't find OpenClaw. Close both terminals, reopen, and run maestro-setup.")
-                        return False
-                elif choice == "2":
-                    warning("Skipping OpenClaw — you'll need it before starting the gateway")
-                    self.progress['openclaw_skip'] = True
-                    self.progress['prerequisites'] = True
-                    self.save_progress()
-                    return True
-                else:
-                    console.print()
-                    info("Close both terminals, open a fresh one, and run:")
-                    console.print(f"  [bold white]maestro-setup[/]")
-                    console.print(f"  [{DIM}]Your progress is saved automatically.[/]")
-                    sys.exit(0)
-
-        if result.returncode == 0:
-            version = result.stdout.strip()
-            success(f"OpenClaw {version}")
+            info("Close both terminals, open a fresh one, and run:")
+            console.print(f"  [bold white]maestro-setup[/]")
+            console.print(f"  [{DIM}]Your progress is saved automatically.[/]")
+            sys.exit(0)
 
         self.progress['prerequisites'] = True
         self.save_progress()
