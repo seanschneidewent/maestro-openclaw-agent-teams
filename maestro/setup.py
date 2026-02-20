@@ -22,8 +22,6 @@ from rich.table import Table
 from rich.text import Text
 from rich.rule import Rule
 from rich.prompt import Prompt, Confirm
-from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
-from rich.columns import Columns
 from rich.align import Align
 from rich import box
 
@@ -49,14 +47,10 @@ def step_header(step: int, title: str):
         width=60,
     ))
     # Progress bar
-    with Progress(
-        TextColumn(f"[{CYAN}]Progress"),
-        BarColumn(bar_width=40, complete_style=CYAN, finished_style="green"),
-        TextColumn(f"[{DIM}]{step}/{TOTAL_STEPS}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        task = progress.add_task("", total=TOTAL_STEPS, completed=step)
+    filled = int((step / TOTAL_STEPS) * 30)
+    bar = "━" * filled + "─" * (30 - filled)
+    pct = int((step / TOTAL_STEPS) * 100)
+    console.print(f"  [{CYAN}]{bar}[/] [{DIM}]{pct}%[/]")
     console.print()
 
 
