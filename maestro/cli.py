@@ -128,6 +128,23 @@ def main():
     idx_parser = sub.add_parser("index", help="Rebuild project index")
     idx_parser.add_argument("project_dir", help="Path to project directory")
 
+    # ── maestro license ───────────────────────────────────────────────────────
+    lic_parser = sub.add_parser("license", help="License management")
+    lic_sub = lic_parser.add_subparsers(dest="license_command", required=True)
+
+    gen_company = lic_sub.add_parser("generate-company", help="Generate a test company license key")
+    gen_company.add_argument("company_id", help="Company ID (e.g., CMP7F8A3D2E)")
+
+    gen_project = lic_sub.add_parser("generate-project", help="Generate a test project license key")
+    gen_project.add_argument("company_id", help="Company ID")
+    gen_project.add_argument("project_id", help="Project ID (e.g., PRJ4B2C9A1F)")
+    gen_project.add_argument("project_slug", help="Project slug (e.g., chick-fil-a-love-field)")
+    gen_project.add_argument("--store", help="Knowledge store path (defaults to MAESTRO_STORE or knowledge_store)")
+
+    lic_sub.add_parser("validate", help="Validate current license")
+
+    lic_sub.add_parser("info", help="Show license details")
+
     args = parser.parse_args()
 
     if args.mode == "ingest":
@@ -145,6 +162,9 @@ def main():
         print(f"Index built: {s['page_count']} pages, {s['pointer_count']} pointers, "
               f"{s['unique_material_count']} materials, {s['unique_keyword_count']} keywords")
 
+    elif args.mode == "license":
+        _run_license(args)
+
     elif args.mode == "tools":
         _run_tools(args)
 
@@ -161,6 +181,110 @@ def _run_server(args):
     print(f"Maestro server starting on http://localhost:{args.port}")
     print(f"Knowledge store: {srv.store_path}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+
+
+def _run_license(args):
+    """Run license management commands."""
+    import os
+    from pathlib import Path
+    from .license import (
+        generate_company_key,
+        generate_project_key,
+        validate_company_key,
+        validate_project_key,
+        get_machine_id,
+        generate_project_fingerprint,
+        LicenseError,
+    )
+    from .config import get_store_path
+
+    if args.license_command == "generate-company":
+        key = generate_company_key(args.company_id)
+        print(f"\n✅ Company License Generated:\n")
+        print(f"   {key}\n")
+        print(f"Set this as MAESTRO_LICENSE_KEY environment variable for the company agent.\n")
+
+    elif args.license_command == "generate-project":
+        store_path = args.store or os.environ.get("MAESTRO_STORE") or get_store_path()
+        key = generate_project_key(
+            args.company_id,
+            args.project_id,
+            args.project_slug,
+            str(store_path),
+        )
+        print(f"\n✅ Project License Generated:\n")
+        print(f"   {key}\n")
+        print(f"Project: {args.project_slug}")
+        print(f"Store:   {store_path}")
+        fp = generate_project_fingerprint(args.project_slug, str(store_path))
+        print(f"Machine: {fp['machine_id']}")
+        print(f"Fingerprint: {fp['fingerprint']}\n")
+        print(f"Set this as MAESTRO_LICENSE_KEY environment variable.\n")
+
+    elif args.license_command == "validate":
+        license_key = os.environ.get("MAESTRO_LICENSE_KEY")
+        if not license_key:
+            print("❌ No MAESTRO_LICENSE_KEY found in environment")
+            return
+
+        try:
+            if license_key.startswith("MAESTRO-COMPANY-"):
+                result = validate_company_key(license_key)
+                print(f"\n✅ Valid Company License")
+                print(f"   Company ID: {result['company_id']}")
+                print(f"   Version: {result['version']}")
+                print(f"   Issued: {result['timestamp']}\n")
+            elif license_key.startswith("MAESTRO-PROJECT-"):
+                from .utils import slugify_underscore
+                from .loader import load_project
+                store_path = os.environ.get("MAESTRO_STORE") or get_store_path()
+                project = load_project(store_path=Path(store_path))
+                if not project:
+                    print("❌ No project found in knowledge store")
+                    print(f"   Store path: {store_path}")
+                    return
+                project_slug = project.get("slug") or slugify_underscore(project.get("name", ""))
+                result = validate_project_key(license_key, project_slug, str(store_path))
+                print(f"\n✅ Valid Project License")
+                print(f"   Company ID: {result['company_id']}")
+                print(f"   Project ID: {result['project_id']}")
+                print(f"   Version: {result['version']}")
+                print(f"   Fingerprint: {result['fingerprint']}")
+                print(f"   Machine: {result['fingerprint_data']['machine_id']}")
+                print(f"   Issued: {result['timestamp']}\n")
+            else:
+                print(f"❌ Unknown license key format: {license_key[:20]}...")
+        except LicenseError as e:
+            print(f"\n❌ License validation failed:\n   {e}\n")
+
+    elif args.license_command == "info":
+        license_key = os.environ.get("MAESTRO_LICENSE_KEY")
+        if not license_key:
+            print("❌ No MAESTRO_LICENSE_KEY found in environment")
+            return
+
+        parts = license_key.split("-")
+        print(f"\n📋 License Information:\n")
+        print(f"   Type: {parts[1] if len(parts) > 1 else 'Unknown'}")
+        print(f"   Key: {license_key[:40]}...")
+
+        if license_key.startswith("MAESTRO-COMPANY-"):
+            try:
+                result = validate_company_key(license_key)
+                print(f"   Status: ✅ Valid")
+                print(f"   Company: {result['company_id']}")
+                print(f"   Version: {result['version']}")
+                print(f"   Issued: {result['timestamp']}")
+            except LicenseError:
+                print(f"   Status: ❌ Invalid")
+
+        elif license_key.startswith("MAESTRO-PROJECT-"):
+            print(f"   Company: {parts[3] if len(parts) > 3 else 'N/A'}")
+            print(f"   Project: {parts[4] if len(parts) > 4 else 'N/A'}")
+            print(f"   Fingerprint: {parts[6] if len(parts) > 6 else 'N/A'}")
+            print(f"\n   Machine ID: {get_machine_id()}")
+
+        print()
 
 
 def _run_tools(args):

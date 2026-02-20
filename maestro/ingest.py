@@ -417,6 +417,28 @@ def ingest(
     }
     save_json(project_dir / "project.json", meta)
 
+    # License stamping
+    license_key = get_gemini_api_key()  # Will use environment var MAESTRO_LICENSE_KEY
+    import os
+    license_key = os.environ.get("MAESTRO_LICENSE_KEY")
+    if license_key and license_key.startswith("MAESTRO-PROJECT-"):
+        print("\nStamping knowledge store with license...", end=" ", flush=True)
+        try:
+            from .license import stamp_knowledge_store
+            from .utils import slugify_underscore
+            project_slug = slugify_underscore(name)
+            stamp_knowledge_store(str(project_dir), license_key, project_slug)
+            print("done")
+        except Exception as e:
+            print(f"warning: {e}")
+    elif license_key:
+        print(f"\n⚠️  License key found but not a project license (starts with: {license_key[:20]}...)")
+        print(f"   Knowledge store not stamped. Use a project license for full functionality.")
+    else:
+        print(f"\n⚠️  No MAESTRO_LICENSE_KEY found in environment")
+        print(f"   Knowledge store not stamped with license.")
+        print(f"   Set a valid project license to enable tools.")
+
     s = idx["summary"]
     print(f"\n{'=' * 60}")
     print(f"  Done! {s['page_count']} pages, {s['pointer_count']} pointers")

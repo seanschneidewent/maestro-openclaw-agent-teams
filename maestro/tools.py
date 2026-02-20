@@ -15,6 +15,7 @@ Usage (Python):
 
 from __future__ import annotations
 
+import functools
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ from .config import (
     get_store_path,
     load_dotenv,
 )
+from .license import LicenseError, validate_project_key, verify_knowledge_store
 from .loader import load_project, resolve_page
 from .prompts import HIGHLIGHT_PROMPT
 from .utils import (
@@ -38,11 +40,34 @@ from .utils import (
 )
 
 
+# ── License Enforcement ───────────────────────────────────────────────────────
+
+def requires_license(func):
+    """
+    Decorator to enforce project license on tool methods.
+    
+    Checks self.licensed flag before executing.
+    If not licensed, returns an error message instead of executing the tool.
+    """
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        if not getattr(self, "licensed", False):
+            return (
+                f"❌ License required to use {func.__name__}.\n"
+                f"Set MAESTRO_LICENSE_KEY environment variable with a valid project license.\n"
+                f"Generate a test key with: maestro license generate-project"
+            )
+        return func(self, *args, **kwargs)
+    return wrapper
+
+
 class MaestroTools:
     """
     Stateful tool interface for querying a Maestro knowledge store.
 
     Loads a project once and provides all query/workspace/highlight methods.
+    
+    License enforcement: validates MAESTRO_LICENSE_KEY on init.
     """
 
     def __init__(
@@ -50,11 +75,65 @@ class MaestroTools:
         store_path: str | Path | None = None,
         project_name: str | None = None,
         workspace_root: Path | None = None,
+        skip_license_check: bool = False,
     ):
         self._store_path = Path(store_path) if store_path else get_store_path()
         self._project_name = project_name
         self._workspace_root = workspace_root
         self._project: dict[str, Any] | None = None
+        self.licensed = False
+        
+        # Load environment variables
+        if workspace_root:
+            load_dotenv(workspace_root)
+        else:
+            load_dotenv()
+        
+        # Validate license (unless explicitly skipped for testing)
+        if not skip_license_check:
+            self._validate_license()
+    
+    def _validate_license(self) -> None:
+        """
+        Validate project license from MAESTRO_LICENSE_KEY environment variable.
+        
+        Sets self.licensed = True if valid, False otherwise.
+        Prints warning if license is invalid but doesn't raise.
+        """
+        license_key = os.environ.get("MAESTRO_LICENSE_KEY")
+        
+        if not license_key:
+            print("⚠️  No MAESTRO_LICENSE_KEY found in environment")
+            print("   Tools will be disabled. Set a valid project license to enable.")
+            self.licensed = False
+            return
+        
+        # We need project_slug to validate - derive from project metadata
+        try:
+            project = self.project
+            project_slug = project.get("slug")
+            if not project_slug:
+                # Try to derive from project name
+                project_name = project.get("name", "")
+                from .utils import slugify_underscore
+                project_slug = slugify_underscore(project_name)
+            
+            # Validate the license key
+            validate_project_key(license_key, project_slug, str(self._store_path))
+            
+            # Verify knowledge store stamp matches
+            verify_knowledge_store(str(self._store_path), license_key, project_slug)
+            
+            self.licensed = True
+            
+        except LicenseError as e:
+            print(f"❌ License validation failed: {e}")
+            print(f"   Tools will be disabled.")
+            self.licensed = False
+        except Exception as e:
+            print(f"⚠️  Could not validate license: {e}")
+            print(f"   Tools will be disabled.")
+            self.licensed = False
 
     @property
     def project(self) -> dict[str, Any]:
@@ -72,9 +151,11 @@ class MaestroTools:
 
     # ── Knowledge Queries ─────────────────────────────────────────────────────
 
+    @requires_license
     def list_disciplines(self) -> list[str]:
         return self.project.get("disciplines", [])
 
+    @requires_license
     def list_pages(self, discipline: str | None = None) -> list[dict[str, Any]]:
         pages = []
         for name, page in self.project.get("pages", {}).items():
@@ -89,18 +170,21 @@ class MaestroTools:
             })
         return sorted(pages, key=lambda p: p["name"].lower())
 
+    @requires_license
     def get_sheet_summary(self, page_name: str) -> str:
         page = self._resolve_page(page_name)
         if not page:
             return f"Page '{page_name}' not found. Use list_pages to see available pages."
         return page.get("sheet_reflection", "No summary available")
 
+    @requires_license
     def get_sheet_index(self, page_name: str) -> dict[str, Any] | str:
         page = self._resolve_page(page_name)
         if not page:
             return f"Page '{page_name}' not found."
         return page.get("index", {})
 
+    @requires_license
     def list_regions(self, page_name: str) -> list[dict[str, Any]] | str:
         page = self._resolve_page(page_name)
         if not page:
@@ -114,6 +198,7 @@ class MaestroTools:
             "has_pass2": bool(r.get("id") and r.get("id") in pointers),
         } for r in page.get("regions", []) if isinstance(r, dict)]
 
+    @requires_license
     def get_region_detail(self, page_name: str, region_id: str) -> str:
         page = self._resolve_page(page_name)
         if not page:
@@ -123,6 +208,7 @@ class MaestroTools:
             return f"Region '{region_id}' not found on '{page.get('name', page_name)}'."
         return pointer.get("content_markdown", "No detail available")
 
+    @requires_license
     def search(self, query: str) -> list[dict[str, Any]] | str:
         query_lower = query.lower()
         results: list[dict[str, Any]] = []
@@ -145,6 +231,7 @@ class MaestroTools:
 
         return results if results else f"No results for '{query}'"
 
+    @requires_license
     def find_cross_references(self, page_name: str) -> dict[str, Any] | str:
         page = self.project.get("pages", {}).get(page_name)
         if not page:
@@ -156,10 +243,12 @@ class MaestroTools:
             "pages_that_reference_this": cross_refs.get(page_name, []),
         }
 
+    @requires_license
     def list_modifications(self) -> list[dict[str, Any]]:
         idx = self.project.get("index", {})
         return idx.get("modifications", []) if isinstance(idx, dict) else []
 
+    @requires_license
     def check_gaps(self) -> list[dict[str, Any]] | str:
         gaps: list[dict[str, Any]] = []
         idx = self.project.get("index", {})
@@ -223,6 +312,7 @@ class MaestroTools:
         } for ws in workspaces]
         save_json(self._workspaces_dir() / "_index.json", index)
 
+    @requires_license
     def create_workspace(self, title: str, description: str) -> dict[str, Any] | str:
         if not title.strip():
             return "Workspace title is required."
@@ -245,6 +335,7 @@ class MaestroTools:
         self._save_index()
         return {"status": "created", "slug": slug, "title": ws["title"]}
 
+    @requires_license
     def list_workspaces(self) -> list[dict[str, Any]]:
         return [{
             "slug": ws["slug"],
@@ -254,12 +345,14 @@ class MaestroTools:
             "note_count": len(ws.get("notes", [])),
         } for ws in self._all_workspaces()]
 
+    @requires_license
     def get_workspace(self, slug: str) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
             return f"Workspace '{slug}' not found."
         return ws
 
+    @requires_license
     def add_workspace_page(self, slug: str, page_name: str) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
@@ -284,6 +377,7 @@ class MaestroTools:
         self._save_index()
         return {"status": "added", "workspace": slug, "page": resolved_name}
 
+    @requires_license
     def remove_workspace_page(self, slug: str, page_name: str) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
@@ -299,6 +393,7 @@ class MaestroTools:
         self._save_index()
         return {"status": "removed", "workspace": slug, "page": page_name}
 
+    @requires_license
     def select_pointers(self, slug: str, page_name: str, pointer_ids: list[str]) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
@@ -342,6 +437,7 @@ class MaestroTools:
             "selected_pointers": target_page["selected_pointers"],
         }
 
+    @requires_license
     def deselect_pointers(self, slug: str, page_name: str, pointer_ids: list[str]) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
@@ -368,6 +464,7 @@ class MaestroTools:
             "selected_pointers": target_page["selected_pointers"],
         }
 
+    @requires_license
     def add_note(self, slug: str, text: str, source_page: str | None = None) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
@@ -384,6 +481,7 @@ class MaestroTools:
         self._save_workspace(ws)
         return {"status": "added", "workspace": slug, "note": note}
 
+    @requires_license
     def add_page_description(self, slug: str, page_name: str, description: str) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
@@ -399,6 +497,7 @@ class MaestroTools:
 
     # ── Highlight (Gemini Vision) ─────────────────────────────────────────────
 
+    @requires_license
     def highlight(self, slug: str, page_name: str, query: str) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
@@ -495,6 +594,7 @@ class MaestroTools:
             "labels": [h["label"] for h in custom_highlights],
         }
 
+    @requires_license
     def clear_highlights(self, slug: str, page_name: str) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
@@ -510,6 +610,7 @@ class MaestroTools:
 
     # ── Image Generation ──────────────────────────────────────────────────────
 
+    @requires_license
     def generate_image(
         self,
         slug: str,
@@ -623,6 +724,7 @@ class MaestroTools:
             "total_generated": len(ws.get("generated_images", [])),
         }
 
+    @requires_license
     def delete_image(self, slug: str, filename: str) -> dict[str, Any] | str:
         ws = self._load_workspace(slug)
         if not ws:
