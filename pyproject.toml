@@ -39,7 +39,6 @@ packages = ["maestro"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "agent" = "maestro/agent"
-"frontend/dist" = "maestro/frontend"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
