@@ -581,7 +581,8 @@ class SetupWizard:
         # Find soul files - check multiple locations
         maestro_pkg = Path(__file__).parent  # maestro/ package dir
         repo_root = maestro_pkg.parent       # repo root
-        agent_dir = repo_root / "agent"      # agent/ directory
+        # Check bundled location first (pip install), then repo layout
+        agent_dir = maestro_pkg / "agent" if (maestro_pkg / "agent").exists() else repo_root / "agent"
         
         # Copy workspace files from agent/ dir (shipped with repo)
         for filename in ['SOUL.md', 'AGENTS.md', 'IDENTITY.md', 'USER.md']:
@@ -647,7 +648,7 @@ MAESTRO_STORE=knowledge_store/
             f.write(env_content)
         print_success("Created .env")
         
-        # Build frontend if it exists
+        # Build frontend if it exists (repo layout only — bundled installs ship pre-built)
         frontend_dir = repo_root / "frontend"
         if frontend_dir.exists() and (frontend_dir / "package.json").exists():
             print()

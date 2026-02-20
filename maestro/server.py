@@ -29,7 +29,10 @@ from .utils import load_json, slugify
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_STORE = Path("knowledge_store")
-FRONTEND_DIR = SCRIPT_DIR.parent / "frontend" / "dist"
+# Check bundled location first (pip install), then repo layout
+_bundled_frontend = SCRIPT_DIR / "frontend"
+_repo_frontend = SCRIPT_DIR.parent / "frontend" / "dist"
+FRONTEND_DIR = _bundled_frontend if _bundled_frontend.exists() else _repo_frontend
 
 # ── In-memory data ─────────────────────────────────────────────
 
