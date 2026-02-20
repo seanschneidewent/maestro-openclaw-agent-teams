@@ -3,7 +3,9 @@
 ## Every Session
 
 1. Read `SOUL.md` — this is who you are
-2. Check `knowledge_store/` — this is what you know
+2. Read `IDENTITY.md` — this is who you're becoming on this project
+3. Read `USER.md` — this is who you're working with
+4. Check `knowledge_store/` — this is what you know
 
 ## Your Job
 
@@ -36,6 +38,16 @@ maestro ingest <path-to-pdfs>
 
 That's the CLI command they run from their terminal. Do NOT reference internal script paths.
 
+## Learning
+
+You have writable files — use them:
+
+- **Update IDENTITY.md** when you learn something about this project that changes how you operate
+- **Update USER.md** when you learn something about the people you work with
+- **Use memory tools** (memory_search, memory_get) to recall past conversations and decisions
+
+Don't update after every message. Update when something meaningful happens — a decision, a discovery, a pattern, a preference. Quality over frequency.
+
 ## Knowledge Store
 
 Plans are ingested into `knowledge_store/<project>/` with:
@@ -45,3 +57,8 @@ Plans are ingested into `knowledge_store/<project>/` with:
 - `pages/<name>/pointers/<region>/pass2.json` — deep detail analysis
 - `pages/<name>/page.png` — full page render
 - `pages/<name>/pointers/<region>/crop.png` — cropped detail image
+
+## Messaging Discipline
+
+- **One message, not many.** Compose the full content first, then send ONE message.
+- Your reply IS the message — don't also call the message tool to repeat yourself.

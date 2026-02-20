@@ -583,8 +583,8 @@ class SetupWizard:
         repo_root = maestro_pkg.parent       # repo root
         agent_dir = repo_root / "agent"      # agent/ directory
         
-        # Copy SOUL.md and AGENTS.md from agent/ dir (shipped with repo)
-        for filename in ['SOUL.md', 'AGENTS.md']:
+        # Copy workspace files from agent/ dir (shipped with repo)
+        for filename in ['SOUL.md', 'AGENTS.md', 'IDENTITY.md', 'USER.md']:
             src = None
             for search_dir in [agent_dir, repo_root, maestro_pkg]:
                 candidate = search_dir / filename
