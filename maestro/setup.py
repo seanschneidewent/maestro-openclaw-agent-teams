@@ -250,7 +250,7 @@ class SetupWizard:
         if system == "Darwin":
             terminal_hint = f"[{DIM}italic]Tip: Press [bold]⌘T[/bold] for a new tab, or [bold]⌘N[/bold] for a new window.[/]"
         elif system == "Windows":
-            terminal_hint = f"[{DIM}italic]Tip: Press [bold]Ctrl+Shift+T[/bold] for a new tab, or [bold]Win+R[/bold] → type \"cmd\" → Enter.[/]"
+            terminal_hint = f"[{DIM}italic]Tip: Press [bold]Ctrl+Shift+T[/bold] for a new tab, or search for [bold]Terminal[/bold] / [bold]PowerShell[/bold] in Start.[/]"
         else:
             terminal_hint = f"[{DIM}italic]Tip: Press [bold]Ctrl+Shift+T[/bold] for a new terminal tab.[/]"
 
@@ -849,24 +849,29 @@ MAESTRO_STORE=knowledge_store/
             npm_check = self.run_command("npm --version", check=False)
             if npm_check.returncode == 0:
                 install_result = self.run_command(
-                    f'cd "{frontend_dir}" && npm install', check=False
+                    f'npm install --prefix "{frontend_dir}"', check=False
                 )
                 if install_result.returncode == 0:
                     build_result = self.run_command(
-                        f'cd "{frontend_dir}" && npm run build', check=False
+                        f'npm run build --prefix "{frontend_dir}"', check=False
                     )
                     if build_result.returncode == 0:
                         success("Plan viewer built")
                     else:
                         warning("Frontend build failed — you can try later:")
-                        console.print(f"  [{DIM}]cd {frontend_dir} && npm run build[/]")
+                        console.print(f"  [{DIM}]cd {frontend_dir}[/]")
+                        console.print(f"  [{DIM}]npm run build[/]")
                 else:
                     warning("npm install failed — you can try later:")
-                    console.print(f"  [{DIM}]cd {frontend_dir} && npm install && npm run build[/]")
+                    console.print(f"  [{DIM}]cd {frontend_dir}[/]")
+                    console.print(f"  [{DIM}]npm install[/]")
+                    console.print(f"  [{DIM}]npm run build[/]")
             else:
                 warning("npm not found — plan viewer needs Node.js to build")
                 console.print(f"  [{DIM}]Install Node.js from https://nodejs.org[/]")
-                console.print(f"  [{DIM}]Then: cd {frontend_dir} && npm install && npm run build[/]")
+                console.print(f"  [{DIM}]Then: cd {frontend_dir}[/]")
+                console.print(f"  [{DIM}]npm install[/]")
+                console.print(f"  [{DIM}]npm run build[/]")
 
         self.progress['workspace'] = str(workspace)
         self.save_progress()
