@@ -200,7 +200,7 @@ def _run_license(args):
 
     if args.license_command == "generate-company":
         key = generate_company_key(args.company_id)
-        print(f"\n✅ Company License Generated:\n")
+        print(f"\n[OK] Company License Generated:\n")
         print(f"   {key}\n")
         print(f"Set this as MAESTRO_LICENSE_KEY environment variable for the company agent.\n")
 
@@ -212,7 +212,7 @@ def _run_license(args):
             args.project_slug,
             str(store_path),
         )
-        print(f"\n✅ Project License Generated:\n")
+        print(f"\n[OK] Project License Generated:\n")
         print(f"   {key}\n")
         print(f"Project: {args.project_slug}")
         print(f"Store:   {store_path}")
@@ -224,13 +224,13 @@ def _run_license(args):
     elif args.license_command == "validate":
         license_key = os.environ.get("MAESTRO_LICENSE_KEY")
         if not license_key:
-            print("❌ No MAESTRO_LICENSE_KEY found in environment")
+            print("[ERROR] No MAESTRO_LICENSE_KEY found in environment")
             return
 
         try:
             if license_key.startswith("MAESTRO-COMPANY-"):
                 result = validate_company_key(license_key)
-                print(f"\n✅ Valid Company License")
+                print(f"\n[OK] Valid Company License")
                 print(f"   Company ID: {result['company_id']}")
                 print(f"   Version: {result['version']}")
                 print(f"   Issued: {result['timestamp']}\n")
@@ -240,12 +240,12 @@ def _run_license(args):
                 store_path = os.environ.get("MAESTRO_STORE") or get_store_path()
                 project = load_project(store_path=Path(store_path))
                 if not project:
-                    print("❌ No project found in knowledge store")
+                    print("[ERROR] No project found in knowledge store")
                     print(f"   Store path: {store_path}")
                     return
                 project_slug = project.get("slug") or slugify_underscore(project.get("name", ""))
                 result = validate_project_key(license_key, project_slug, str(store_path))
-                print(f"\n✅ Valid Project License")
+                print(f"\n[OK] Valid Project License")
                 print(f"   Company ID: {result['company_id']}")
                 print(f"   Project ID: {result['project_id']}")
                 print(f"   Version: {result['version']}")
@@ -253,30 +253,30 @@ def _run_license(args):
                 print(f"   Machine: {result['fingerprint_data']['machine_id']}")
                 print(f"   Issued: {result['timestamp']}\n")
             else:
-                print(f"❌ Unknown license key format: {license_key[:20]}...")
+                print(f"[ERROR] Unknown license key format: {license_key[:20]}...")
         except LicenseError as e:
-            print(f"\n❌ License validation failed:\n   {e}\n")
+            print(f"\n[ERROR] License validation failed:\n   {e}\n")
 
     elif args.license_command == "info":
         license_key = os.environ.get("MAESTRO_LICENSE_KEY")
         if not license_key:
-            print("❌ No MAESTRO_LICENSE_KEY found in environment")
+            print("[ERROR] No MAESTRO_LICENSE_KEY found in environment")
             return
 
         parts = license_key.split("-")
-        print(f"\n📋 License Information:\n")
+        print(f"\n[INFO] License Information:\n")
         print(f"   Type: {parts[1] if len(parts) > 1 else 'Unknown'}")
         print(f"   Key: {license_key[:40]}...")
 
         if license_key.startswith("MAESTRO-COMPANY-"):
             try:
                 result = validate_company_key(license_key)
-                print(f"   Status: ✅ Valid")
+                print(f"   Status: Valid")
                 print(f"   Company: {result['company_id']}")
                 print(f"   Version: {result['version']}")
                 print(f"   Issued: {result['timestamp']}")
             except LicenseError:
-                print(f"   Status: ❌ Invalid")
+                print(f"   Status: Invalid")
 
         elif license_key.startswith("MAESTRO-PROJECT-"):
             print(f"   Company: {parts[3] if len(parts) > 3 else 'N/A'}")
