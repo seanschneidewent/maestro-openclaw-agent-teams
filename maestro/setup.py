@@ -198,7 +198,7 @@ class SetupWizard:
             print()
             print(f"  {Color.BOLD}1. Google Gemini 3.1 Pro{Color.END}")
             print(f"     $2 input / $12 output per million tokens")
-            print(f"     {Color.GREEN}Best value — also powers plan vision analysis{Color.END}")
+            print(f"     {Color.GREEN}Best value — same key powers plan vision (saves a step){Color.END}")
             print()
             print(f"  {Color.BOLD}2. Anthropic Claude Opus 4.6{Color.END}")
             print(f"     $5 input / $25 output per million tokens")
