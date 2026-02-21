@@ -951,33 +951,76 @@ MAESTRO_STORE=knowledge_store/
         console.print(f"  [bold {BRIGHT_CYAN}]👉 Now open Telegram and send any message to @{bot_username}[/]")
         console.print()
 
-        # Poll for pairing requests
+        # Poll for pairing requests by watching gateway logs AND checking
+        # Telegram bot API for the pairing code message from OpenClaw
         info("Waiting for your message...")
         max_wait = 120  # 2 minutes
         poll_interval = 3
         elapsed = 0
         pairing_code = None
 
+        bot_token = self.progress.get('telegram_token', '')
+        last_update_id = 0
+
+        # Get current update offset so we only see new messages
+        try:
+            import httpx
+            resp = httpx.get(
+                f"https://api.telegram.org/bot{bot_token}/getUpdates",
+                params={"limit": 1, "offset": -1},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                updates = resp.json().get('result', [])
+                if updates:
+                    last_update_id = updates[-1]['update_id'] + 1
+        except Exception:
+            pass
+
         while elapsed < max_wait:
             time.sleep(poll_interval)
             elapsed += poll_interval
 
-            # Check gateway log for pairing code
+            # Method 1: Check Telegram bot API for OpenClaw's pairing response
+            if bot_token:
+                try:
+                    import httpx
+                    resp = httpx.get(
+                        f"https://api.telegram.org/bot{bot_token}/getUpdates",
+                        params={"limit": 10, "offset": last_update_id, "timeout": 0},
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        updates = resp.json().get('result', [])
+                        for update in updates:
+                            last_update_id = update['update_id'] + 1
+                            msg = update.get('message', {})
+                            text = msg.get('text', '')
+                            # OpenClaw sends: "Pairing code: XXXXXXXX"
+                            match = re.search(r'Pairing code:\s*(\w+)', text)
+                            if match:
+                                pairing_code = match.group(1)
+                                break
+                except Exception:
+                    pass
+
+            if pairing_code:
+                break
+
+            # Method 2: Also check gateway logs as fallback
             log_locations = [
                 Path.home() / ".openclaw" / "logs" / "gateway.log",
                 Path("/tmp/openclaw") / f"openclaw-{time.strftime('%Y-%m-%d')}.log",
             ]
-
             for log_path in log_locations:
                 if not log_path.exists():
                     continue
                 try:
                     with open(log_path, 'r', errors='ignore') as f:
                         content = f.read()
-                    # Look for pairing code pattern
                     matches = re.findall(r'Pairing code:\s*(\w+)', content)
                     if matches:
-                        pairing_code = matches[-1]  # Use the latest
+                        pairing_code = matches[-1]
                         break
                 except Exception:
                     continue
