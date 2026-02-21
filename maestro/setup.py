@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -33,7 +34,7 @@ DIM = "dim"
 
 console = Console(force_terminal=True if platform.system() == "Windows" else None)
 
-TOTAL_STEPS = 10
+TOTAL_STEPS = 9
 
 
 def step_header(step: int, title: str):
@@ -102,7 +103,7 @@ class SetupWizard:
     # ── Steps ─────────────────────────────────────────────────────
 
     def step_welcome(self) -> bool:
-        """Step 1: Welcome and license key"""
+        """Step 1: Welcome + Company Name"""
         console.print()
         console.print(Rule(style=CYAN))
         console.print(Align.center(Text("M A E S T R O", style=f"bold {BRIGHT_CYAN}")))
@@ -112,31 +113,36 @@ class SetupWizard:
         console.print(Panel(
             "[white]This wizard will get you up and running with Maestro,\n"
             "your AI assistant for construction plans.[/]\n\n"
-            f"[{DIM}]10 steps · ~5 minutes · progress saved automatically[/]",
+            f"[{DIM}]9 steps · ~5 minutes · progress saved automatically[/]",
             border_style=CYAN,
             title=f"[bold {BRIGHT_CYAN}]Welcome[/]",
             width=60,
         ))
 
-        step_header(1, "License Key")
+        step_header(1, "Company Name")
 
-        if self.progress.get('license_key'):
-            info(f"Using saved license key: {self.progress['license_key'][:8]}...")
-            if not Confirm.ask(f"  [{CYAN}]Continue with this key?[/]", default=True, console=console):
-                self.progress.pop('license_key', None)
+        if self.progress.get('company_name'):
+            info(f"Using saved company name: {self.progress['company_name']}")
+            if not Confirm.ask(f"  [{CYAN}]Keep this name?[/]", default=True, console=console):
+                self.progress.pop('company_name', None)
 
-        if not self.progress.get('license_key'):
-            console.print(f"  [{DIM}]Enter the license key from your purchase confirmation.[/]")
-            license_key = Prompt.ask(f"  [{CYAN}]License key[/]", console=console).strip()
+        if not self.progress.get('company_name'):
+            console.print(f"  [{DIM}]This appears in your Command Center and agent conversations.[/]")
+            company_name = Prompt.ask(f"  [{CYAN}]Company name[/]", console=console).strip()
 
-            if not license_key or len(license_key) < 8:
-                error("That doesn't look like a valid license key.")
+            if not company_name:
+                error("Company name is required.")
                 return False
 
-            self.progress['license_key'] = license_key
+            self.progress['company_name'] = company_name
             self.save_progress()
 
-        success("License key verified")
+        # Auto-generate install UUID if not present
+        if not self.progress.get('install_id'):
+            self.progress['install_id'] = str(uuid.uuid4())
+            self.save_progress()
+
+        success(f"Company: {self.progress['company_name']}")
         return True
 
     def step_prerequisites(self) -> bool:
@@ -711,6 +717,12 @@ class SetupWizard:
             config['gateway'] = {}
         config['gateway']['mode'] = 'local'
 
+        # Install UUID for future billing/identification
+        if 'maestro' not in config:
+            config['maestro'] = {}
+        config['maestro']['install_id'] = self.progress.get('install_id', str(uuid.uuid4()))
+        config['maestro']['company_name'] = self.progress.get('company_name', '')
+
         if 'env' not in config:
             config['env'] = {}
 
@@ -718,18 +730,21 @@ class SetupWizard:
         config['env'][env_key] = self.progress['provider_key']
         config['env']['GEMINI_API_KEY'] = self.progress['gemini_key']
 
+        # Company Maestro as default agent
         if 'agents' not in config:
             config['agents'] = {}
         if 'list' not in config['agents']:
             config['agents']['list'] = []
 
+        # Remove any existing maestro/company agent
         config['agents']['list'] = [
-            a for a in config['agents']['list'] if a.get('id') != 'maestro'
+            a for a in config['agents']['list']
+            if a.get('id') not in ('maestro', 'maestro-company')
         ]
 
         config['agents']['list'].append({
-            "id": "maestro",
-            "name": "Maestro",
+            "id": "maestro-company",
+            "name": f"Maestro ({self.progress.get('company_name', 'Company')})",
             "default": True,
             "model": self.progress['model'],
             "workspace": workspace_path,
@@ -746,7 +761,7 @@ class SetupWizard:
             "groupPolicy": "allowlist",
             "streamMode": "partial",
             "accounts": {
-                "maestro": {
+                "maestro-company": {
                     "botToken": bot_token,
                     "dmPolicy": "pairing",
                     "groupPolicy": "allowlist",
@@ -765,8 +780,8 @@ class SetupWizard:
         return True
 
     def step_configure_maestro(self) -> bool:
-        """Step 8: Configure Maestro workspace"""
-        step_header(8, "Maestro Workspace")
+        """Step 8: Configure Company Maestro workspace"""
+        step_header(8, "Company Maestro Workspace")
 
         default_workspace = Path.home() / ".openclaw" / "workspace-maestro"
 
@@ -798,20 +813,26 @@ class SetupWizard:
             else:
                 warning(f"Couldn't find {filename} — you can add it later")
 
-        tools_md = f"""# TOOLS.md — Maestro Local Notes
+        company_name = self.progress.get('company_name', 'My Company')
+        tools_md = f"""# TOOLS.md — Company Maestro
 
-## Active Project
-- **Name:** (not yet configured — ingest plans to set this)
-- **Knowledge Store:** knowledge_store/
-- **Status:** Awaiting first ingest
+## Company
+- **Name:** {company_name}
+- **Role:** Company Maestro — orchestrator agent
+- **Status:** Active
+
+## What You Do
+- Manage project agents (create, monitor, archive)
+- Provide cross-project visibility via the Command Center
+- Handle billing and licensing conversations
+- Route questions to the right project agent
 
 ## Key Paths
-- **Knowledge store:** `knowledge_store/` (relative to workspace)
-- **Scripts:** `skills/maestro/scripts/` (tools.py, loader.py)
+- **Knowledge store:** `knowledge_store/` (for future company-level data)
+- **Command Center:** http://localhost:3000/command-center
 
 ## Environment Variables
-- `MAESTRO_STORE` — Path to knowledge_store/ (set to workspace `knowledge_store/`)
-- `GEMINI_API_KEY` — Required for highlight tool (Gemini vision calls)
+- `GEMINI_API_KEY` — Required for AI capabilities
 """
         with open(workspace / "TOOLS.md", 'w') as f:
             f.write(tools_md)
@@ -880,95 +901,60 @@ MAESTRO_STORE=knowledge_store/
         success(f"Workspace ready at {workspace}")
         return True
 
-    def step_ingest_plans(self) -> bool:
-        """Step 9: First plans ingest"""
-        step_header(9, "Ingest Construction Plans")
-
-        console.print(f"  [{DIM}]Maestro needs to analyze your PDF plans before you can ask questions.[/]")
-        console.print()
-
-        if not Confirm.ask(f"  [{CYAN}]Do you have PDF plans ready to ingest?[/]", default=False, console=console):
-            info("No problem — you can ingest plans later with:")
-            console.print(f"  [bold white]maestro ingest <path-to-pdfs>[/]")
-            self.progress['ingest_skip'] = True
-            self.save_progress()
-            return True
-
-        pdf_path = Prompt.ask(f"  [{CYAN}]Path to PDF file or directory[/]", console=console).strip()
-        pdf_path = Path(pdf_path).expanduser().resolve()
-
-        if not pdf_path.exists():
-            error(f"Path not found: {pdf_path}")
-            return False
-
-        console.print()
-        info(f"Ingesting plans from {pdf_path}...")
-        console.print(f"  [{DIM}]This may take a few minutes depending on plan size.[/]")
-        console.print()
-
-        workspace = Path(self.progress['workspace'])
-        os.chdir(workspace)
-
-        result = self.run_command(f"maestro ingest {pdf_path}", check=False)
-
-        if result.returncode != 0:
-            error("Ingest failed")
-            console.print(result.stderr)
-            return False
-
-        success("Plans ingested successfully!")
-        self.progress['plans_ingested'] = True
-        self.save_progress()
-        return True
-
     def step_done(self):
-        """Step 10: Show summary and next steps"""
-        step_header(10, "Setup Complete")
+        """Step 9: Show summary and next steps"""
+        step_header(9, "Setup Complete")
+
+        company_name = self.progress.get('company_name', 'N/A')
+        tailscale_ip = self.progress.get('tailscale_ip')
+        cc_url = f"http://{tailscale_ip}:3000/command-center" if tailscale_ip else "http://localhost:3000/command-center"
 
         # Build summary rows
         rows = []
+        rows.append(f"[bold white]Company:[/]     {company_name}")
+        rows.append(f"[bold white]Agent:[/]       Company Maestro (default)")
         rows.append(f"[bold white]Provider:[/]    {self.progress.get('provider', 'N/A').title()}")
         rows.append(f"[bold white]Model:[/]       {self.progress.get('model', 'N/A')}")
         if self.progress.get('bot_username'):
             rows.append(f"[bold white]Telegram:[/]    @{self.progress['bot_username']}")
-        if self.progress.get('tailscale_ip'):
-            rows.append(f"[bold white]Tailscale IP:[/] {self.progress['tailscale_ip']}")
+        if tailscale_ip:
+            rows.append(f"[bold white]Tailscale:[/]   {tailscale_ip}")
+        rows.append(f"[bold white]Cmd Center:[/]  {cc_url}")
         rows.append(f"[bold white]Workspace:[/]   {self.progress.get('workspace', 'N/A')}")
-        rows.append(f"[bold white]Plans:[/]       {'✓ Ingested' if self.progress.get('plans_ingested') else 'Not yet — ingest when ready'}")
 
         console.print(Panel(
             "\n".join(rows),
             border_style="green",
-            title="[bold green]✓ Maestro is Ready[/]",
-            width=64,
+            title=f"[bold green]✓ {company_name} — Maestro is Ready[/]",
+            width=68,
         ))
 
         # Next steps
         next_lines = []
-        next_lines.append(f"  1. Start OpenClaw gateway:  [bold white]openclaw gateway start[/]")
-        next_lines.append(f"  2. Start plan viewer:       [bold white]maestro serve[/]")
+        next_lines.append(f"  1. Start Maestro:           [bold white]maestro start[/]")
         if self.progress.get('bot_username'):
-            next_lines.append(f"  3. Message your bot:        [bold white]@{self.progress['bot_username']}[/] on Telegram")
-        if not self.progress.get('plans_ingested'):
-            next_lines.append(f"  4. Ingest your plans:       [bold white]maestro ingest <pdf-path>[/]")
+            next_lines.append(f"  2. Message your bot:        [bold white]@{self.progress['bot_username']}[/] on Telegram")
+        next_lines.append(f"  3. Open Command Center:     [bold white]{cc_url}[/]")
+        next_lines.append("")
+        next_lines.append(f"  [{DIM}]Company Maestro will help you set up your first project.[/]")
 
         console.print()
         console.print(Panel(
             "\n".join(next_lines),
             border_style=CYAN,
             title=f"[bold {BRIGHT_CYAN}]Next Steps[/]",
-            width=64,
+            width=68,
         ))
 
         if self.progress.get('openclaw_skip'):
             console.print()
-            warning("OpenClaw not installed — install it before starting the gateway:")
+            warning("OpenClaw not installed — install it before starting:")
             console.print(f"  [bold white]npm install -g openclaw[/]")
 
         if self.progress.get('tailscale_skip'):
             console.print()
-            warning("Tailscale skipped — to access the viewer from your phone,")
-            console.print(f"  [{DIM}]ask your Maestro bot: \"How do I set up Tailscale?\"[/]")
+            warning("Tailscale skipped — Command Center only accessible on localhost.")
+            console.print(f"  [{DIM}]Install Tailscale to access from your phone.[/]")
 
         console.print()
         console.print(Rule(style=CYAN))
@@ -990,8 +976,7 @@ MAESTRO_STORE=knowledge_store/
             ("Telegram Bot", self.step_telegram_bot),
             ("Tailscale", self.step_tailscale),
             ("Configure OpenClaw", self.step_configure_openclaw),
-            ("Configure Maestro", self.step_configure_maestro),
-            ("Ingest Plans", self.step_ingest_plans),
+            ("Configure Workspace", self.step_configure_maestro),
         ]
 
         for step_name, step_func in steps:
