@@ -5,7 +5,9 @@ Usage:
     maestro ingest <folder> [options]
     maestro serve [options]
     maestro start [options]
+    maestro doctor [options]
     maestro update [options]
+    maestro up [options]
     maestro tools <command> [args]
 """
 
@@ -15,6 +17,8 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+from .install_state import resolve_fleet_store_root
 
 
 def _add_ingest_parser(subparsers: argparse._SubParsersAction):
@@ -28,13 +32,13 @@ def _add_ingest_parser(subparsers: argparse._SubParsersAction):
 def _add_start_parser(subparsers: argparse._SubParsersAction):
     parser = subparsers.add_parser("start", help="Start Maestro runtime (TUI dashboard)")
     parser.add_argument("--port", type=int, default=3000)
-    parser.add_argument("--store", type=str, default="knowledge_store")
+    parser.add_argument("--store", type=str, default=None, help="Override fleet store root")
 
 
 def _add_serve_parser(subparsers: argparse._SubParsersAction):
     parser = subparsers.add_parser("serve", help="Start the frontend server")
     parser.add_argument("--port", type=int, default=3000)
-    parser.add_argument("--store", type=str, default="knowledge_store")
+    parser.add_argument("--store", type=str, default=None, help="Override fleet store root")
     parser.add_argument("--host", type=str, default="0.0.0.0")
 
 
@@ -43,6 +47,25 @@ def _add_update_parser(subparsers: argparse._SubParsersAction):
     parser.add_argument("--workspace", help="Override workspace path for maestro-company")
     parser.add_argument("--no-restart", action="store_true", help="Skip OpenClaw gateway restart/start")
     parser.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files")
+
+
+def _add_doctor_parser(subparsers: argparse._SubParsersAction):
+    parser = subparsers.add_parser("doctor", help="Validate and repair Maestro/OpenClaw runtime setup")
+    parser.add_argument("--fix", action="store_true", help="Apply safe fixes in-place")
+    parser.add_argument("--store", help="Override knowledge store path used in checks")
+    parser.add_argument("--no-restart", action="store_true", help="Skip gateway restart checks")
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output")
+
+
+def _add_up_parser(subparsers: argparse._SubParsersAction):
+    parser = subparsers.add_parser("up", help="Preferred startup: doctor --fix then serve")
+    parser.add_argument("--port", type=int, default=3000)
+    parser.add_argument("--store", type=str, default=None, help="Override fleet store root")
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--tui", action="store_true", help="Run server with live monitor TUI (logs/compute/tokens)")
+    parser.add_argument("--skip-doctor", action="store_true", help="Skip doctor pass before serving")
+    parser.add_argument("--no-fix", action="store_true", help="Run doctor in validate-only mode")
+    parser.add_argument("--no-restart", action="store_true", help="Skip gateway restart during doctor pass")
 
 
 def _add_tools_parser(subparsers: argparse._SubParsersAction):
@@ -172,7 +195,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ingest_parser(subparsers)
     _add_start_parser(subparsers)
     _add_serve_parser(subparsers)
+    _add_doctor_parser(subparsers)
     _add_update_parser(subparsers)
+    _add_up_parser(subparsers)
     _add_tools_parser(subparsers)
     _add_index_parser(subparsers)
     _add_license_parser(subparsers)
@@ -183,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _handle_start(args: argparse.Namespace):
     from .runtime import main as runtime_main
 
-    runtime_main(port=args.port, store=args.store)
+    runtime_main(port=args.port, store=str(resolve_fleet_store_root(args.store)))
 
 
 def _handle_ingest(args: argparse.Namespace):
@@ -197,10 +222,12 @@ def _handle_serve(args: argparse.Namespace):
     import maestro.server as srv
     import uvicorn
 
-    srv.store_path = Path(args.store).resolve()
+    resolved_store = resolve_fleet_store_root(args.store)
+    srv.store_path = resolved_store
+    srv.server_port = int(args.port)
     print(f"Maestro server starting on http://localhost:{args.port}")
     print(f"Knowledge store: {srv.store_path}")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning", access_log=False)
 
 
 def _handle_update(args: argparse.Namespace):
@@ -213,6 +240,41 @@ def _handle_update(args: argparse.Namespace):
     )
     if code != 0:
         sys.exit(code)
+
+
+def _handle_doctor(args: argparse.Namespace):
+    from .doctor import run_doctor
+
+    code = run_doctor(
+        fix=bool(args.fix),
+        store_override=args.store,
+        restart_gateway=not args.no_restart,
+        json_output=bool(args.json),
+    )
+    if code != 0:
+        sys.exit(code)
+
+
+def _handle_up(args: argparse.Namespace):
+    from .doctor import run_doctor
+
+    resolved_store = str(resolve_fleet_store_root(args.store))
+    if not args.skip_doctor:
+        doctor_code = run_doctor(
+            fix=not args.no_fix,
+            store_override=resolved_store,
+            restart_gateway=not args.no_restart,
+            json_output=False,
+        )
+        if doctor_code != 0:
+            sys.exit(doctor_code)
+    if args.tui:
+        from .monitor import run_up_tui
+
+        run_up_tui(port=args.port, store=resolved_store, host=args.host)
+        return
+    args.store = resolved_store
+    _handle_serve(args)
 
 
 def _handle_index(args: argparse.Namespace):
@@ -397,7 +459,9 @@ def main(argv: list[str] | None = None):
         "start": _handle_start,
         "ingest": _handle_ingest,
         "serve": _handle_serve,
+        "doctor": _handle_doctor,
         "update": _handle_update,
+        "up": _handle_up,
         "index": _handle_index,
         "license": _run_license,
         "tools": _run_tools,

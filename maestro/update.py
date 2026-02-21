@@ -10,9 +10,16 @@ import json
 import shutil
 import subprocess
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+from .workspace_templates import (
+    provider_env_key_for_model,
+    render_tools_md,
+    render_workspace_env,
+)
+from .install_state import save_install_state
 
 
 CommandRunner = Callable[[str], tuple[bool, str]]
@@ -87,6 +94,31 @@ def _resolve_workspace(config: dict, home_dir: Path, override: str | None) -> tu
             return Path(str(agent["workspace"])).expanduser().resolve(), False
 
     return (home_dir / ".openclaw" / "workspace-maestro").resolve(), False
+
+
+def _resolve_company_agent(config: dict) -> dict:
+    agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
+
+    company = next(
+        (a for a in agent_list if isinstance(a, dict) and a.get("id") == "maestro-company"),
+        None,
+    )
+    if isinstance(company, dict):
+        return company
+
+    default_agent = next(
+        (a for a in agent_list if isinstance(a, dict) and a.get("default")),
+        None,
+    )
+    return default_agent if isinstance(default_agent, dict) else {}
+
+
+def _company_name_from_agent(agent: dict) -> str:
+    raw_name = str(agent.get("name", "")).strip()
+    if raw_name.startswith("Maestro (") and raw_name.endswith(")"):
+        return raw_name[len("Maestro ("):-1].strip() or "Company"
+    return raw_name or "Company"
 
 
 def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bool) -> tuple[dict, list[str]]:
@@ -194,7 +226,16 @@ def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bo
     return migrated, changes
 
 
-def _sync_workspace_assets(workspace: Path, template_root: Path | None, dry_run: bool) -> tuple[list[str], list[str]]:
+def _sync_workspace_assets(
+    workspace: Path,
+    template_root: Path | None,
+    dry_run: bool,
+    *,
+    company_name: str,
+    active_provider_env_key: str | None,
+    provider_key: str | None,
+    gemini_key: str | None,
+) -> tuple[list[str], list[str]]:
     changes: list[str] = []
     warnings: list[str] = []
 
@@ -224,14 +265,9 @@ def _sync_workspace_assets(workspace: Path, template_root: Path | None, dry_run:
 
     tools_md = workspace / "TOOLS.md"
     if not tools_md.exists():
-        content = (
-            "# TOOLS.md — Company Maestro\n\n"
-            "## Role\n"
-            "- Company-level orchestration agent\n"
-            "- Command Center owner\n\n"
-            "## Key Paths\n"
-            "- Knowledge store: `knowledge_store/`\n"
-            "- Command Center: `http://localhost:3000/command-center`\n"
+        content = render_tools_md(
+            company_name=company_name,
+            active_provider_env_key=active_provider_env_key,
         )
         if not dry_run:
             tools_md.write_text(content, encoding="utf-8")
@@ -240,7 +276,15 @@ def _sync_workspace_assets(workspace: Path, template_root: Path | None, dry_run:
     env_file = workspace / ".env"
     if not env_file.exists():
         if not dry_run:
-            env_file.write_text("MAESTRO_STORE=knowledge_store/\n", encoding="utf-8")
+            env_file.write_text(
+                render_workspace_env(
+                    store_path="knowledge_store/",
+                    provider_env_key=active_provider_env_key,
+                    provider_key=provider_key,
+                    gemini_key=gemini_key,
+                ),
+                encoding="utf-8",
+            )
         changes.append("Added missing workspace .env")
 
     knowledge_store = workspace / "knowledge_store"
@@ -350,8 +394,26 @@ def perform_update(
     summary.config_changed = bool(config_changes)
     summary.changes.extend(config_changes)
 
+    company_agent = _resolve_company_agent(migrated)
+    company_name = _company_name_from_agent(company_agent)
+    model = str(company_agent.get("model", "")).strip()
+    provider_env_key = provider_env_key_for_model(model)
+    env = migrated.get("env", {}) if isinstance(migrated.get("env"), dict) else {}
+    provider_key = env.get(provider_env_key) if provider_env_key else None
+    provider_key_str = provider_key if isinstance(provider_key, str) else None
+    gemini_key = env.get("GEMINI_API_KEY")
+    gemini_key_str = gemini_key if isinstance(gemini_key, str) else None
+
     template_root = _resolve_agent_template_dir(template_dir)
-    workspace_changes, workspace_warnings = _sync_workspace_assets(workspace, template_root, dry_run=dry_run)
+    workspace_changes, workspace_warnings = _sync_workspace_assets(
+        workspace,
+        template_root,
+        dry_run=dry_run,
+        company_name=company_name,
+        active_provider_env_key=provider_env_key,
+        provider_key=provider_key_str,
+        gemini_key=gemini_key_str,
+    )
     summary.workspace_changed = bool(workspace_changes)
     summary.changes.extend(workspace_changes)
     summary.warnings.extend(workspace_warnings)
@@ -376,6 +438,17 @@ def perform_update(
         warnings=summary.warnings,
     )
     summary.command_center_url = _resolve_command_center_url(runner)
+
+    install_state = {
+        "workspace_root": str(workspace.resolve()),
+        "fleet_store_root": str((workspace / "knowledge_store").resolve()),
+        "company_name": company_name,
+        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    if not dry_run:
+        save_install_state(install_state, home_dir=home)
+    else:
+        summary.changes.append("(dry-run) Would sync install state")
 
     summary.changed = bool(summary.changes)
     return summary, 0

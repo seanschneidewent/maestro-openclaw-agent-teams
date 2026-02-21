@@ -34,13 +34,14 @@ dev = [
 [project.scripts]
 maestro = "maestro.cli:main"
 maestro-setup = "maestro.setup:main"
+maestro-purchase = "maestro.purchase:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["maestro"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "agent" = "maestro/agent"
-"command_center_frontend" = "maestro/command_center_frontend"
+"command_center_frontend/dist" = "maestro/command_center_frontend"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

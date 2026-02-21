@@ -13,8 +13,8 @@ from __future__ import annotations
 import asyncio
 import io
 import json
-import re
 import sys
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,19 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from PIL import Image
 
+from .command_center import (
+    build_command_center_state,
+    build_project_detail,
+    build_project_snapshot,
+    discover_project_dirs,
+)
 from .config import THUMBNAIL_CACHE_DIR
+from .control_plane import (
+    build_awareness_state,
+    sync_fleet_registry,
+)
+from .doctor import build_doctor_report
+from .server_actions import ActionError, run_command_center_action
 from .utils import load_json, slugify
 
 # ── Config ──────────────────────────────────────────────────────
@@ -34,28 +46,44 @@ _bundled_frontend = SCRIPT_DIR / "frontend"
 _repo_frontend = SCRIPT_DIR.parent / "frontend" / "dist"
 FRONTEND_DIR = _bundled_frontend if _bundled_frontend.exists() else _repo_frontend
 _bundled_command_center = SCRIPT_DIR / "command_center_frontend"
-_repo_command_center = SCRIPT_DIR.parent / "command_center_frontend"
-COMMAND_CENTER_DIR = (
-    _bundled_command_center if _bundled_command_center.exists() else _repo_command_center
-)
+_repo_command_center_dist = SCRIPT_DIR.parent / "command_center_frontend" / "dist"
+_repo_command_center_root = SCRIPT_DIR.parent / "command_center_frontend"
+if _bundled_command_center.exists():
+    COMMAND_CENTER_DIR = _bundled_command_center
+elif _repo_command_center_dist.exists():
+    COMMAND_CENTER_DIR = _repo_command_center_dist
+else:
+    COMMAND_CENTER_DIR = _repo_command_center_root
 
 # ── In-memory data ─────────────────────────────────────────────
 
 projects: dict[str, dict[str, Any]] = {}
 store_path: Path = DEFAULT_STORE
+server_port: int = 3000
 ws_clients: dict[str, set[WebSocket]] = {}
+project_dir_slug_index: dict[str, str] = {}
+command_center_state: dict[str, Any] = {}
+command_center_ws_clients: set[WebSocket] = set()
+fleet_registry: dict[str, Any] = {}
+awareness_state: dict[str, Any] = {}
 
 
 def load_all_projects():
     """Load all project directories from knowledge_store."""
-    global projects
+    global projects, ws_clients, project_dir_slug_index
+    projects = {}
+    ws_clients = {}
+    project_dir_slug_index = {}
     if not store_path.exists():
         return
 
-    for project_dir in sorted(store_path.iterdir()):
-        if not project_dir.is_dir():
-            continue
-        slug = slugify(project_dir.name)
+    for project_dir in discover_project_dirs(store_path):
+        try:
+            cc_snapshot = build_project_snapshot(project_dir)
+            slug = str(cc_snapshot.get("slug", "")) or slugify(project_dir.name)
+        except Exception:
+            slug = slugify(project_dir.name)
+        project_dir_slug_index[project_dir.name] = slug
         projects[slug] = _load_project(project_dir, slug)
         ws_clients.setdefault(slug, set())
 
@@ -66,8 +94,15 @@ def load_all_projects():
 
 
 def _load_project(project_dir: Path, slug: str) -> dict[str, Any]:
+    project_meta = load_json(project_dir / "project.json")
+    project_name = project_dir.name
+    if isinstance(project_meta, dict):
+        maybe_name = project_meta.get("name")
+        if isinstance(maybe_name, str) and maybe_name.strip():
+            project_name = maybe_name.strip()
+
     proj: dict[str, Any] = {
-        "name": project_dir.name,
+        "name": project_name,
         "slug": slug,
         "path": str(project_dir),
         "pages": {},
@@ -140,6 +175,148 @@ def _get_project(slug: str) -> dict[str, Any] | None:
     return projects.get(slug)
 
 
+def _registry_by_slug(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    items = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
+    by_slug: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        slug = str(item.get("project_slug", "")).strip()
+        if slug:
+            by_slug[slug] = item
+    return by_slug
+
+
+def _apply_registry_identity(snapshot: dict[str, Any], entry: dict[str, Any] | None):
+    if not isinstance(snapshot, dict) or not isinstance(entry, dict):
+        return
+
+    assignee = str(entry.get("assignee", "")).strip()
+    superintendent = str(entry.get("superintendent", "")).strip()
+
+    if superintendent.lower() in ("", "unknown") and assignee.lower() not in ("", "unassigned"):
+        superintendent = assignee
+
+    if assignee:
+        snapshot["assignee"] = assignee
+    if superintendent:
+        snapshot["superintendent"] = superintendent
+
+
+def _apply_registry_identity_to_command_center_state(state: dict[str, Any], registry: dict[str, Any]):
+    if not isinstance(state, dict):
+        return
+    projects_payload = state.get("projects")
+    if not isinstance(projects_payload, list):
+        return
+
+    by_slug = _registry_by_slug(registry)
+    for project in projects_payload:
+        if not isinstance(project, dict):
+            continue
+        slug = str(project.get("slug", "")).strip()
+        if not slug:
+            continue
+        _apply_registry_identity(project, by_slug.get(slug))
+
+
+def _refresh_command_center_state():
+    """Recompute in-memory command-center state from the current store path."""
+    global command_center_state
+    try:
+        command_center_state = build_command_center_state(store_path)
+        if fleet_registry:
+            _apply_registry_identity_to_command_center_state(command_center_state, fleet_registry)
+    except Exception as exc:
+        print(f"Command center state refresh failed: {exc}", file=sys.stderr)
+        command_center_state = {
+            "updated_at": "",
+            "store_root": str(store_path),
+            "commander": {"name": "Sean (GC Owner)", "lastSeen": "Unknown"},
+            "orchestrator": {
+                "id": "CM-01",
+                "name": "Company Maestro",
+                "status": "Error",
+                "currentAction": "Failed to load command center state",
+            },
+            "directives": [],
+            "projects": [],
+        }
+
+
+def _refresh_control_plane_state():
+    """Recompute fleet registry + machine-specific awareness state."""
+    global fleet_registry, awareness_state, command_center_state
+    try:
+        fleet_registry = sync_fleet_registry(store_path)
+        if command_center_state:
+            _apply_registry_identity_to_command_center_state(command_center_state, fleet_registry)
+    except Exception as exc:
+        print(f"Fleet registry refresh failed: {exc}", file=sys.stderr)
+        fleet_registry = {
+            "version": 1,
+            "updated_at": "",
+            "store_root": str(store_path),
+            "projects": [],
+        }
+
+    try:
+        awareness_state = build_awareness_state(
+            store_path,
+            command_center_state=command_center_state,
+            web_port=server_port,
+        )
+    except Exception as exc:
+        print(f"Awareness state refresh failed: {exc}", file=sys.stderr)
+        awareness_state = {
+            "generated_at": "",
+            "posture": "degraded",
+            "degraded_reasons": [f"awareness refresh failed: {exc}"],
+            "paths": {"store_root": str(store_path)},
+        }
+
+
+def _refresh_all_state():
+    load_all_projects()
+    _refresh_command_center_state()
+    _refresh_control_plane_state()
+
+
+def _command_center_project_dirs_by_slug() -> dict[str, Path]:
+    """Index discoverable project directories by normalized slug."""
+    result: dict[str, Path] = {}
+    for project_dir in discover_project_dirs(store_path):
+        try:
+            snapshot = build_project_snapshot(project_dir)
+            slug = snapshot.get("slug")
+            if isinstance(slug, str) and slug:
+                result[slug] = project_dir
+        except Exception:
+            continue
+    return result
+
+
+def _is_command_center_relevant(path: Path) -> bool:
+    """Whether a changed file should trigger command-center state refresh."""
+    if path.suffix.lower() != ".json":
+        return False
+
+    name = path.name.lower()
+    if name in ("project.json", "index.json"):
+        return True
+    if name in ("current_update.json", "lookahead.json", "baseline.json"):
+        return True
+    if name == "log.json":
+        return True
+    if name == "decisions.json":
+        return True
+    if name == "scope_matrix.json":
+        return True
+    if ".command_center" in path.parts:
+        return True
+    return False
+
+
 # ── Filesystem watcher ──────────────────────────────────────────
 
 async def watch_knowledge_store():
@@ -160,26 +337,37 @@ async def watch_knowledge_store():
             if path.suffix not in (".json", ".png"):
                 continue
 
-            parts = path.relative_to(store_path).parts
-            if len(parts) < 2:
+            try:
+                rel_parts = path.relative_to(store_path).parts
+            except ValueError:
                 continue
 
-            project_dir_name = parts[0]
-            slug = slugify(project_dir_name)
+            # Command-center updates are store-wide (single-root or multi-root).
+            if _is_command_center_relevant(path):
+                _refresh_all_state()
+                await _broadcast_command_center_update()
+
+            # Existing workspace frontend live updates are only for multi-project
+            # page/workspace changes where first segment is a project dir.
+            if len(rel_parts) < 2:
+                continue
+
+            project_dir_name = rel_parts[0]
+            slug = project_dir_slug_index.get(project_dir_name, slugify(project_dir_name))
             proj = projects.get(slug)
             if not proj:
                 continue
 
-            if len(parts) >= 3 and parts[1] == "workspaces":
-                ws_slug = parts[2] if len(parts) > 2 else None
+            if len(rel_parts) >= 3 and rel_parts[1] == "workspaces":
+                ws_slug = rel_parts[2] if len(rel_parts) > 2 else None
                 await broadcast(slug, {"type": "workspace_updated", "slug": ws_slug})
                 continue
 
-            if len(parts) < 3 or parts[1] != "pages":
+            if len(rel_parts) < 3 or rel_parts[1] != "pages":
                 continue
 
-            pg_name = parts[2]
-            pg_dir = store_path / parts[0] / "pages" / pg_name
+            pg_name = rel_parts[2]
+            pg_dir = store_path / rel_parts[0] / "pages" / pg_name
 
             if not pg_dir.is_dir():
                 continue
@@ -188,8 +376,8 @@ async def watch_knowledge_store():
 
             if path.name == "pass1.json":
                 event = {"type": "page_added", "page": pg_name}
-            elif path.name == "pass2.json" and len(parts) >= 5:
-                event = {"type": "region_complete", "page": pg_name, "region": parts[4]}
+            elif path.name == "pass2.json" and len(rel_parts) >= 5:
+                event = {"type": "region_complete", "page": pg_name, "region": rel_parts[4]}
             elif path.name == "page.png":
                 event = {"type": "page_image_ready", "page": pg_name}
             else:
@@ -210,6 +398,28 @@ async def broadcast(slug: str, event: dict):
         except Exception:
             disconnected.add(ws)
     clients -= disconnected
+
+
+async def broadcast_command_center(event: dict[str, Any]):
+    if not command_center_ws_clients:
+        return
+
+    payload = json.dumps(event)
+    disconnected: set[WebSocket] = set()
+    for ws in command_center_ws_clients:
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            disconnected.add(ws)
+    command_center_ws_clients.difference_update(disconnected)
+
+
+async def _broadcast_command_center_update():
+    await broadcast_command_center({
+        "type": "command_center_updated",
+        "state": command_center_state,
+        "awareness": awareness_state,
+    })
 
 
 # ── Thumbnails ──────────────────────────────────────────────────
@@ -287,13 +497,19 @@ def _get_page_bboxes(proj: dict[str, Any], page_name: str, pointer_ids: list[str
 
 # ── FastAPI app ─────────────────────────────────────────────────
 
-app = FastAPI(title="Maestro", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    _refresh_all_state()
+    watch_task = asyncio.create_task(watch_knowledge_store())
+    try:
+        yield
+    finally:
+        watch_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await watch_task
 
 
-@app.on_event("startup")
-async def startup():
-    load_all_projects()
-    asyncio.create_task(watch_knowledge_store())
+app = FastAPI(title="Maestro", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
 
 @app.get("/api/projects")
@@ -308,6 +524,65 @@ async def api_projects():
         }
         for proj in projects.values()
     ]}
+
+
+@app.get("/api/command-center/state")
+async def api_command_center_state():
+    if not command_center_state:
+        _refresh_command_center_state()
+    if not awareness_state:
+        _refresh_control_plane_state()
+    return command_center_state
+
+
+@app.get("/api/command-center/projects/{slug}")
+async def api_command_center_project_detail(slug: str):
+    project_dirs = _command_center_project_dirs_by_slug()
+    project_dir = project_dirs.get(slug)
+    if not project_dir:
+        return JSONResponse({"error": f"Project '{slug}' not found"}, status_code=404)
+
+    try:
+        detail = build_project_detail(project_dir)
+        if not fleet_registry:
+            _refresh_control_plane_state()
+        snapshot = detail.get("snapshot")
+        if isinstance(snapshot, dict):
+            entry = _registry_by_slug(fleet_registry).get(slug)
+            _apply_registry_identity(snapshot, entry)
+        return detail
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to build project detail: {exc}"}, status_code=500)
+
+
+@app.get("/api/system/awareness")
+async def api_system_awareness():
+    if not awareness_state:
+        _refresh_control_plane_state()
+    return awareness_state
+
+
+@app.get("/api/command-center/fleet-registry")
+async def api_fleet_registry():
+    if not fleet_registry:
+        _refresh_control_plane_state()
+    return fleet_registry
+
+
+@app.post("/api/command-center/actions")
+async def api_command_center_actions(payload: dict[str, Any]):
+    try:
+        return await run_command_center_action(
+            payload,
+            store_path=store_path,
+            refresh_all_state=_refresh_all_state,
+            broadcast_command_center_update=_broadcast_command_center_update,
+            get_fleet_registry=lambda: fleet_registry,
+            get_awareness_state=lambda: awareness_state,
+            doctor_builder=build_doctor_report,
+        )
+    except ActionError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
 
 
 @app.get("/{slug}/api/project")
@@ -556,6 +831,28 @@ async def api_workspace(slug: str, ws_slug: str):
 
 # ── WebSocket ───────────────────────────────────────────────────
 
+@app.websocket("/ws/command-center")
+async def websocket_command_center(websocket: WebSocket):
+    await websocket.accept()
+    command_center_ws_clients.add(websocket)
+    try:
+        if not command_center_state:
+            _refresh_command_center_state()
+        if not awareness_state:
+            _refresh_control_plane_state()
+        await websocket.send_text(json.dumps({
+            "type": "command_center_init",
+            "state": command_center_state,
+            "awareness": awareness_state,
+        }))
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        command_center_ws_clients.discard(websocket)
+
+
 @app.websocket("/{slug}/ws")
 async def websocket_endpoint(slug: str, websocket: WebSocket):
     proj = _get_project(slug)
@@ -581,9 +878,43 @@ async def websocket_endpoint(slug: str, websocket: WebSocket):
 
 # ── Frontend SPA ────────────────────────────────────────────────
 
+
+def _command_center_index_path() -> Path:
+    return COMMAND_CENTER_DIR / "index.html"
+
+
 @app.get("/command-center")
 async def command_center():
-    index_path = COMMAND_CENTER_DIR / "index.html"
+    index_path = _command_center_index_path()
+    if index_path.exists():
+        return FileResponse(index_path)
+    return JSONResponse(
+        {
+            "error": "Command Center frontend not found",
+            "hint": "Build with: cd command_center_frontend && npm install && npm run build",
+        },
+        status_code=404,
+    )
+
+
+@app.get("/command-center/assets/{rest:path}")
+async def command_center_assets(rest: str):
+    asset_path = COMMAND_CENTER_DIR / "assets" / rest
+    if asset_path.exists() and asset_path.is_file():
+        return FileResponse(asset_path)
+    return JSONResponse({"error": "Not found"}, status_code=404)
+
+
+@app.get("/command-center/{rest:path}")
+async def command_center_spa(rest: str):
+    if rest.startswith("api/") or rest.startswith("ws/"):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    file_path = COMMAND_CENTER_DIR / rest
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(file_path)
+
+    index_path = _command_center_index_path()
     if index_path.exists():
         return FileResponse(index_path)
     return JSONResponse({"error": "Command Center frontend not found"}, status_code=404)

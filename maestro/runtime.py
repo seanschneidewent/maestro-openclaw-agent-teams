@@ -622,21 +622,10 @@ def start_web_server(port: int, store: str, log: ActivityLog) -> Optional[subpro
         cmd = [sys.executable, "-m", "maestro.cli", "serve", "--port", str(port), "--store", store]
         proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         log.add("System", f"Web server starting on :{port}", GREEN)
-
-        def stream_output():
-            if proc.stdout:
-                for line in proc.stdout:
-                    line = line.strip()
-                    if line:
-                        log.add("Web", line, DIM)
-
-        thread = threading.Thread(target=stream_output, daemon=True)
-        thread.start()
         return proc
     except Exception as e:
         log.add("System", f"Failed to start web server: {e}", RED)
@@ -750,7 +739,8 @@ def main(port: int = 3000, store: str = "knowledge_store"):
 
     # Live dashboard loop
     try:
-        with Live(build_dashboard(state, log), console=console, refresh_per_second=2, screen=True) as live:
+        # Avoid alternate-screen rendering glitches across terminal emulators.
+        with Live(build_dashboard(state, log), console=console, refresh_per_second=2, screen=False) as live:
             while not stop_event.is_set():
                 live.update(build_dashboard(state, log))
                 time.sleep(0.5)
