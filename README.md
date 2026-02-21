@@ -36,6 +36,7 @@ Maestro currently has two distinct frontends:
 maestro-setup                                  # Interactive setup wizard (company/default agent)
 maestro start [--port 3000] [--store ...]      # Runtime TUI + health checks + starts web server
 maestro serve [--port 3000] [--store ...]      # FastAPI server only
+maestro update [--dry-run] [--no-restart]      # Safe in-place update/migration for existing installs
 maestro ingest <folder> [--project-name ...]   # Build project knowledge store from plan PDFs
 maestro index <project_dir>                     # Rebuild project index.json
 maestro tools <command> ...                     # Query/manage project knowledge store

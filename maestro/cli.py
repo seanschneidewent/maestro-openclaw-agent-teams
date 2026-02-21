@@ -5,6 +5,7 @@ Usage:
     maestro ingest <folder> [options]
     maestro serve [options]
     maestro start [options]
+    maestro update [options]
     maestro tools <command> [args]
 """
 
@@ -35,6 +36,13 @@ def _add_serve_parser(subparsers: argparse._SubParsersAction):
     parser.add_argument("--port", type=int, default=3000)
     parser.add_argument("--store", type=str, default="knowledge_store")
     parser.add_argument("--host", type=str, default="0.0.0.0")
+
+
+def _add_update_parser(subparsers: argparse._SubParsersAction):
+    parser = subparsers.add_parser("update", help="Update an existing Maestro install")
+    parser.add_argument("--workspace", help="Override workspace path for maestro-company")
+    parser.add_argument("--no-restart", action="store_true", help="Skip OpenClaw gateway restart/start")
+    parser.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files")
 
 
 def _add_tools_parser(subparsers: argparse._SubParsersAction):
@@ -164,6 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ingest_parser(subparsers)
     _add_start_parser(subparsers)
     _add_serve_parser(subparsers)
+    _add_update_parser(subparsers)
     _add_tools_parser(subparsers)
     _add_index_parser(subparsers)
     _add_license_parser(subparsers)
@@ -192,6 +201,18 @@ def _handle_serve(args: argparse.Namespace):
     print(f"Maestro server starting on http://localhost:{args.port}")
     print(f"Knowledge store: {srv.store_path}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+
+
+def _handle_update(args: argparse.Namespace):
+    from .update import run_update
+
+    code = run_update(
+        workspace_override=args.workspace,
+        restart_gateway=not args.no_restart,
+        dry_run=args.dry_run,
+    )
+    if code != 0:
+        sys.exit(code)
 
 
 def _handle_index(args: argparse.Namespace):
@@ -376,6 +397,7 @@ def main(argv: list[str] | None = None):
         "start": _handle_start,
         "ingest": _handle_ingest,
         "serve": _handle_serve,
+        "update": _handle_update,
         "index": _handle_index,
         "license": _run_license,
         "tools": _run_tools,
