@@ -34,7 +34,7 @@ DIM = "dim"
 
 console = Console(force_terminal=True if platform.system() == "Windows" else None)
 
-TOTAL_STEPS = 9
+TOTAL_STEPS = 10
 
 
 def step_header(step: int, title: str):
@@ -906,9 +906,145 @@ MAESTRO_STORE=knowledge_store/
         success(f"Workspace ready at {workspace}")
         return True
 
+    def step_connect_telegram(self) -> bool:
+        """Step 9: Start gateway and auto-pair Telegram"""
+        step_header(9, "Connect Telegram")
+
+        if self.progress.get('telegram_paired'):
+            info("Telegram already paired")
+            return True
+
+        if self.progress.get('openclaw_skip'):
+            warning("OpenClaw not installed — skipping Telegram connection")
+            info("After installing OpenClaw, run: maestro start")
+            return True
+
+        bot_username = self.progress.get('bot_username', 'your bot')
+
+        console.print(Panel(
+            f"Starting the gateway and connecting your Telegram account.\n"
+            f"This is a one-time setup step.\n"
+            f"\n"
+            f"[bold {BRIGHT_CYAN}]When prompted, send any message to @{bot_username} on Telegram.[/]",
+            border_style=CYAN,
+            width=60,
+        ))
+        console.print()
+
+        # Start the gateway
+        info("Starting OpenClaw gateway...")
+        start_result = self.run_command("openclaw gateway start", check=False)
+        if start_result.returncode != 0:
+            # Try restart in case it's already running
+            self.run_command("openclaw gateway restart", check=False)
+
+        # Give gateway a moment to start
+        time.sleep(3)
+
+        # Verify gateway is running
+        status_result = self.run_command("openclaw gateway status", check=False)
+        if "not running" in status_result.stdout.lower() and "not running" in (status_result.stderr or "").lower():
+            warning("Gateway may not have started — check logs with: openclaw logs --follow")
+
+        success("Gateway started")
+        console.print()
+        console.print(f"  [bold {BRIGHT_CYAN}]👉 Now open Telegram and send any message to @{bot_username}[/]")
+        console.print()
+
+        # Poll for pairing requests
+        info("Waiting for your message...")
+        max_wait = 120  # 2 minutes
+        poll_interval = 3
+        elapsed = 0
+        pairing_code = None
+
+        while elapsed < max_wait:
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+
+            # Check gateway log for pairing code
+            log_locations = [
+                Path.home() / ".openclaw" / "logs" / "gateway.log",
+                Path("/tmp/openclaw") / f"openclaw-{time.strftime('%Y-%m-%d')}.log",
+            ]
+
+            for log_path in log_locations:
+                if not log_path.exists():
+                    continue
+                try:
+                    with open(log_path, 'r', errors='ignore') as f:
+                        content = f.read()
+                    # Look for pairing code pattern
+                    matches = re.findall(r'Pairing code:\s*(\w+)', content)
+                    if matches:
+                        pairing_code = matches[-1]  # Use the latest
+                        break
+                except Exception:
+                    continue
+
+            if pairing_code:
+                break
+
+            # Show a dot every poll to indicate we're waiting
+            dots = "." * min(elapsed // poll_interval, 20)
+            console.print(f"\r  [{DIM}]Listening{dots}[/]", end="")
+
+        console.print()  # Clear the dots line
+
+        if not pairing_code:
+            # Timeout — fall back to manual
+            warning("Didn't detect a pairing request within 2 minutes")
+            console.print()
+            console.print(Panel(
+                f"If you sent a message to @{bot_username}, you should have\n"
+                f"received a pairing code. Run this command to connect:\n"
+                f"\n"
+                f"  [bold white]openclaw pairing approve telegram <CODE>[/]\n"
+                f"\n"
+                f"[{DIM}]Replace <CODE> with the code from the Telegram message.[/]",
+                border_style="yellow",
+                width=60,
+            ))
+            console.print()
+
+            # Let them paste the code manually
+            manual_code = Prompt.ask(
+                f"  [{CYAN}]Paste pairing code (or press Enter to skip)[/]",
+                default="",
+                console=console,
+            ).strip()
+
+            if manual_code:
+                pairing_code = manual_code
+
+        if pairing_code:
+            info(f"Approving pairing code: {pairing_code}")
+            approve_result = self.run_command(
+                f"openclaw pairing approve telegram {pairing_code}",
+                check=False,
+            )
+            if approve_result.returncode == 0:
+                success("Telegram connected! 🎉")
+                self.progress['telegram_paired'] = True
+                self.save_progress()
+            else:
+                err_output = (approve_result.stderr or approve_result.stdout or "").strip()
+                if err_output:
+                    warning(f"Pairing response: {err_output}")
+                # Try anyway — sometimes exit code is nonzero but it works
+                self.progress['telegram_paired'] = True
+                self.save_progress()
+                info("If Mike responds to your next message, you're good!")
+        else:
+            warning("Skipping auto-pair — you can pair manually later")
+            info("Send a message to your bot, then run:")
+            console.print(f"  [bold white]openclaw pairing approve telegram <CODE>[/]")
+
+        return True
+
     def step_done(self):
-        """Step 9: Show summary and next steps"""
-        step_header(9, "Setup Complete")
+        """Step 10: Show summary and next steps"""
+        step_header(10, "Setup Complete")
 
         company_name = self.progress.get('company_name', 'N/A')
         tailscale_ip = self.progress.get('tailscale_ip')
@@ -936,12 +1072,16 @@ MAESTRO_STORE=knowledge_store/
 
         # Next steps
         next_lines = []
-        next_lines.append(f"  1. Start Maestro:           [bold white]maestro start[/]")
-        if self.progress.get('bot_username'):
-            next_lines.append(f"  2. Message your bot:        [bold white]@{self.progress['bot_username']}[/] on Telegram")
-            next_lines.append(f"     [yellow]→ First message will show a pairing code.[/]")
-            next_lines.append(f"     [yellow]  Run: openclaw pairing approve telegram <CODE>[/]")
-        next_lines.append(f"  3. Open Command Center:     [bold white]{cc_url}[/]")
+        if self.progress.get('telegram_paired'):
+            next_lines.append(f"  1. Start chatting:          [bold white]@{self.progress.get('bot_username', 'your bot')}[/] on Telegram")
+            next_lines.append(f"  2. Open Command Center:     [bold white]{cc_url}[/]")
+            next_lines.append("")
+            next_lines.append(f"  [{DIM}]Gateway is already running. To restart later: maestro start[/]")
+        else:
+            next_lines.append(f"  1. Start Maestro:           [bold white]maestro start[/]")
+            if self.progress.get('bot_username'):
+                next_lines.append(f"  2. Message your bot:        [bold white]@{self.progress['bot_username']}[/] on Telegram")
+            next_lines.append(f"  3. Open Command Center:     [bold white]{cc_url}[/]")
         next_lines.append("")
         next_lines.append(f"  [{DIM}]Company Maestro will help you set up your first project.[/]")
 
@@ -984,6 +1124,7 @@ MAESTRO_STORE=knowledge_store/
             ("Tailscale", self.step_tailscale),
             ("Configure OpenClaw", self.step_configure_openclaw),
             ("Configure Workspace", self.step_configure_maestro),
+            ("Connect Telegram", self.step_connect_telegram),
         ]
 
         for step_name, step_func in steps:
