@@ -382,7 +382,7 @@ class SetupWizard:
                 f"[{DIM}]Watch for: Can occasionally drift on very specific\n"
                 f"multi-step instructions.[/]",
                 border_style=BRIGHT_CYAN,
-                title=f"[bold {BRIGHT_CYAN}]★ Recommended: Google Gemini 3.1 Pro[/]",
+                title=f"[bold {BRIGHT_CYAN}]★ Recommended: Google Gemini 3 Pro[/]",
                 width=72,
             ))
             console.print()
@@ -421,7 +421,7 @@ class SetupWizard:
 
             # Recommended callout
             console.print(Panel(
-                f"[bold {BRIGHT_CYAN}]★ Recommended:[/] [white]Google Gemini — best price-to-performance, "
+                f"[bold {BRIGHT_CYAN}]★ Recommended:[/] [white]Google Gemini 3 Pro — best price-to-performance, "
                 "and the same API key powers plan vision analysis (saves a step).[/]",
                 border_style=CYAN,
                 width=72,
@@ -436,7 +436,7 @@ class SetupWizard:
             )
 
             providers = {
-                '1': ('google', 'google/gemini-3.1-pro-preview', 'GEMINI_API_KEY'),
+                '1': ('google', 'google/gemini-3-pro-preview', 'GEMINI_API_KEY'),
                 '2': ('anthropic', 'anthropic/claude-opus-4-6', 'ANTHROPIC_API_KEY'),
                 '3': ('openai', 'openai/gpt-5.2', 'OPENAI_API_KEY'),
             }
@@ -717,11 +717,8 @@ class SetupWizard:
             config['gateway'] = {}
         config['gateway']['mode'] = 'local'
 
-        # Install UUID for future billing/identification
-        if 'maestro' not in config:
-            config['maestro'] = {}
-        config['maestro']['install_id'] = self.progress.get('install_id', str(uuid.uuid4()))
-        config['maestro']['company_name'] = self.progress.get('company_name', '')
+        # Store install metadata in ~/.maestro-setup.json (NOT in openclaw.json —
+        # OpenClaw rejects unknown top-level keys and will crash the gateway)
 
         if 'env' not in config:
             config['env'] = {}
@@ -774,6 +771,12 @@ class SetupWizard:
             json.dump(config, f, indent=2)
 
         success(f"OpenClaw config written to {config_file}")
+
+        # Create session directory that OpenClaw expects
+        sessions_dir = config_dir / "agents" / "maestro-company" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        success("Created agent session directory")
+
         self.progress['openclaw_configured'] = True
         self.progress['workspace'] = workspace_path
         self.save_progress()
@@ -934,6 +937,8 @@ MAESTRO_STORE=knowledge_store/
         next_lines.append(f"  1. Start Maestro:           [bold white]maestro start[/]")
         if self.progress.get('bot_username'):
             next_lines.append(f"  2. Message your bot:        [bold white]@{self.progress['bot_username']}[/] on Telegram")
+            next_lines.append(f"     [yellow]→ First message will show a pairing code.[/]")
+            next_lines.append(f"     [yellow]  Run: openclaw pairing approve telegram <CODE>[/]")
         next_lines.append(f"  3. Open Command Center:     [bold white]{cc_url}[/]")
         next_lines.append("")
         next_lines.append(f"  [{DIM}]Company Maestro will help you set up your first project.[/]")
