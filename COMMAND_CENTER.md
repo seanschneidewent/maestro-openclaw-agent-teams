@@ -4,6 +4,17 @@
 
 ---
 
+## Implementation Status (as of February 21, 2026)
+
+Current codebase status:
+- `maestro-setup` provisions Company Maestro and points users to `/command-center`.
+- `/command-center` is a placeholder HTML page in `maestro/server.py`.
+- The project workspace frontend at `/{slug}` is implemented and production-usable.
+
+This document is the target spec for the full Company Command Center dashboard, not a statement that all sections are already implemented.
+
+---
+
 ## 1. Overview
 
 The Command Center is Company Maestro's visual interface — a live web dashboard that the agent controls. It gives a general contractor at-a-glance visibility across every project agent running on their server.

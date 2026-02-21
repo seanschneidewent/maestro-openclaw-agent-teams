@@ -1,228 +1,135 @@
 # Maestro
 
-**AI that actually understands your construction plans.**
+AI infrastructure for construction teams, with a setup-first Company Maestro and project-specific knowledge stores.
 
-Maestro ingests construction plan PDFs, analyzes every sheet with AI vision, and gives superintendents instant answers about their plans — via text, voice, or a live web dashboard.
+## Current Architecture
 
-## Quick Start
+Maestro currently has two distinct frontends:
+
+1. Workspace frontend (React, three-panel layout)
+- Route: `/{project-slug}`
+- Purpose: project plan exploration, workspaces, regions, highlights
+- Backed by project APIs and WebSocket updates
+- Source folder: `frontend/` (built assets served from `frontend/dist`)
+
+2. Command Center frontend (placeholder HTML)
+- Route: `/command-center`
+- Purpose: company-level landing/status page for Company Maestro
+- Full command center implementation is planned; placeholder is intentionally simple today
+- Source folder: `command_center_frontend/`
+
+## Agent Model
+
+1. Company Maestro (default)
+- Created by `maestro-setup`
+- Configured as the default OpenClaw agent (`maestro-company`)
+- Owns orchestration flow and Command Center entrypoint
+
+2. Project/Specialized Maestro
+- Backed by a project knowledge store under `knowledge_store/<project>/`
+- Created by ingesting project plan PDFs
+- Access to project tools is license-gated via project key
+
+## CLI Commands
 
 ```bash
-# 1. Install
+maestro-setup                                  # Interactive setup wizard (company/default agent)
+maestro start [--port 3000] [--store ...]      # Runtime TUI + health checks + starts web server
+maestro serve [--port 3000] [--store ...]      # FastAPI server only
+maestro ingest <folder> [--project-name ...]   # Build project knowledge store from plan PDFs
+maestro index <project_dir>                     # Rebuild project index.json
+maestro tools <command> ...                     # Query/manage project knowledge store
+maestro license <subcommand> ...                # Generate/validate license keys
+```
+
+## Setup Flow (Company Bootstrap)
+
+```bash
 pip install -e .
-
-# 2. Set your Gemini API key
-cp .env.example .env
-# Edit .env with your key from https://aistudio.google.com/apikey
-
-# 3. Ingest a set of plans
-maestro ingest "path/to/plan-pdfs/" --project-name "My Project"
-
-# 4. Start the server
-maestro serve
-# Open http://localhost:3000 in your browser
+maestro-setup
 ```
 
-## What It Does
+`maestro-setup` walks through:
+- company name
+- prerequisites (OpenClaw, Node/npm, etc.)
+- provider + API keys
+- Telegram bot
+- Tailscale (install/login checks)
+- OpenClaw config merge and default agent wiring
+- workspace materialization under `~/.openclaw/workspace-maestro`
 
-1. **Ingest** — Converts PDFs to PNGs, then runs two-pass Gemini vision analysis:
-   - **Pass 1:** Sheet-level analysis — identifies regions, details, cross-references, disciplines
-   - **Pass 2:** Deep dive on every region — materials, dimensions, specs, coordination notes
-
-2. **Serve** — FastAPI server with a React frontend showing:
-   - Plan tree organized by discipline
-   - Workspaces for organizing findings around a topic
-   - Zoomable plan viewer with overlay annotations
-   - Live updates via WebSocket when new analysis completes
-
-3. **Agent** — OpenClaw agent integration with 29+ tools:
-   - Search across all sheets and pointers
-   - Create and manage workspaces
-   - Highlight items on plans with Gemini vision
-   - Generate images (visualizations, diagrams, annotated photos)
-   - Answer questions about materials, specs, dimensions, cross-references
-
-## Installation
-
-### As a Package
+Then run:
 
 ```bash
-pip install -e .          # Editable install
-pip install -e ".[dev]"   # With test dependencies
+maestro start
 ```
 
-This gives you the `maestro` CLI:
+## Project Ingest Flow (Specialized Maestro Data Plane)
+
+`maestro ingest` is critical for specialized/project Maestro capability. It builds the knowledge store used by project tools and workspace UI.
 
 ```bash
-maestro ingest <folder> [--project-name "Name"] [--dpi 200]
-maestro serve [--port 3000] [--store knowledge_store]
-maestro tools <command> [args]
-maestro index <project_dir>
+maestro ingest "/path/to/plan-pdfs" --project-name "CFA Love Field"
 ```
 
-### Frontend
+Output structure:
+
+```text
+knowledge_store/
+  <project>/
+    project.json
+    index.json
+    pages/
+      <page>/
+        page.png
+        pass1.json
+        pointers/
+          <region>/
+            crop.png
+            pass2.json
+    workspaces/
+```
+
+## Serving and Routes
+
+Start server directly:
 
 ```bash
-cd frontend && npm install && npm run build && cd ..
+maestro serve --port 3000
 ```
 
-## Architecture
+Routes:
+- `/api/projects` (project list)
+- `/{slug}/api/...` (project APIs)
+- `/{slug}/ws` (project live updates)
+- `/{slug}` (workspace frontend SPA)
+- `/command-center` (company command center placeholder)
 
-```
-maestro-ingest/
-├── maestro/                   # Python package (the engine)
-│   ├── __init__.py            # Version
-│   ├── config.py              # Centralized config (models, paths, defaults)
-│   ├── utils.py               # Shared utilities (JSON parsing, bbox, Gemini helpers)
-│   ├── prompts.py             # All Gemini prompts (Pass 1, Pass 2, Highlight)
-│   ├── loader.py              # Knowledge store loader
-│   ├── index.py               # Project index builder
-│   ├── tools.py               # MaestroTools class — query/workspace/highlight/image
-│   ├── ingest.py              # PDF ingest pipeline
-│   ├── server.py              # FastAPI server + WebSocket + frontend serving
-│   └── cli.py                 # Unified CLI entry point
-│
-├── frontend/                  # React + Vite + Tailwind dashboard
-│   └── src/
-│       ├── App.jsx            # Main app — three-panel layout
-│       ├── components/        # PlansPanel, WorkspaceView, PlanViewerModal, WorkspaceSwitcher
-│       ├── hooks/             # useWebSocket
-│       └── lib/               # API client
-│
-├── agent/                     # OpenClaw agent workspace template
-│   ├── AGENTS.md              # Agent instructions
-│   ├── SOUL.md                # Agent identity
-│   └── skills/maestro/        # Skill definition + tools shim
-│       ├── SKILL.md           # Tool documentation
-│       └── scripts/
-│           ├── tools.py       # CLI shim → maestro.cli
-│           └── loader.py      # Import shim → maestro.loader
-│
-├── voice_proxy.py             # ElevenLabs ↔ OpenClaw voice bridge
-├── tests/                     # 87 unit tests
-│   ├── test_utils.py          # JSON parsing, bbox, slugify, file I/O
-│   ├── test_loader.py         # Project loading, page resolution
-│   ├── test_tools.py          # Knowledge queries, workspace management
-│   └── test_index.py          # Index building, cross-refs
-│
-├── pyproject.toml             # Package config (hatchling)
-├── requirements.txt           # Legacy deps (use pyproject.toml instead)
-└── knowledge_store/           # Output from ingest (gitignored)
-    └── <project>/
-        ├── project.json
-        ├── index.json
-        ├── pages/
-        │   └── <page>/
-        │       ├── page.png
-        │       ├── pass1.json
-        │       └── pointers/
-        │           └── <region>/
-        │               ├── crop.png
-        │               └── pass2.json
-        └── workspaces/
-            └── <workspace>/
-                ├── workspace.json
-                └── generated_images/
-```
+## Development
 
-## Python API
-
-```python
-from maestro.tools import MaestroTools
-
-# Load a project
-tools = MaestroTools(store_path="knowledge_store")
-
-# Search
-results = tools.search("waterproofing membrane")
-
-# Get details
-summary = tools.get_sheet_summary("A101")
-detail = tools.get_region_detail("A101_Floor_Plan_p001", "r_100_200_300_400")
-
-# Workspaces
-tools.create_workspace("Refuse Enclosure", "All refuse enclosure details")
-tools.add_workspace_page("refuse_enclosure", "A101")
-tools.highlight("refuse_enclosure", "A101", "dumpster pad and enclosure walls")
-```
-
-## CLI Tools Reference
+Install:
 
 ```bash
-# Knowledge queries
-maestro tools list_disciplines
-maestro tools list_pages [--discipline Architectural]
-maestro tools search "waterproofing"
-maestro tools get_sheet_summary A101
-maestro tools get_sheet_index A101
-maestro tools list_regions A101
-maestro tools get_region_detail A101_Floor_Plan_p001 r_100_200_300_400
-maestro tools find_cross_references A101_Floor_Plan_p001
-maestro tools list_modifications
-maestro tools check_gaps
-
-# Workspaces
-maestro tools create_workspace "Title" "Description"
-maestro tools list_workspaces
-maestro tools get_workspace <slug>
-maestro tools add_page <slug> <page>
-maestro tools remove_page <slug> <page>
-maestro tools select_pointers <slug> <page> <pointer_id> [...]
-maestro tools deselect_pointers <slug> <page> <pointer_id> [...]
-maestro tools add_note <slug> "text" [--source_page X]
-maestro tools add_description <slug> <page> "description"
-
-# Gemini vision
-maestro tools highlight <slug> <page> "query"
-maestro tools clear_highlights <slug> <page>
-
-# Image generation
-maestro tools generate_image <slug> "prompt" [--reference_pages A101 S201] [--aspect_ratio 16:9]
-maestro tools delete_image <slug> <filename>
+pip install -e "[dev]"
 ```
 
-## API Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/api/projects` | List all projects |
-| GET | `/{slug}/api/project` | Project metadata |
-| GET | `/{slug}/api/disciplines` | List disciplines |
-| GET | `/{slug}/api/pages` | List pages (filterable by discipline) |
-| GET | `/{slug}/api/pages/{page}` | Page detail |
-| GET | `/{slug}/api/pages/{page}/image` | Full-resolution PNG |
-| GET | `/{slug}/api/pages/{page}/thumb` | JPEG thumbnail |
-| GET | `/{slug}/api/pages/{page}/regions` | List regions |
-| GET | `/{slug}/api/pages/{page}/regions/{id}` | Region deep detail |
-| GET | `/{slug}/api/pages/{page}/regions/{id}/crop` | Cropped region PNG |
-| GET | `/{slug}/api/workspaces` | List workspaces |
-| GET | `/{slug}/api/workspaces/{ws}` | Workspace detail |
-| GET | `/{slug}/api/workspaces/{ws}/images/{file}` | Generated image |
-| WS | `/{slug}/ws` | Live updates |
-
-## Testing
+Run tests:
 
 ```bash
-pip install -e ".[dev]"
-pytest                    # Run all 87 tests
-pytest -v                 # Verbose
-pytest tests/test_utils.py  # Specific module
+pytest
 ```
 
-## Multi-Project
+Current baseline: `109` passing tests.
 
-The server supports multiple projects. Each project directory in `knowledge_store/` becomes a route prefix:
+## Compatibility Wrappers
 
-```
-http://localhost:3000/my-project/          # Frontend
-http://localhost:3000/my-project/api/...   # API
-```
+Root-level `server.py` and `ingest.py` are compatibility shims for legacy usage (`python server.py`, `python ingest.py`) and delegate to canonical package modules (`maestro.server`, `maestro.ingest`).
 
-## Requirements
+## Key Files
 
-- Python 3.11+
-- Node.js 18+ (for frontend build)
-- Gemini API key (Google AI Studio)
-
-## License
-
-Proprietary. © Maestro Construction Agents.
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/setup.py` — setup wizard
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/runtime.py` — runtime TUI/health dashboard
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/server.py` — FastAPI server + frontend serving
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/ingest.py` — two-pass ingest pipeline
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/tools.py` — licensed project tool surface
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/COMMAND_CENTER.md` — command center product spec

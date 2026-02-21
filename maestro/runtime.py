@@ -17,8 +17,7 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,11 +25,6 @@ from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
-from rich.rule import Rule
-from rich.align import Align
-from rich import box
 
 # ── Theme ────────────────────────────────────────────────────────
 
@@ -334,114 +328,6 @@ def update_system_metrics(state: ServiceState):
         pass
 
 
-# ── Startup Sequence ─────────────────────────────────────────────
-
-def run_startup(state: ServiceState, log: ActivityLog, store_path: Path) -> list[tuple[str, bool, str]]:
-    """
-    Run all startup checks, return list of (label, passed, detail).
-    Auto-starts services that are down.
-    """
-    results: list[tuple[str, bool, str]] = []
-    state.degraded_reasons = []
-
-    # 1. Tailscale
-    if check_tailscale(state, log):
-        results.append(("Tailscale", True, f"connected ({state.tailscale_ip})"))
-        log.add("System", f"Tailscale connected ({state.tailscale_ip})", GREEN)
-    else:
-        results.append(("Tailscale", False, "not connected"))
-        state.degraded_reasons.append("Tailscale offline")
-        log.add("System", "Tailscale not connected", RED)
-
-    # 2. OpenClaw Gateway
-    if check_gateway(state, log):
-        ver = f" ({state.gateway_version})" if state.gateway_version else ""
-        results.append(("OpenClaw gateway", True, f"running{ver}"))
-        log.add("System", f"OpenClaw gateway running{ver}", GREEN)
-    else:
-        results.append(("OpenClaw gateway", False, "failed to start"))
-        state.degraded_reasons.append("Gateway not running")
-        log.add("System", "OpenClaw gateway failed to start", RED)
-
-    # 3. Company Maestro agent
-    if check_company_agent(state, log):
-        results.append(("Company Maestro agent", True, "online"))
-        log.add("System", "Company Maestro agent online", GREEN)
-    else:
-        results.append(("Company Maestro agent", False, "not configured"))
-        state.degraded_reasons.append("Agent not configured")
-        log.add("System", "Company Maestro agent not configured", RED)
-
-    # 4. Telegram bot
-    if check_telegram(state, log):
-        results.append(("Telegram bot", True, "connected"))
-        log.add("System", "Telegram bot connected", GREEN)
-    else:
-        results.append(("Telegram bot", False, "not configured"))
-        state.degraded_reasons.append("Telegram not configured")
-        log.add("System", "Telegram bot not configured", YELLOW)
-
-    # 5. API key
-    if check_api_key(state, log):
-        results.append((f"{state.api_provider} API key", True, "valid"))
-        log.add("System", f"{state.api_provider} API key found", GREEN)
-    else:
-        results.append(("API key", False, "not found"))
-        state.degraded_reasons.append("No API key")
-        log.add("System", "No API key configured", RED)
-
-    # 6. Config
-    config_ok, total, active = check_config(state, log)
-    if config_ok:
-        results.append(("Config", True, f"verified ({total} projects)"))
-        log.add("System", f"Config verified ({total} projects)", GREEN)
-    else:
-        results.append(("Config", False, "missing or invalid"))
-        state.degraded_reasons.append("Config invalid")
-        log.add("System", "Config missing or invalid", RED)
-
-    # Load projects from knowledge store
-    state.projects = load_projects_from_store(store_path)
-
-    return results
-
-
-def render_startup(results: list[tuple[str, bool, str]], state: ServiceState) -> Panel:
-    """Render the startup check panel."""
-    lines = []
-    total = len(results)
-    passed = sum(1 for _, ok, _ in results if ok)
-
-    for label, ok, detail in results:
-        icon = f"[{GREEN}]✓[/]" if ok else f"[{RED}]✗[/]"
-        lines.append(f"  {icon} {label} — {detail}")
-
-    # Progress bar
-    filled = int((passed / total) * 30) if total > 0 else 0
-    bar = "━" * filled + "─" * (30 - filled)
-    pct = int((passed / total) * 100) if total > 0 else 0
-    lines.append("")
-    lines.append(f"  [{CYAN}]{bar}[/] [{DIM}]{pct}%[/]")
-
-    if state.degraded_reasons:
-        lines.append("")
-        lines.append(f"  [{YELLOW}]⚠ {len(state.degraded_reasons)} issue(s) — running in degraded mode[/]")
-    else:
-        lines.append("")
-        if state.tailscale_ip:
-            lines.append(f"  Command Center: [{BRIGHT_CYAN}]http://{state.tailscale_ip}:{state.web_port}[/]")
-        lines.append(f"  [{GREEN}]Ready.[/]")
-
-    return Panel(
-        "\n".join(lines),
-        border_style=CYAN,
-        title=f"[bold {BRIGHT_CYAN}]MAESTRO[/]",
-        subtitle=f"[{DIM}]Starting up...[/]",
-        subtitle_align="right",
-        width=60,
-    )
-
-
 # ── Dashboard Panels ─────────────────────────────────────────────
 
 def render_header(state: ServiceState) -> Panel:
@@ -741,7 +627,6 @@ def start_web_server(port: int, store: str, log: ActivityLog) -> Optional[subpro
             text=True,
         )
         log.add("System", f"Web server starting on :{port}", GREEN)
-        state_ref = None  # Will be set by caller
 
         def stream_output():
             if proc.stdout:
@@ -759,6 +644,27 @@ def start_web_server(port: int, store: str, log: ActivityLog) -> Optional[subpro
 
 
 # ── Main Entry Point ─────────────────────────────────────────────
+
+def _set_degraded_reasons(state: ServiceState, results: list[tuple[str, bool, str]]):
+    """Map startup check failures into consistent degraded-mode reasons."""
+    reason_map = {
+        "Tailscale": "Tailscale offline",
+        "OpenClaw gateway": "Gateway not running",
+        "Company Maestro agent": "Agent not configured",
+        "Telegram bot": "Telegram not configured",
+        "API key": "No API key",
+        "Config": "Config invalid",
+    }
+    reasons = []
+    for label, ok, _ in results:
+        if ok:
+            continue
+        key = label
+        if label.endswith(" API key"):
+            key = "API key"
+        reasons.append(reason_map.get(key, f"{label} check failed"))
+    state.degraded_reasons = reasons
+
 
 def main(port: int = 3000, store: str = "knowledge_store"):
     """Run the Maestro runtime TUI."""
@@ -807,6 +713,7 @@ def main(port: int = 3000, store: str = "knowledge_store"):
         config_ok, total, active = check_config(state, log)
         results.append(("Config", config_ok, f"verified ({total} projects)" if config_ok else "invalid"))
         state.projects = load_projects_from_store(store_path)
+        _set_degraded_reasons(state, results)
         live.update(render_startup(results, state))
 
         # Hold for a moment

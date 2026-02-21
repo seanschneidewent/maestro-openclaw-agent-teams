@@ -2,6 +2,8 @@
 
 *Generated from Maestro ↔ Sean design session, Feb 18-19, 2026*
 
+> Historical product design document. For current implemented architecture and commands, use `README.md` first.
+
 ---
 
 ## Table of Contents
