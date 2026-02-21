@@ -951,114 +951,24 @@ MAESTRO_STORE=knowledge_store/
         console.print(f"  [bold {BRIGHT_CYAN}]👉 Now open Telegram and send any message to @{bot_username}[/]")
         console.print()
 
-        # Poll for pairing requests by watching gateway logs AND checking
-        # Telegram bot API for the pairing code message from OpenClaw
-        info("Waiting for your message...")
-        max_wait = 120  # 2 minutes
-        poll_interval = 3
-        elapsed = 0
-        pairing_code = None
+        # Wait for user to message the bot, then paste the pairing code
+        # (We can't poll Telegram Bot API — OpenClaw's gateway is already
+        # consuming updates, only one consumer allowed)
+        console.print()
+        console.print(Panel(
+            f"[bold white]1.[/] Open Telegram and send any message to [bold white]@{bot_username}[/]\n"
+            f"[bold white]2.[/] You'll get a reply with a [bold {BRIGHT_CYAN}]pairing code[/]\n"
+            f"[bold white]3.[/] Paste that code below",
+            border_style=CYAN,
+            width=60,
+        ))
+        console.print()
 
-        bot_token = self.progress.get('telegram_token', '')
-        last_update_id = 0
-
-        # Get current update offset so we only see new messages
-        try:
-            import httpx
-            resp = httpx.get(
-                f"https://api.telegram.org/bot{bot_token}/getUpdates",
-                params={"limit": 1, "offset": -1},
-                timeout=5,
-            )
-            if resp.status_code == 200:
-                updates = resp.json().get('result', [])
-                if updates:
-                    last_update_id = updates[-1]['update_id'] + 1
-        except Exception:
-            pass
-
-        while elapsed < max_wait:
-            time.sleep(poll_interval)
-            elapsed += poll_interval
-
-            # Method 1: Check Telegram bot API for OpenClaw's pairing response
-            if bot_token:
-                try:
-                    import httpx
-                    resp = httpx.get(
-                        f"https://api.telegram.org/bot{bot_token}/getUpdates",
-                        params={"limit": 10, "offset": last_update_id, "timeout": 0},
-                        timeout=10,
-                    )
-                    if resp.status_code == 200:
-                        updates = resp.json().get('result', [])
-                        for update in updates:
-                            last_update_id = update['update_id'] + 1
-                            msg = update.get('message', {})
-                            text = msg.get('text', '')
-                            # OpenClaw sends: "Pairing code: XXXXXXXX"
-                            match = re.search(r'Pairing code:\s*(\w+)', text)
-                            if match:
-                                pairing_code = match.group(1)
-                                break
-                except Exception:
-                    pass
-
-            if pairing_code:
-                break
-
-            # Method 2: Also check gateway logs as fallback
-            log_locations = [
-                Path.home() / ".openclaw" / "logs" / "gateway.log",
-                Path("/tmp/openclaw") / f"openclaw-{time.strftime('%Y-%m-%d')}.log",
-            ]
-            for log_path in log_locations:
-                if not log_path.exists():
-                    continue
-                try:
-                    with open(log_path, 'r', errors='ignore') as f:
-                        content = f.read()
-                    matches = re.findall(r'Pairing code:\s*(\w+)', content)
-                    if matches:
-                        pairing_code = matches[-1]
-                        break
-                except Exception:
-                    continue
-
-            if pairing_code:
-                break
-
-            # Show a dot every poll to indicate we're waiting
-            dots = "." * min(elapsed // poll_interval, 20)
-            console.print(f"\r  [{DIM}]Listening{dots}[/]", end="")
-
-        console.print()  # Clear the dots line
-
-        if not pairing_code:
-            # Timeout — fall back to manual
-            warning("Didn't detect a pairing request within 2 minutes")
-            console.print()
-            console.print(Panel(
-                f"If you sent a message to @{bot_username}, you should have\n"
-                f"received a pairing code. Run this command to connect:\n"
-                f"\n"
-                f"  [bold white]openclaw pairing approve telegram <CODE>[/]\n"
-                f"\n"
-                f"[{DIM}]Replace <CODE> with the code from the Telegram message.[/]",
-                border_style="yellow",
-                width=60,
-            ))
-            console.print()
-
-            # Let them paste the code manually
-            manual_code = Prompt.ask(
-                f"  [{CYAN}]Paste pairing code (or press Enter to skip)[/]",
-                default="",
-                console=console,
-            ).strip()
-
-            if manual_code:
-                pairing_code = manual_code
+        pairing_code = Prompt.ask(
+            f"  [{CYAN}]Paste pairing code (or press Enter to skip)[/]",
+            default="",
+            console=console,
+        ).strip()
 
         if pairing_code:
             info(f"Approving pairing code: {pairing_code}")
