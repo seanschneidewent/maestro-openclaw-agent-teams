@@ -576,6 +576,98 @@ async def websocket_endpoint(slug: str, websocket: WebSocket):
 
 # ── Frontend SPA ────────────────────────────────────────────────
 
+# ── Command Center (placeholder) ────────────────────────────────
+
+COMMAND_CENTER_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maestro Command Center</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: #0a0e17;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            text-align: center;
+            padding: 2rem;
+        }
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 300;
+            letter-spacing: 0.5em;
+            color: #00e5ff;
+            margin-bottom: 0.5rem;
+        }
+        .subtitle {
+            color: #546e7a;
+            font-size: 0.9rem;
+            margin-bottom: 3rem;
+        }
+        .greeting {
+            font-size: 1.5rem;
+            color: #ffffff;
+            margin-bottom: 2rem;
+        }
+        .checks {
+            text-align: left;
+            display: inline-block;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85rem;
+            line-height: 2;
+        }
+        .check { color: #00e676; }
+        .label { color: #90a4ae; }
+        .status {
+            margin-top: 2rem;
+            padding: 1rem 2rem;
+            border: 1px solid #1a237e;
+            border-radius: 8px;
+            display: inline-block;
+        }
+        .status .dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            background: #00e676;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MAESTRO</h1>
+        <p class="subtitle">Built for Builders</p>
+        <p class="greeting">Hello Sean</p>
+        <div class="checks">
+            <div><span class="check">✓</span> <span class="label">Gateway connected</span></div>
+            <div><span class="check">✓</span> <span class="label">Company Maestro online</span></div>
+            <div><span class="check">✓</span> <span class="label">Telegram bot active</span></div>
+            <div><span class="check">✓</span> <span class="label">Tailscale network secured</span></div>
+            <div><span class="check">✓</span> <span class="label">Knowledge store loaded</span></div>
+        </div>
+        <div class="status">
+            <span class="dot"></span>
+            <span class="label">Command Center coming soon — chat with Maestro on Telegram</span>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+@app.get("/command-center")
+async def command_center():
+    return Response(content=COMMAND_CENTER_HTML, media_type="text/html")
+
+
 @app.get("/assets/{rest:path}")
 async def serve_static_assets(rest: str):
     if FRONTEND_DIR.exists():

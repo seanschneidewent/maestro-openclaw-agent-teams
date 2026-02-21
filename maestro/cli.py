@@ -28,6 +28,11 @@ def main():
     ingest_parser.add_argument("--dpi", type=int, default=200, help="Render DPI (default: 200)")
     ingest_parser.add_argument("--store", help="Override knowledge_store path")
 
+    # ── maestro start ─────────────────────────────────────────────────────────
+    start_parser = sub.add_parser("start", help="Start Maestro runtime (TUI dashboard)")
+    start_parser.add_argument("--port", type=int, default=3000)
+    start_parser.add_argument("--store", type=str, default="knowledge_store")
+
     # ── maestro serve ─────────────────────────────────────────────────────────
     serve_parser = sub.add_parser("serve", help="Start the frontend server")
     serve_parser.add_argument("--port", type=int, default=3000)
@@ -147,7 +152,11 @@ def main():
 
     args = parser.parse_args()
 
-    if args.mode == "ingest":
+    if args.mode == "start":
+        from .runtime import main as runtime_main
+        runtime_main(port=args.port, store=args.store)
+
+    elif args.mode == "ingest":
         from .ingest import ingest
         ingest(args.folder, args.project_name, args.dpi, args.store)
 
