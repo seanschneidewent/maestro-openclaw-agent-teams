@@ -719,6 +719,8 @@ class SetupWizard:
 
         # Store install metadata in ~/.maestro-setup.json (NOT in openclaw.json —
         # OpenClaw rejects unknown top-level keys and will crash the gateway)
+        # Clean up any stale 'maestro' key from previous installs
+        config.pop('maestro', None)
 
         if 'env' not in config:
             config['env'] = {}
