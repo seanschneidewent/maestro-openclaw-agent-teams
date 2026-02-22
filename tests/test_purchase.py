@@ -204,3 +204,8 @@ def test_run_purchase_preserves_registered_project_agent(monkeypatch, tmp_path: 
     assert "maestro-company" in agent_ids
     assert "maestro-project-alpha-build" in agent_ids
     assert "maestro-project-alpha-build" in saved.get("channels", {}).get("telegram", {}).get("accounts", {})
+    bindings = saved.get("bindings", [])
+    assert {
+        "agentId": "maestro-project-alpha-build",
+        "match": {"channel": "telegram", "accountId": "maestro-project-alpha-build"},
+    } in bindings

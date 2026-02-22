@@ -1,18 +1,23 @@
 import React from 'react'
 
 export default function ProjectNode({ project, onSelect }) {
+  const nodeName = project.node_display_name || project.name
+  const projectName = project.project_name || project.name
   const variance = Number(project.health?.variance_days || 0)
   const isDelayed = variance < 0
   const isComputing = project.agent_status === 'computing'
   const blockers = Number(project.critical_path?.blocker_count || 0)
   const hasBlockers = blockers > 0
+  const heartbeat = project.heartbeat || {}
+  const convoPreview = project.conversation_preview || {}
+  const loopText = convoPreview.last_assistant_text || project.current_task || 'Monitoring project telemetry'
 
   return (
     <button
       type="button"
       onClick={() => onSelect(project)}
       className="relative group w-full flex flex-col pt-6 cursor-pointer text-left"
-      aria-label={`Open intelligence for ${project.name}`}
+      aria-label={`Open intelligence for ${nodeName}`}
     >
       <div className="absolute top-0 left-1/2 -ml-px w-px h-6 bg-gradient-to-b from-[#00e5ff]/40 to-white/10 group-hover:from-[#00e5ff] transition-colors duration-300" />
       <div className="absolute top-6 left-1/2 -ml-1 w-2 h-2 rounded-full bg-[#0a0e17] border border-[#00e5ff]/40 group-hover:border-[#00e5ff] group-hover:shadow-[0_0_8px_#00e5ff] transition-all z-10" />
@@ -27,7 +32,11 @@ export default function ProjectNode({ project, onSelect }) {
         <div className="p-4 md:p-5 flex flex-col flex-grow">
           <div className="flex justify-between items-start mb-4 gap-2">
             <div>
-              <h3 className="text-slate-200 font-medium tracking-wider uppercase text-sm">{project.name}</h3>
+              <h3 className="text-slate-200 font-medium tracking-wider uppercase text-sm">{nodeName}</h3>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-slate-600 text-[10px] uppercase tracking-widest">PROJECT:</span>
+                <span className="text-[#00e5ff] text-xs font-mono">{projectName}</span>
+              </div>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className="text-slate-600 text-[10px] uppercase tracking-widest">ASSIGNEE:</span>
                 <span className="text-[#00e5ff] text-xs font-mono">{project.assignee || project.superintendent || 'Unassigned'}</span>
@@ -38,7 +47,7 @@ export default function ProjectNode({ project, onSelect }) {
                 isDelayed ? 'border-amber-500/30 text-amber-500 bg-amber-500/10' : 'border-[#00e676]/30 text-[#00e676] bg-[#00e676]/10'
               }`}
             >
-              {variance >= 0 ? `+${variance}D` : `${variance}D`}
+              {heartbeat.available ? (heartbeat.is_fresh ? 'LIVE' : 'STALE') : (variance >= 0 ? `+${variance}D` : `${variance}D`)}
             </div>
           </div>
 
@@ -53,7 +62,7 @@ export default function ProjectNode({ project, onSelect }) {
             </div>
             <div className="text-xs text-slate-400 bg-black/40 p-2.5 border border-white/5 font-mono leading-relaxed h-14 flex items-center">
               <span className="text-[#00e5ff] mr-2">›</span>
-              <span className="line-clamp-2">{project.current_task || 'Monitoring project telemetry'}</span>
+              <span className="line-clamp-2">{loopText}</span>
             </div>
           </div>
 

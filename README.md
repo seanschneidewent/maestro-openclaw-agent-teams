@@ -1,18 +1,25 @@
 # Maestro
 
 Maestro is a setup-first OpenClaw deployment for construction teams:
-- **Company Maestro (default agent):** control plane, command center, orchestration.
+- **The Commander (`maestro-company`, default agent):** control plane, command center, orchestration.
 - **Project Maestros:** project-specific agents backed by project knowledge stores.
+
+## Boundary Guarantees
+
+- The Commander is control-plane only and does not perform direct project plan queries.
+- Project Maestro nodes are data-plane only and scoped to their own project stores.
+- Cross-project communication is brokered by The Commander via directives/actions.
 
 ## Frontends
 
 1. **Workspace frontend** (`frontend/`)
 - Route: `/{project-slug}`
+- Agent-scoped route: `/agents/{agent-id}/workspace`
 - Purpose: sheet/page exploration, workspaces, pointers, highlights.
 
 2. **Command Center frontend** (`command_center_frontend/`)
 - Route: `/command-center`
-- Purpose: fleet topology, node intelligence modal, control-plane actions.
+- Purpose: topology control plane (Commander node + project nodes, modal conversation + intelligence drawers, doctor/directives).
 
 ## Recommended Runtime Flow
 
@@ -63,7 +70,7 @@ maestro-purchase
 ## Knowledge Store Model
 
 `ingest.py` / `maestro ingest` is critical for specialized Project Maestros.
-Company Maestro reads project intelligence from knowledge-store outputs; it does not replace per-project ingest.
+The Commander reads project intelligence from knowledge-store outputs; it does not replace per-project ingest.
 
 Default resolved fleet store root is from install state/workspace config. Manual `--store` is an advanced override.
 
@@ -74,13 +81,20 @@ Example fixture path used in local validation:
 
 ### Workspace APIs/UI
 - `/api/projects`
+- `/api/agents/workspaces`
 - `/{slug}/api/...`
 - `/{slug}/ws`
 - `/{slug}`
+- `/agents/{agent-id}/workspace/api/...`
+- `/agents/{agent-id}/workspace/ws`
+- `/agents/{agent-id}/workspace`
 
 ### Command Center + Control Plane
 - `/api/command-center/state`
 - `/api/command-center/projects/{slug}`
+- `/api/command-center/nodes/{slug}/status`
+- `/api/command-center/nodes/{slug}/conversation`
+- `/api/command-center/nodes/{slug}/conversation/send`
 - `/api/system/awareness`
 - `/api/command-center/fleet-registry`
 - `/api/command-center/actions`
@@ -91,6 +105,9 @@ Example fixture path used in local validation:
 
 Supported actions:
 - `sync_registry`
+- `list_system_directives`
+- `upsert_system_directive`
+- `archive_system_directive`
 - `doctor_fix`
 - `create_project_node`
 - `onboard_project_store`
@@ -102,11 +119,21 @@ Supported actions:
 
 ## Documentation Map
 
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/README.md` (entrypoint)
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/architecture/system-model.md`
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/command-center/overview.md`
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/api/command-center.md`
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/operations/runbook.md`
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/reference/cli.md`
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/decisions/`
+
+Compatibility pages retained:
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/architecture.md`
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/command-center.md`
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/api-contracts.md`
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/operations.md`
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/troubleshooting.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/api-contracts.md`
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/system-directives.md`
 
 Legacy product/spec docs retained for context:
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/MAESTRO_SPEC.md`
@@ -129,12 +156,14 @@ cd command_center_frontend && npm install && npm run build
 
 ## Key Modules
 
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/setup.py` - setup wizard
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/setup_wizard.py` - setup wizard implementation
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/update.py` - install update/migration
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/doctor.py` - runtime doctor/fix
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/agent_role.py` - role detection/policy helpers
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/control_plane.py` - control-plane compatibility facade
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/control_plane_core.py` - awareness + fleet control plane implementation
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/command_center.py` - read-only intelligence aggregation
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/system_directives.py` - directive store + lifecycle
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/server.py` - FastAPI server + route layer
+- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/server_command_center.py` - command-center API/ws/static route layer
 - `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/server_actions.py` - command-center action execution

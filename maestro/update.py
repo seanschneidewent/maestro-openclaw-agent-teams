@@ -14,8 +14,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .control_plane import (
+    ensure_telegram_account_bindings,
+    resolve_node_identity,
+    save_fleet_registry,
+    sync_fleet_registry,
+)
 from .workspace_templates import (
     provider_env_key_for_model,
+    render_company_agents_md,
     render_tools_md,
     render_workspace_env,
 )
@@ -23,6 +30,7 @@ from .install_state import save_install_state
 
 
 CommandRunner = Callable[[str], tuple[bool, str]]
+COMMANDER_DISPLAY_NAME = "The Commander"
 
 
 @dataclass
@@ -116,6 +124,8 @@ def _resolve_company_agent(config: dict) -> dict:
 
 def _company_name_from_agent(agent: dict) -> str:
     raw_name = str(agent.get("name", "")).strip()
+    if raw_name == COMMANDER_DISPLAY_NAME:
+        return "Company"
     if raw_name.startswith("Maestro (") and raw_name.endswith(")"):
         return raw_name[len("Maestro ("):-1].strip() or "Company"
     return raw_name or "Company"
@@ -157,7 +167,7 @@ def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bo
         if legacy_agent is not None:
             new_company = copy.deepcopy(legacy_agent)
             new_company["id"] = "maestro-company"
-            new_company.setdefault("name", "Maestro (Company)")
+            new_company["name"] = COMMANDER_DISPLAY_NAME
             new_company["workspace"] = str(workspace)
             if not default_exists:
                 new_company["default"] = True
@@ -178,7 +188,7 @@ def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bo
 
             company_agent = {
                 "id": "maestro-company",
-                "name": "Maestro (Company)",
+                "name": COMMANDER_DISPLAY_NAME,
                 "default": True if not default_exists else False,
                 "model": default_model,
                 "workspace": str(workspace),
@@ -193,9 +203,9 @@ def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bo
             company_agent["workspace"] = str(workspace)
             changes.append("Set maestro-company workspace")
 
-        if not company_agent.get("name"):
-            company_agent["name"] = "Maestro (Company)"
-            changes.append("Set maestro-company name")
+        if company_agent.get("name") != COMMANDER_DISPLAY_NAME:
+            company_agent["name"] = COMMANDER_DISPLAY_NAME
+            changes.append("Set maestro-company display name to The Commander")
 
         if not default_exists:
             company_agent["default"] = True
@@ -222,6 +232,9 @@ def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bo
                 "streamMode": telegram.get("streamMode", "partial"),
             }
             changes.append("Added telegram account mapping for maestro-company")
+
+    binding_changes = ensure_telegram_account_bindings(migrated)
+    changes.extend(binding_changes)
 
     return migrated, changes
 
@@ -263,6 +276,20 @@ def _sync_workspace_assets(
                 shutil.copytree(skill_src, skill_dst)
             changes.append("Added missing Maestro skill in workspace")
 
+    company_agents = render_company_agents_md()
+    agents_md = workspace / "AGENTS.md"
+    if not agents_md.exists():
+        if not dry_run:
+            agents_md.write_text(company_agents, encoding="utf-8")
+        changes.append("Added missing Company AGENTS.md")
+    else:
+        current_agents = agents_md.read_text(encoding="utf-8")
+        # Migrate legacy project-style AGENTS in company workspace.
+        if "Check `knowledge_store/` — this is what you know" in current_agents:
+            if not dry_run:
+                agents_md.write_text(company_agents, encoding="utf-8")
+            changes.append("Updated company AGENTS.md to control-plane policy")
+
     tools_md = workspace / "TOOLS.md"
     if not tools_md.exists():
         content = render_tools_md(
@@ -282,10 +309,18 @@ def _sync_workspace_assets(
                     provider_env_key=active_provider_env_key,
                     provider_key=provider_key,
                     gemini_key=gemini_key,
+                    agent_role="company",
                 ),
                 encoding="utf-8",
             )
         changes.append("Added missing workspace .env")
+    else:
+        current_env = env_file.read_text(encoding="utf-8")
+        if "MAESTRO_AGENT_ROLE=" not in current_env:
+            if not dry_run:
+                with env_file.open("a", encoding="utf-8") as handle:
+                    handle.write("MAESTRO_AGENT_ROLE=company\n")
+            changes.append("Set MAESTRO_AGENT_ROLE=company in workspace .env")
 
     knowledge_store = workspace / "knowledge_store"
     if not knowledge_store.exists():
@@ -303,6 +338,70 @@ def _ensure_session_dir(home_dir: Path, dry_run: bool) -> bool:
     if not dry_run:
         sessions.mkdir(parents=True, exist_ok=True)
     return True
+
+
+def _backfill_registry_identity(workspace: Path, config: dict, *, dry_run: bool) -> list[str]:
+    """Backfill fleet registry node identity from Telegram account metadata."""
+    store_root = (workspace / "knowledge_store").resolve()
+    if not store_root.exists():
+        return []
+
+    registry = sync_fleet_registry(store_root, dry_run=dry_run)
+    projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
+    channels = config.get("channels", {}) if isinstance(config.get("channels"), dict) else {}
+    telegram = channels.get("telegram", {}) if isinstance(channels.get("telegram"), dict) else {}
+    accounts = telegram.get("accounts", {}) if isinstance(telegram.get("accounts"), dict) else {}
+
+    changed = False
+    messages: list[str] = []
+    for entry in projects:
+        if not isinstance(entry, dict):
+            continue
+        slug = str(entry.get("project_slug", "")).strip()
+        if not slug:
+            continue
+        agent_id = str(entry.get("maestro_agent_id", "")).strip() or f"maestro-project-{slug}"
+        account = accounts.get(agent_id, {}) if isinstance(accounts.get(agent_id), dict) else {}
+
+        username = str(
+            account.get("username")
+            or account.get("telegram_bot_username")
+            or ""
+        ).strip()
+        display_name = str(
+            account.get("display_name")
+            or account.get("telegram_bot_display_name")
+            or ""
+        ).strip()
+
+        if username and str(entry.get("telegram_bot_username", "")).strip() != username:
+            entry["telegram_bot_username"] = username
+            changed = True
+        if display_name and str(entry.get("telegram_bot_display_name", "")).strip() != display_name:
+            entry["telegram_bot_display_name"] = display_name
+            changed = True
+
+        node_display_name, source, node_handle = resolve_node_identity(entry)
+        if str(entry.get("node_display_name", "")).strip() != node_display_name:
+            entry["node_display_name"] = node_display_name
+            changed = True
+        if str(entry.get("node_identity_source", "")).strip() != source:
+            entry["node_identity_source"] = source
+            changed = True
+        if str(entry.get("node_handle", "")).strip() != node_handle:
+            entry["node_handle"] = node_handle
+            changed = True
+
+    if changed:
+        if not dry_run:
+            save_fleet_registry(store_root, {
+                "version": int(registry.get("version", 1)),
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "store_root": str(store_root),
+                "projects": projects,
+            })
+        messages.append("Backfilled fleet registry node identity metadata")
+    return messages
 
 
 def _create_backup(config_path: Path, home_dir: Path) -> Path:
@@ -417,6 +516,10 @@ def perform_update(
     summary.workspace_changed = bool(workspace_changes)
     summary.changes.extend(workspace_changes)
     summary.warnings.extend(workspace_warnings)
+    identity_changes = _backfill_registry_identity(workspace, migrated, dry_run=dry_run)
+    if identity_changes:
+        summary.workspace_changed = True
+        summary.changes.extend(identity_changes)
 
     if _ensure_session_dir(home, dry_run=dry_run):
         summary.session_dir_created = True

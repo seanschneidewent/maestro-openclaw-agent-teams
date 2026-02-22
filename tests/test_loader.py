@@ -148,3 +148,59 @@ class TestResolvePage:
         # A101 with dots should still match A101_Floor_Plan_p001
         page = resolve_page(project, "A101")
         assert page is not None
+
+    def test_single_project_root_with_child_dirs(self, tmp_path):
+        project_dir = tmp_path / "boof"
+        project_dir.mkdir()
+        (project_dir / "project.json").write_text(json.dumps({"name": "boof", "slug": "boof"}), encoding="utf-8")
+        (project_dir / "index.json").write_text(json.dumps({"summary": {"page_count": 0}}), encoding="utf-8")
+        (project_dir / "comms").mkdir()
+        (project_dir / "schedule").mkdir()
+
+        project = load_project(store_path=project_dir)
+        assert project is not None
+        assert project["name"] == "boof"
+        assert Path(project["_dir"]).resolve() == project_dir.resolve()
+
+    def test_ignores_hidden_non_project_dirs(self, tmp_path):
+        hidden = tmp_path / ".command_center"
+        hidden.mkdir()
+        (hidden / "project.json").write_text(json.dumps({"name": "should-not-load"}), encoding="utf-8")
+
+        real = tmp_path / "real-proj"
+        real.mkdir()
+        (real / "project.json").write_text(json.dumps({"name": "Real Project"}), encoding="utf-8")
+        (real / "index.json").write_text(json.dumps({}), encoding="utf-8")
+
+        project = load_project(store_path=tmp_path)
+        assert project is not None
+        assert project["name"] == "Real Project"
+
+    def test_ignores_non_page_dirs_inside_pages(self, tmp_path):
+        project_dir = tmp_path / "real-proj"
+        (project_dir / "pages").mkdir(parents=True)
+        (project_dir / "project.json").write_text(json.dumps({"name": "Real Project"}), encoding="utf-8")
+        (project_dir / "index.json").write_text(json.dumps({}), encoding="utf-8")
+
+        # Stray non-page directory (no pass1.json).
+        (project_dir / "pages" / "workspaces").mkdir()
+
+        # Real page directory.
+        page_dir = project_dir / "pages" / "A101_Floor_Plan_p001"
+        page_dir.mkdir(parents=True)
+        (page_dir / "pass1.json").write_text(
+            json.dumps(
+                {
+                    "page_type": "floor_plan",
+                    "discipline": "architectural",
+                    "sheet_reflection": "Floor plan",
+                    "regions": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        project = load_project(store_path=tmp_path)
+        assert project is not None
+        assert len(project["pages"]) == 1
+        assert "A101_Floor_Plan_p001" in project["pages"]

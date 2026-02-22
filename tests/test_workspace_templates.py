@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from maestro.workspace_templates import (
     provider_env_key_for_model,
+    render_company_agents_md,
     render_tools_md,
     render_workspace_env,
 )
@@ -45,3 +46,19 @@ def test_render_workspace_env_for_gemini_primary():
     assert "GEMINI_API_KEY=gem-primary" in content
     # primary provider is Gemini, so no duplicated Gemini line
     assert content.count("GEMINI_API_KEY=") == 1
+
+
+def test_render_workspace_env_includes_agent_role_when_set():
+    content = render_workspace_env(
+        store_path="knowledge_store/",
+        provider_env_key="OPENAI_API_KEY",
+        provider_key="sk-openai",
+        agent_role="company",
+    )
+    assert "MAESTRO_AGENT_ROLE=company" in content
+
+
+def test_render_company_agents_md_has_control_plane_boundary():
+    content = render_company_agents_md()
+    assert "The Commander control-plane orchestrator" in content
+    assert "Do not inspect or enumerate project plan files under `knowledge_store/`" in content

@@ -1,7 +1,7 @@
 """Default-agent control plane for command-center awareness and actions.
 
 This module intentionally keeps all orchestration logic deterministic and
-filesystem-driven so the default Company Maestro can reason from live state.
+filesystem-driven so The Commander can reason from live state.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .command_center import build_project_snapshot, discover_project_dirs
+from .system_directives import summarize_system_directives
 from .utils import load_json, save_json, slugify
 
 
@@ -125,6 +126,116 @@ def _telegram_configured(config: dict[str, Any]) -> bool:
     )
 
 
+def _telegram_account_ids(config: dict[str, Any]) -> list[str]:
+    channels = config.get("channels", {}) if isinstance(config.get("channels"), dict) else {}
+    telegram = channels.get("telegram")
+    if not isinstance(telegram, dict):
+        return []
+    accounts = telegram.get("accounts")
+    if not isinstance(accounts, dict):
+        return []
+    ids: list[str] = []
+    for key, value in accounts.items():
+        if not isinstance(value, dict):
+            continue
+        account_id = str(key).strip()
+        if account_id:
+            ids.append(account_id)
+    return ids
+
+
+def ensure_telegram_account_bindings(
+    config: dict[str, Any],
+    *,
+    include_company: bool = True,
+) -> list[str]:
+    """Ensure each Telegram account routes to its matching isolated agent.
+
+    OpenClaw supports a top-level `bindings` route table. Without explicit
+    bindings, inbound messages may hit the default company agent.
+    """
+    agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
+    known_agent_ids = {
+        str(agent.get("id", "")).strip()
+        for agent in agent_list
+        if isinstance(agent, dict) and str(agent.get("id", "")).strip()
+    }
+
+    account_ids = _telegram_account_ids(config)
+    if not account_ids:
+        return []
+
+    bindings = config.get("bindings")
+    if not isinstance(bindings, list):
+        bindings = []
+        config["bindings"] = bindings
+
+    existing_pairs: set[tuple[str, str, str]] = set()
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        agent_id = str(binding.get("agentId", "")).strip()
+        match = binding.get("match")
+        if not isinstance(match, dict):
+            continue
+        channel = str(match.get("channel", "")).strip().lower()
+        account_id = str(match.get("accountId", "")).strip()
+        if agent_id and channel and account_id:
+            existing_pairs.add((agent_id, channel, account_id))
+
+    changes: list[str] = []
+    for account_id in account_ids:
+        if (not include_company) and account_id == "maestro-company":
+            continue
+        if account_id not in known_agent_ids:
+            continue
+        key = (account_id, "telegram", account_id)
+        if key in existing_pairs:
+            continue
+        bindings.append({
+            "agentId": account_id,
+            "match": {
+                "channel": "telegram",
+                "accountId": account_id,
+            },
+        })
+        existing_pairs.add(key)
+        changes.append(f"Added Telegram binding: {account_id} -> telegram:{account_id}")
+
+    return changes
+
+
+def telegram_binding_health(config: dict[str, Any]) -> dict[str, Any]:
+    """Return routing health for Telegram account-to-agent bindings."""
+    accounts = _telegram_account_ids(config)
+    bindings = config.get("bindings")
+    binding_pairs: set[tuple[str, str, str]] = set()
+    if isinstance(bindings, list):
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            agent_id = str(binding.get("agentId", "")).strip()
+            match = binding.get("match")
+            if not isinstance(match, dict):
+                continue
+            channel = str(match.get("channel", "")).strip().lower()
+            account_id = str(match.get("accountId", "")).strip()
+            if agent_id and channel and account_id:
+                binding_pairs.add((agent_id, channel, account_id))
+
+    missing = [
+        account_id
+        for account_id in accounts
+        if (account_id, "telegram", account_id) not in binding_pairs
+    ]
+    return {
+        "configured_accounts": len(accounts),
+        "missing_bindings": missing,
+        "fully_bound": len(missing) == 0,
+    }
+
+
 def _is_placeholder_secret(value: str | None) -> bool:
     if not value:
         return True
@@ -224,6 +335,43 @@ def _default_registry(store_root: Path) -> dict[str, Any]:
     }
 
 
+def _clean_registry_text(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _normalize_bot_username(value: Any) -> str:
+    username = _clean_registry_text(value)
+    if not username:
+        return ""
+    if not username.startswith("@"):
+        username = f"@{username.lstrip('@')}"
+    return username
+
+
+def resolve_node_identity(entry: dict[str, Any]) -> tuple[str, str, str]:
+    """Resolve node identity fields using locked fallback order.
+
+    Returns tuple: (node_display_name, node_identity_source, node_handle)
+    """
+    username = _normalize_bot_username(entry.get("telegram_bot_username"))
+    display = _clean_registry_text(entry.get("telegram_bot_display_name"))
+    assignee = _clean_registry_text(entry.get("assignee"))
+    project_name = _clean_registry_text(entry.get("project_name"))
+    slug = _clean_registry_text(entry.get("project_slug"))
+
+    if username:
+        return username, "telegram_bot", username
+    if display:
+        return display, "telegram_bot", ""
+    if assignee and assignee.lower() != "unassigned":
+        return assignee, "assignee", ""
+    if project_name:
+        return project_name, "project", ""
+    return slug or "Project Node", "project", ""
+
+
 def load_fleet_registry(store_root: Path) -> dict[str, Any]:
     root = Path(store_root).resolve()
     default_registry = _default_registry(root)
@@ -246,58 +394,64 @@ def load_fleet_registry(store_root: Path) -> dict[str, Any]:
         name = item.get("project_name")
         dir_name = item.get("project_dir_name")
         store_path = item.get("project_store_path")
-        normalized.append(
-            {
-                "project_slug": slug.strip(),
-                "project_name": name.strip() if isinstance(name, str) and name.strip() else slug.strip(),
-                "project_dir_name": dir_name.strip() if isinstance(dir_name, str) and dir_name.strip() else slug.strip(),
-                "project_store_path": (
-                    store_path.strip()
-                    if isinstance(store_path, str) and store_path.strip()
-                    else str(root / (dir_name if isinstance(dir_name, str) and dir_name.strip() else slug.strip()))
-                ),
-                "maestro_agent_id": (
-                    item.get("maestro_agent_id")
-                    if isinstance(item.get("maestro_agent_id"), str) and item.get("maestro_agent_id").strip()
-                    else f"maestro-project-{slug.strip()}"
-                ),
-                "ingest_input_root": (
-                    item.get("ingest_input_root").strip()
-                    if isinstance(item.get("ingest_input_root"), str) and item.get("ingest_input_root").strip()
-                    else ""
-                ),
-                "superintendent": (
-                    item.get("superintendent").strip()
-                    if isinstance(item.get("superintendent"), str) and item.get("superintendent").strip()
-                    else "Unknown"
-                ),
-                "assignee": (
-                    item.get("assignee").strip()
-                    if isinstance(item.get("assignee"), str) and item.get("assignee").strip()
-                    else "Unassigned"
-                ),
-                "status": (
-                    item.get("status").strip()
-                    if isinstance(item.get("status"), str) and item.get("status").strip()
-                    else "active"
-                ),
-                "last_ingest_at": (
-                    item.get("last_ingest_at").strip()
-                    if isinstance(item.get("last_ingest_at"), str) and item.get("last_ingest_at").strip()
-                    else ""
-                ),
-                "last_index_at": (
-                    item.get("last_index_at").strip()
-                    if isinstance(item.get("last_index_at"), str) and item.get("last_index_at").strip()
-                    else ""
-                ),
-                "last_updated": (
-                    item.get("last_updated").strip()
-                    if isinstance(item.get("last_updated"), str) and item.get("last_updated").strip()
-                    else ""
-                ),
-            }
-        )
+        normalized_entry = {
+            "project_slug": slug.strip(),
+            "project_name": name.strip() if isinstance(name, str) and name.strip() else slug.strip(),
+            "project_dir_name": dir_name.strip() if isinstance(dir_name, str) and dir_name.strip() else slug.strip(),
+            "project_store_path": (
+                store_path.strip()
+                if isinstance(store_path, str) and store_path.strip()
+                else str(root / (dir_name if isinstance(dir_name, str) and dir_name.strip() else slug.strip()))
+            ),
+            "maestro_agent_id": (
+                item.get("maestro_agent_id")
+                if isinstance(item.get("maestro_agent_id"), str) and item.get("maestro_agent_id").strip()
+                else f"maestro-project-{slug.strip()}"
+            ),
+            "ingest_input_root": (
+                item.get("ingest_input_root").strip()
+                if isinstance(item.get("ingest_input_root"), str) and item.get("ingest_input_root").strip()
+                else ""
+            ),
+            "superintendent": (
+                item.get("superintendent").strip()
+                if isinstance(item.get("superintendent"), str) and item.get("superintendent").strip()
+                else "Unknown"
+            ),
+            "assignee": (
+                item.get("assignee").strip()
+                if isinstance(item.get("assignee"), str) and item.get("assignee").strip()
+                else "Unassigned"
+            ),
+            "status": (
+                item.get("status").strip()
+                if isinstance(item.get("status"), str) and item.get("status").strip()
+                else "active"
+            ),
+            "last_ingest_at": (
+                item.get("last_ingest_at").strip()
+                if isinstance(item.get("last_ingest_at"), str) and item.get("last_ingest_at").strip()
+                else ""
+            ),
+            "last_index_at": (
+                item.get("last_index_at").strip()
+                if isinstance(item.get("last_index_at"), str) and item.get("last_index_at").strip()
+                else ""
+            ),
+            "last_updated": (
+                item.get("last_updated").strip()
+                if isinstance(item.get("last_updated"), str) and item.get("last_updated").strip()
+                else ""
+            ),
+            "telegram_bot_username": _normalize_bot_username(item.get("telegram_bot_username")),
+            "telegram_bot_display_name": _clean_registry_text(item.get("telegram_bot_display_name")),
+            "last_conversation_at": _clean_registry_text(item.get("last_conversation_at")),
+        }
+        display_name, source, handle = resolve_node_identity(normalized_entry)
+        normalized_entry["node_display_name"] = display_name
+        normalized_entry["node_identity_source"] = source
+        normalized_entry["node_handle"] = handle
+        normalized.append(normalized_entry)
 
     return {
         "version": int(payload.get("version", REGISTRY_VERSION)),
@@ -367,7 +521,14 @@ def sync_fleet_registry(store_root: Path, dry_run: bool = False) -> dict[str, An
                 str(snapshot.get("last_updated", "")).strip()
                 or str(existing_entry.get("last_updated", "")).strip()
             ),
+            "telegram_bot_username": _normalize_bot_username(existing_entry.get("telegram_bot_username")),
+            "telegram_bot_display_name": _clean_registry_text(existing_entry.get("telegram_bot_display_name")),
+            "last_conversation_at": _clean_registry_text(existing_entry.get("last_conversation_at")),
         }
+        display_name, source, handle = resolve_node_identity(entry)
+        entry["node_display_name"] = display_name
+        entry["node_identity_source"] = source
+        entry["node_handle"] = handle
         synced.append(entry)
         seen_slugs.add(slug)
 
@@ -376,6 +537,10 @@ def sync_fleet_registry(store_root: Path, dry_run: bool = False) -> dict[str, An
             continue
         archived = dict(item)
         archived["status"] = "archived"
+        display_name, source, handle = resolve_node_identity(archived)
+        archived["node_display_name"] = display_name
+        archived["node_identity_source"] = source
+        archived["node_handle"] = handle
         synced.append(archived)
 
     synced.sort(key=lambda x: x.get("project_name", "").lower())
@@ -413,6 +578,17 @@ def _find_registry_project(registry: dict[str, Any], project_slug: str) -> dict[
 
 def _quote_path(path: str | Path) -> str:
     return shlex.quote(str(path))
+
+
+def _workspace_routes(project_slug: str, project_entry: dict[str, Any] | None = None) -> dict[str, str]:
+    entry = project_entry if isinstance(project_entry, dict) else {}
+    agent_id = str(entry.get("maestro_agent_id", "")).strip() or f"maestro-project-{project_slug}"
+    return {
+        "project_slug": project_slug,
+        "agent_id": agent_id,
+        "project_workspace_url": f"/{project_slug}/",
+        "agent_workspace_url": f"/agents/{agent_id}/workspace/",
+    }
 
 
 def _resolve_input_root(path: str | None) -> Path | None:
@@ -535,6 +711,7 @@ def project_control_payload(
     return {
         "ok": True,
         "project": entry,
+        "workspace": _workspace_routes(project_slug, entry),
         "ingest": ingest,
         "preflight": preflight,
         "index_command": build_index_command(entry),
@@ -553,6 +730,8 @@ def create_project_node(
     register_agent: bool = False,
     home_dir: Path | None = None,
     agent_model: str | None = None,
+    telegram_bot_username: str | None = None,
+    telegram_bot_display_name: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     root = Path(store_root).resolve()
@@ -621,6 +800,9 @@ def create_project_node(
             "last_ingest_at": "",
             "last_index_at": "",
             "last_updated": "",
+            "telegram_bot_username": "",
+            "telegram_bot_display_name": "",
+            "last_conversation_at": "",
         }
         registry.setdefault("projects", []).append(entry)
 
@@ -630,6 +812,14 @@ def create_project_node(
         entry["superintendent"] = superintendent.strip() or "Unknown"
     if assignee:
         entry["assignee"] = assignee.strip() or "Unassigned"
+    if telegram_bot_username:
+        entry["telegram_bot_username"] = _normalize_bot_username(telegram_bot_username)
+    if telegram_bot_display_name:
+        entry["telegram_bot_display_name"] = telegram_bot_display_name.strip()
+    display_name, source, handle = resolve_node_identity(entry)
+    entry["node_display_name"] = display_name
+    entry["node_identity_source"] = source
+    entry["node_handle"] = handle
 
     if not dry_run:
         save_fleet_registry(root, {
@@ -777,6 +967,9 @@ def onboard_project_store(
             "last_ingest_at": "",
             "last_index_at": "",
             "last_updated": _now_iso(),
+            "telegram_bot_username": "",
+            "telegram_bot_display_name": "",
+            "last_conversation_at": "",
         }
         registry.setdefault("projects", []).append(entry)
         entry_changed = True
@@ -812,6 +1005,16 @@ def onboard_project_store(
         entry_changed = True
     if entry.get("project_dir_name") != destination_dir.name:
         entry["project_dir_name"] = destination_dir.name
+        entry_changed = True
+    display_name, source, handle = resolve_node_identity(entry)
+    if entry.get("node_display_name") != display_name:
+        entry["node_display_name"] = display_name
+        entry_changed = True
+    if entry.get("node_identity_source") != source:
+        entry["node_identity_source"] = source
+        entry_changed = True
+    if entry.get("node_handle") != handle:
+        entry["node_handle"] = handle
         entry_changed = True
 
     if entry_changed and not dry_run:
@@ -979,17 +1182,29 @@ def register_project_agent(
                 existing[key] = value
                 changed = True
 
+    binding_changes = ensure_telegram_account_bindings(config)
+    if binding_changes:
+        changed = True
+
     if not dry_run:
         if changed:
             save_json(config_path, config)
         project_workspace.mkdir(parents=True, exist_ok=True)
         env_path = project_workspace / ".env"
         desired_env_line = f"MAESTRO_STORE={project_store_path}\n"
+        role_line = "MAESTRO_AGENT_ROLE=project\n"
         if not env_path.exists():
-            env_path.write_text(desired_env_line, encoding="utf-8")
-        elif "MAESTRO_STORE=" not in env_path.read_text(encoding="utf-8"):
-            with env_path.open("a", encoding="utf-8") as handle:
-                handle.write(desired_env_line)
+            env_path.write_text(desired_env_line + role_line, encoding="utf-8")
+        else:
+            current_env = env_path.read_text(encoding="utf-8")
+            append = ""
+            if "MAESTRO_STORE=" not in current_env:
+                append += desired_env_line
+            if "MAESTRO_AGENT_ROLE=" not in current_env:
+                append += role_line
+            if append:
+                with env_path.open("a", encoding="utf-8") as handle:
+                    handle.write(append)
 
     return {
         "ok": True,
@@ -999,6 +1214,7 @@ def register_project_agent(
         "agent_id": project_agent_id,
         "workspace": str(project_workspace),
         "model": selected_model,
+        "binding_changes": binding_changes,
     }
 
 
@@ -1054,6 +1270,7 @@ def _service_status(
         },
         "telegram": {
             "configured": _telegram_configured(config),
+            "routing": telegram_binding_health(config),
         },
         "company_agent": {
             "configured": bool(agent),
@@ -1099,6 +1316,7 @@ def build_awareness_state(
     services = _service_status(command_runner=command_runner, home_dir=home_dir)
     network = resolve_network_urls(web_port=web_port, command_runner=command_runner)
     purchase = build_purchase_status(root, registry=registry)
+    directives_summary = summarize_system_directives(root)
 
     fleet_projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
     project_count = len([p for p in fleet_projects if isinstance(p, dict) and p.get("status") != "archived"])
@@ -1132,8 +1350,11 @@ def build_awareness_state(
         degraded_reasons.append("CLI device pairing approval required")
     if not services["telegram"]["configured"]:
         degraded_reasons.append("Telegram not configured")
+    telegram_routing = services.get("telegram", {}).get("routing", {}) if isinstance(services.get("telegram"), dict) else {}
+    if not bool(telegram_routing.get("fully_bound", True)):
+        degraded_reasons.append("Telegram routing bindings missing")
     if not services["company_agent"]["configured"]:
-        degraded_reasons.append("Company Maestro agent not configured")
+        degraded_reasons.append("Commander agent not configured")
     if not root.exists():
         degraded_reasons.append("Knowledge store root missing")
     if project_count == 0:
@@ -1157,11 +1378,17 @@ def build_awareness_state(
             "workspace_root": str(services["company_agent"].get("workspace", "")).strip(),
         },
         "services": services,
+        "commander": {
+            "display_name": "The Commander",
+            "agent_id": "maestro-company",
+            "chat_transport": "openclaw_agent_invoke",
+        },
         "fleet": {
             "project_count": project_count,
             "stale_projects": stale_projects,
             "registry": registry,
             "current_action": current_action,
+            "directives": directives_summary,
         },
         "commands": {
             "update": "maestro update",
@@ -1173,6 +1400,9 @@ def build_awareness_state(
         "purchase": purchase,
         "available_actions": [
             "sync_registry",
+            "list_system_directives",
+            "upsert_system_directive",
+            "archive_system_directive",
             "create_project_node",
             "onboard_project_store",
             "ingest_command",
@@ -1181,5 +1411,7 @@ def build_awareness_state(
             "move_project_store",
             "register_project_agent",
             "doctor_fix",
+            "conversation_read",
+            "conversation_send",
         ],
     }

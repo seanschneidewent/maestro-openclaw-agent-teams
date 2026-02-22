@@ -1,21 +1,42 @@
 // api.js — Maestro API client
-// Reads project slug from URL path: /<slug>/...
+// Supports workspace URL shapes:
+// 1) /<project-slug>/...
+// 2) /agents/<agent-id>/workspace/...
 
-// Extract slug from first path segment
-function getSlug() {
+function encodePathSegment(value) {
+  return encodeURIComponent(value || '')
+}
+
+function getRouteContext() {
   const parts = window.location.pathname.split('/').filter(Boolean)
-  return parts[0] || ''
+  if (parts[0] === 'agents' && parts[1] && parts[2] === 'workspace') {
+    return {
+      kind: 'agent',
+      agentId: parts[1],
+      projectSlug: '',
+      prefix: `/agents/${encodePathSegment(parts[1])}/workspace`,
+    }
+  }
+  return {
+    kind: 'project',
+    agentId: '',
+    projectSlug: parts[0] || '',
+    prefix: parts[0] ? `/${encodePathSegment(parts[0])}` : '',
+  }
+}
+
+function getSlug() {
+  return getRouteContext().projectSlug
 }
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
-function slugPrefix() {
-  const slug = getSlug()
-  return slug ? `/${slug}` : ''
+function routePrefix() {
+  return getRouteContext().prefix
 }
 
 async function request(path) {
-  const res = await fetch(`${API_BASE}${slugPrefix()}${path}`)
+  const res = await fetch(`${API_BASE}${routePrefix()}${path}`)
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: res.statusText }))
     throw new Error(error.error || `API error: ${res.status}`)
@@ -41,9 +62,9 @@ export const api = {
   getPage: (name) => request(`/api/pages/${encodeURIComponent(name)}`),
 
   // Images
-  getPageImageUrl: (name) => `${API_BASE}${slugPrefix()}/api/pages/${encodeURIComponent(name)}/image`,
+  getPageImageUrl: (name) => `${API_BASE}${routePrefix()}/api/pages/${encodeURIComponent(name)}/image`,
   getPageThumbUrl: (name, w = 800, q = 80) =>
-    `${API_BASE}${slugPrefix()}/api/pages/${encodeURIComponent(name)}/thumb?w=${w}&q=${q}`,
+    `${API_BASE}${routePrefix()}/api/pages/${encodeURIComponent(name)}/thumb?w=${w}&q=${q}`,
 
   // Workspaces
   getWorkspaces: () => request('/api/workspaces'),
@@ -51,21 +72,21 @@ export const api = {
 
   // Generated images
   getGeneratedImageUrl: (wsSlug, filename) =>
-    `${API_BASE}${slugPrefix()}/api/workspaces/${encodeURIComponent(wsSlug)}/images/${encodeURIComponent(filename)}`,
+    `${API_BASE}${routePrefix()}/api/workspaces/${encodeURIComponent(wsSlug)}/images/${encodeURIComponent(filename)}`,
   getGeneratedImageThumbUrl: (wsSlug, filename, w = 800, q = 80) =>
-    `${API_BASE}${slugPrefix()}/api/workspaces/${encodeURIComponent(wsSlug)}/images/${encodeURIComponent(filename)}/thumb?w=${w}&q=${q}`,
+    `${API_BASE}${routePrefix()}/api/workspaces/${encodeURIComponent(wsSlug)}/images/${encodeURIComponent(filename)}/thumb?w=${w}&q=${q}`,
 
   // Regions
   getRegions: (name) => request(`/api/pages/${encodeURIComponent(name)}/regions`),
   getRegion: (name, regionId) =>
     request(`/api/pages/${encodeURIComponent(name)}/regions/${encodeURIComponent(regionId)}`),
   getRegionCropUrl: (name, regionId) =>
-    `${API_BASE}${slugPrefix()}/api/pages/${encodeURIComponent(name)}/regions/${encodeURIComponent(regionId)}/crop`,
+    `${API_BASE}${routePrefix()}/api/pages/${encodeURIComponent(name)}/regions/${encodeURIComponent(regionId)}/crop`,
 
   // WebSocket URL
   getWsUrl: () => {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
-    return `${proto}//${host}${slugPrefix()}/ws`
+    return `${proto}//${host}${routePrefix()}/ws`
   },
 }

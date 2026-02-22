@@ -1,6 +1,6 @@
 """Command Center aggregation logic.
 
-The Company Maestro consumes normalized project snapshots from project stores.
+The Commander consumes normalized project snapshots from project stores.
 This module is intentionally side-effect free and filesystem-read only.
 """
 
@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .system_directives import list_active_directive_feed
 from .utils import load_json, slugify
 
 
@@ -22,6 +23,27 @@ RELEVANT_DATE_KEYS = (
     "ingested_at",
     "baseline_date",
 )
+
+HEARTBEAT_FRESH_SECONDS = 120
+
+
+def _clean_str(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip()
+
+
+def _to_str_list(value: Any, limit: int = 5) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = _clean_str(item if isinstance(item, str) else str(item))
+        if text:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -337,6 +359,129 @@ def _derive_top_blockers(
     return deduped[:3]
 
 
+def _heartbeat_overlay(project_dir: Path, agent_id: str, project_slug: str) -> dict[str, Any]:
+    path = project_dir / ".command_center" / "heartbeat.json"
+    payload = load_json(path)
+    if not isinstance(payload, dict):
+        payload = {}
+
+    generated_at = _clean_str(payload.get("generated_at"))
+    dt = _parse_dt(generated_at)
+    age_seconds: int | None = None
+    if dt:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        age_seconds = max(0, int((datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds()))
+    is_fresh = bool(age_seconds is not None and age_seconds <= HEARTBEAT_FRESH_SECONDS)
+
+    return {
+        "available": bool(payload),
+        "version": _safe_int(payload.get("version"), 0),
+        "agent_id": _clean_str(payload.get("agent_id")) or agent_id,
+        "project_slug": _clean_str(payload.get("project_slug")) or project_slug,
+        "generated_at": generated_at,
+        "age_seconds": age_seconds if age_seconds is not None else -1,
+        "is_fresh": is_fresh,
+        "loop_state": _clean_str(payload.get("loop_state")) or "idle",
+        "summary": _clean_str(payload.get("summary")),
+        "top_risks": _to_str_list(payload.get("top_risks"), limit=5),
+        "next_actions": _to_str_list(payload.get("next_actions"), limit=5),
+        "confidence": _safe_float(payload.get("confidence"), 0.0),
+        "pending_questions": _safe_int(payload.get("pending_questions"), 0),
+        "last_user_message_at": _clean_str(payload.get("last_user_message_at")),
+        "last_agent_reply_at": _clean_str(payload.get("last_agent_reply_at")),
+    }
+
+
+def _computed_risks(snapshot: dict[str, Any]) -> list[str]:
+    risks: list[str] = []
+    critical = snapshot.get("critical_path", {}) if isinstance(snapshot.get("critical_path"), dict) else {}
+    blockers = critical.get("top_blockers", []) if isinstance(critical.get("top_blockers"), list) else []
+    for blocker in blockers:
+        if isinstance(blocker, str) and blocker.strip():
+            risks.append(f"{blocker.strip()} blocking progress")
+    if _safe_int(snapshot.get("rfis", {}).get("blocking_open"), 0) > 0:  # type: ignore[arg-type]
+        risks.append("Blocking open RFIs")
+    if _safe_int(snapshot.get("submittals", {}).get("rejected"), 0) > 0:  # type: ignore[arg-type]
+        risks.append("Rejected submittals require resubmission")
+    if _safe_int(snapshot.get("decisions", {}).get("pending_change_orders"), 0) > 0:  # type: ignore[arg-type]
+        risks.append("Pending change orders awaiting decision")
+    if _safe_int(snapshot.get("scope_risk", {}).get("gaps"), 0) > 0:  # type: ignore[arg-type]
+        risks.append("Scope gap exposure detected")
+    return risks[:5]
+
+
+def _computed_next_actions(snapshot: dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    critical = snapshot.get("critical_path", {}) if isinstance(snapshot.get("critical_path"), dict) else {}
+    blockers = critical.get("top_blockers", []) if isinstance(critical.get("top_blockers"), list) else []
+    if blockers:
+        actions.append(f"Resolve blocker {blockers[0]}")
+    if _safe_int(snapshot.get("rfis", {}).get("open"), 0) > 0:  # type: ignore[arg-type]
+        actions.append("Review open RFIs and escalate blockers")
+    if _safe_int(snapshot.get("submittals", {}).get("pending_review"), 0) > 0:  # type: ignore[arg-type]
+        actions.append("Follow up on pending submittal reviews")
+    if not actions:
+        actions.append("Continue monitoring project telemetry")
+    return actions[:5]
+
+
+def _status_report(snapshot: dict[str, Any], heartbeat: dict[str, Any]) -> dict[str, Any]:
+    health = snapshot.get("health", {}) if isinstance(snapshot.get("health"), dict) else {}
+    critical = snapshot.get("critical_path", {}) if isinstance(snapshot.get("critical_path"), dict) else {}
+    rfis = snapshot.get("rfis", {}) if isinstance(snapshot.get("rfis"), dict) else {}
+    submittals = snapshot.get("submittals", {}) if isinstance(snapshot.get("submittals"), dict) else {}
+    decisions = snapshot.get("decisions", {}) if isinstance(snapshot.get("decisions"), dict) else {}
+    scope = snapshot.get("scope_risk", {}) if isinstance(snapshot.get("scope_risk"), dict) else {}
+
+    computed_summary = (
+        f"{_safe_int(health.get('percent_complete'), 0)}% complete · "
+        f"SPI {_safe_float(health.get('schedule_performance_index'), 1.0):.2f} · "
+        f"variance {_safe_int(health.get('variance_days'), 0)}d · "
+        f"blockers {_safe_int(critical.get('blocker_count'), 0)}"
+    )
+
+    fresh_heartbeat = bool(heartbeat.get("is_fresh"))
+    source = "heartbeat" if fresh_heartbeat else "computed"
+    summary = _clean_str(heartbeat.get("summary")) if fresh_heartbeat else ""
+    if not summary:
+        source = "computed"
+        summary = computed_summary
+
+    top_risks = _to_str_list(heartbeat.get("top_risks"), limit=5) if source == "heartbeat" else []
+    if not top_risks:
+        top_risks = _computed_risks(snapshot)
+
+    next_actions = _to_str_list(heartbeat.get("next_actions"), limit=5) if source == "heartbeat" else []
+    if not next_actions:
+        next_actions = _computed_next_actions(snapshot)
+
+    return {
+        "source": source,
+        "stale": bool(heartbeat.get("available")) and not bool(heartbeat.get("is_fresh")),
+        "summary": summary,
+        "loop_state": (
+            _clean_str(heartbeat.get("loop_state"))
+            if source == "heartbeat"
+            else _clean_str(snapshot.get("agent_status")) or "idle"
+        ),
+        "confidence": _safe_float(heartbeat.get("confidence"), 0.0) if source == "heartbeat" else 0.0,
+        "pending_questions": _safe_int(heartbeat.get("pending_questions"), 0),
+        "top_risks": top_risks,
+        "next_actions": next_actions,
+        "metrics": {
+            "attention_score": _safe_int(snapshot.get("attention_score"), 0),
+            "spi": _safe_float(health.get("schedule_performance_index"), 1.0),
+            "variance_days": _safe_int(health.get("variance_days"), 0),
+            "blocker_count": _safe_int(critical.get("blocker_count"), 0),
+            "open_rfis": _safe_int(rfis.get("open"), 0),
+            "rejected_submittals": _safe_int(submittals.get("rejected"), 0),
+            "pending_change_orders": _safe_int(decisions.get("pending_change_orders"), 0),
+            "scope_gaps": _safe_int(scope.get("gaps"), 0),
+        },
+    }
+
+
 def compute_attention_score(snapshot: dict[str, Any]) -> int:
     """Compute a normalized attention score (0-100)."""
     score = 0
@@ -436,9 +581,15 @@ def build_project_snapshot(project_dir: Path) -> dict[str, Any]:
         scope_matrix,
     )
 
+    agent_id = f"maestro-project-{slug}"
     snapshot = {
         "slug": slug,
+        "project_name": name,
         "name": name,
+        "agent_id": agent_id,
+        "node_display_name": name,
+        "node_handle": "",
+        "node_identity_source": "project",
         "status": "active" if total_pages > 0 else "setup",
         "last_updated": last_updated,
         "superintendent": "Unknown",
@@ -462,6 +613,17 @@ def build_project_snapshot(project_dir: Path) -> dict[str, Any]:
         ),
     }
     snapshot["attention_score"] = compute_attention_score(snapshot)
+    heartbeat = _heartbeat_overlay(project_dir, agent_id, slug)
+    snapshot["heartbeat"] = heartbeat
+    snapshot["status_report"] = _status_report(snapshot, heartbeat)
+    snapshot["conversation_preview"] = {
+        "last_message_at": "",
+        "last_user_at": "",
+        "last_assistant_at": "",
+        "last_user_text": "",
+        "last_assistant_text": "",
+        "message_count": 0,
+    }
 
     return snapshot
 
@@ -567,18 +729,8 @@ def build_project_detail(project_dir: Path) -> dict[str, Any]:
 
 
 def load_directives(store_root: Path) -> list[dict[str, Any]]:
-    """Load optional directive feed from .command_center/directives.json."""
-    path = Path(store_root) / ".command_center" / "directives.json"
-    payload = load_json(path, default={})
-
-    if isinstance(payload, list):
-        items = payload
-    elif isinstance(payload, dict):
-        items = payload.get("directives", []) if isinstance(payload.get("directives"), list) else []
-    else:
-        items = []
-
-    return [item for item in items if isinstance(item, dict)]
+    """Load active directive feed from normalized system directives."""
+    return list_active_directive_feed(store_root)
 
 
 def build_command_center_state(store_root: Path) -> dict[str, Any]:
@@ -605,12 +757,12 @@ def build_command_center_state(store_root: Path) -> dict[str, Any]:
         "updated_at": now_iso,
         "store_root": str(root),
         "commander": {
-            "name": "Sean (GC Owner)",
+            "name": "The Commander",
             "lastSeen": "Online (Telegram)",
         },
         "orchestrator": {
             "id": "CM-01",
-            "name": "Company Maestro",
+            "name": "The Commander",
             "status": fleet_status.title(),
             "currentAction": (
                 f"Monitoring {len(projects)} project node(s) for schedule/risk/commercial signals."

@@ -1,23 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import DirectiveLog from './components/DirectiveLog'
-import ProjectNode from './components/ProjectNode'
-import NodeIntelligenceModal from './components/NodeIntelligenceModal'
+import { useCallback, useMemo, useState } from 'react'
 import AddNodeTile from './components/AddNodeTile'
-import PurchaseCommandModal from './components/PurchaseCommandModal'
 import DoctorPanel from './components/DoctorPanel'
+import NodeIntelligenceModal from './components/NodeIntelligenceModal'
+import ProjectNode from './components/ProjectNode'
+import PurchaseCommandModal from './components/PurchaseCommandModal'
+import SystemDirectivesPanel from './components/SystemDirectivesPanel'
 import { api } from './lib/api'
 import { useCommandCenterWebSocket } from './hooks/useCommandCenterWebSocket'
-
-const FALLBACK_DIRECTIVES = [
-  {
-    id: 'DIR-000',
-    timestamp: 'Live',
-    source: 'Command Center',
-    command: 'No directives yet. Company Maestro is monitoring all nodes for schedule/risk/commercial activity.',
-    status: 'complete',
-    acknowledgments: 'Monitoring',
-  },
-]
+import useCommandCenterState from './hooks/useCommandCenterState'
+import useProjectModalData from './hooks/useProjectModalData'
 
 function SignalPulse() {
   return (
@@ -41,110 +32,79 @@ function NetworkIcon() {
   )
 }
 
-function TerminalIcon() {
-  return (
-    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={2}
-        d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-      />
-    </svg>
-  )
-}
-
 export default function App() {
-  const [state, setState] = useState({
-    commander: { name: 'Sean (GC Owner)', lastSeen: 'Unknown' },
-    orchestrator: { id: 'CM-01', name: 'Company Maestro', status: 'Idle', currentAction: 'Awaiting telemetry' },
-    directives: [],
-    projects: [],
-  })
-  const [awareness, setAwareness] = useState(null)
-  const [selectedProject, setSelectedProject] = useState(null)
-  const [selectedDetail, setSelectedDetail] = useState(null)
-  const [selectedControl, setSelectedControl] = useState(null)
-  const [loadingDetail, setLoadingDetail] = useState(false)
+  const {
+    state,
+    setState,
+    loadState,
+    awareness,
+    setAwareness,
+    loadAwareness,
+  } = useCommandCenterState()
+  const {
+    selectedProject,
+    selectedDetail,
+    selectedControl,
+    loadingDetail,
+    selectProject,
+    refreshSelectedProject,
+    clearSelection,
+    syncSelectedProjectFromState,
+  } = useProjectModalData()
   const [showPurchaseModal, setShowPurchaseModal] = useState(false)
   const [doctorRunning, setDoctorRunning] = useState(false)
   const [doctorReport, setDoctorReport] = useState(null)
   const [doctorError, setDoctorError] = useState('')
 
-  const loadState = useCallback(async () => {
-    try {
-      const payload = await api.getState()
-      setState(payload)
-    } catch (error) {
-      console.error('Failed to load command center state', error)
-    }
-  }, [])
-
-  const loadAwareness = useCallback(async () => {
-    try {
-      const payload = await api.getAwareness()
-      setAwareness(payload)
-    } catch (error) {
-      console.error('Failed to load awareness state', error)
-    }
-  }, [])
-
-  useEffect(() => {
-    loadState()
-    loadAwareness()
-  }, [loadState, loadAwareness])
-
-  const onSelectProject = useCallback(async (project) => {
-    setSelectedProject(project)
-    setSelectedDetail(null)
-    setSelectedControl(null)
-    setLoadingDetail(true)
-    const [detailResult, controlResult] = await Promise.allSettled([
-      api.getProjectDetail(project.slug),
-      api.runAction('ingest_command', { project_slug: project.slug }),
-    ])
-
-    if (detailResult.status === 'fulfilled') {
-      setSelectedDetail(detailResult.value)
-    } else {
-      console.error('Failed to load project detail', detailResult.reason)
-      setSelectedDetail({ snapshot: project, drawers: {} })
-    }
-
-    if (controlResult.status === 'fulfilled') {
-      setSelectedControl(controlResult.value)
-    } else {
-      console.error('Failed to load project control payload', controlResult.reason)
-      setSelectedControl(null)
-    }
-
-    setLoadingDetail(false)
-  }, [])
-
   useCommandCenterWebSocket({
     onInit: (payload) => {
-      if (payload?.state) setState(payload.state)
+      if (payload?.state) {
+        setState(payload.state)
+        syncSelectedProjectFromState(payload.state.projects || [])
+      }
       if (payload?.awareness) setAwareness(payload.awareness)
     },
     onUpdated: (payload) => {
-      if (payload?.state) setState(payload.state)
+      if (payload?.state) {
+        setState(payload.state)
+        syncSelectedProjectFromState(payload.state.projects || [])
+      }
       if (payload?.awareness) setAwareness(payload.awareness)
       if (selectedProject?.slug) {
-        api.getProjectDetail(selectedProject.slug)
-          .then((detail) => setSelectedDetail(detail))
-          .catch(() => {})
-        api.runAction('ingest_command', { project_slug: selectedProject.slug })
-          .then((control) => setSelectedControl(control))
-          .catch(() => {})
+        refreshSelectedProject(selectedProject.slug).catch(() => {})
       }
     },
   })
 
-  const directives = useMemo(
-    () => (Array.isArray(state.directives) && state.directives.length > 0 ? state.directives : FALLBACK_DIRECTIVES),
-    [state.directives],
-  )
   const nextNodeBadge = awareness?.purchase?.next_node_badge || '+'
+
+  const commanderNode = useMemo(
+    () => ({
+      slug: 'commander',
+      is_commander: true,
+      name: awareness?.commander?.display_name || state.orchestrator?.name || 'The Commander',
+      node_display_name: awareness?.commander?.display_name || state.orchestrator?.name || 'The Commander',
+      project_name: 'Command Center Control Plane',
+      assignee: 'System Owner',
+      agent_id: awareness?.commander?.agent_id || 'maestro-company',
+      attention_score: 0,
+      health: { variance_days: 0 },
+      critical_path: { blocker_count: 0 },
+      rfis: { open: 0 },
+      agent_status: 'idle',
+      current_task: state.orchestrator?.currentAction || 'Monitoring fleet telemetry',
+      comms: awareness?.posture ? `System ${String(awareness.posture).toUpperCase()}` : 'Control plane online',
+      last_updated: awareness?.generated_at || '',
+      heartbeat: {
+        available: true,
+        is_fresh: true,
+      },
+      conversation_preview: {
+        last_assistant_text: '',
+      },
+    }),
+    [awareness?.commander?.agent_id, awareness?.commander?.display_name, awareness?.generated_at, awareness?.posture, state.orchestrator?.currentAction, state.orchestrator?.name],
+  )
 
   const runDoctorFix = useCallback(async () => {
     setDoctorRunning(true)
@@ -155,11 +115,16 @@ export default function App() {
       if (payload?.awareness) setAwareness(payload.awareness)
       await loadState()
     } catch (error) {
-      setDoctorError(error?.message || 'Doctor action failed')
+      const message = error?.message || 'Doctor action failed'
+      if (message.includes('Unsupported action: doctor_fix')) {
+        setDoctorError('This running Maestro server build does not expose doctor_fix yet. Run `maestro update` then restart `maestro up`.')
+      } else {
+        setDoctorError(message)
+      }
     } finally {
       setDoctorRunning(false)
     }
-  }, [loadState])
+  }, [loadState, setAwareness])
 
   return (
     <div className="min-h-screen bg-[#05080f] text-slate-300 font-sans p-4 md:p-6 lg:p-8 flex flex-col relative overflow-hidden selection:bg-[#00e5ff]/30">
@@ -173,13 +138,13 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-2xl font-light tracking-[0.4em] text-white uppercase leading-none">Command Center</h1>
-            <p className="text-[#00e5ff] font-mono text-[10px] tracking-widest uppercase mt-2">Tactical Agent Routing</p>
+            <p className="text-[#00e5ff] font-mono text-[10px] tracking-widest uppercase mt-2">Commander + Project Maestro Network</p>
           </div>
         </div>
         <div className="mt-4 md:mt-0 flex items-center gap-4 bg-black/40 border border-white/5 px-4 py-2">
           <div className="flex flex-col items-end">
             <span className="text-[9px] text-slate-500 font-mono uppercase tracking-widest mb-0.5">Commander Node</span>
-            <span className="text-xs text-white uppercase tracking-wider">{state.commander?.name || 'Commander'}</span>
+            <span className="text-xs text-white uppercase tracking-wider">{commanderNode.node_display_name}</span>
           </div>
           <div className="h-8 w-px bg-white/10" />
           <div className="flex items-center gap-2">
@@ -191,7 +156,11 @@ export default function App() {
 
       <div className="flex-grow grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 relative z-10">
         <div className="lg:col-span-8 flex flex-col items-center">
-          <div className="w-full max-w-md bg-[#0a0e17]/80 backdrop-blur-sm border border-[#00e5ff]/30 p-1 relative shadow-[0_0_30px_rgba(0,229,255,0.05)]">
+          <button
+            type="button"
+            onClick={() => selectProject(commanderNode)}
+            className="w-full max-w-md bg-[#0a0e17]/80 backdrop-blur-sm border border-[#00e5ff]/30 p-1 relative shadow-[0_0_30px_rgba(0,229,255,0.05)] text-left"
+          >
             <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-[#00e5ff]" />
             <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-[#00e5ff]" />
             <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-[#00e5ff]" />
@@ -199,7 +168,7 @@ export default function App() {
 
             <div className="p-5 flex flex-col items-center">
               <div className="flex items-center gap-3 mb-3">
-                <h2 className="text-lg font-medium tracking-[0.2em] text-white uppercase">{state.orchestrator?.name || 'Company Maestro'}</h2>
+                <h2 className="text-lg font-medium tracking-[0.2em] text-white uppercase">{commanderNode.node_display_name}</h2>
                 <span className="text-[9px] font-mono bg-[#00e5ff]/10 text-[#00e5ff] border border-[#00e5ff]/30 px-1.5 py-0.5 uppercase tracking-widest">
                   Tier 1
                 </span>
@@ -212,7 +181,7 @@ export default function App() {
                 {state.orchestrator?.currentAction || 'Monitoring fleet telemetry'}
               </div>
             </div>
-          </div>
+          </button>
 
           <div className="w-full flex flex-col items-center">
             <div className="w-px h-8 bg-gradient-to-b from-[#00e5ff] to-[#00e5ff]/40 shadow-[0_0_10px_#00e5ff]" />
@@ -225,7 +194,7 @@ export default function App() {
 
           <div className="w-full max-w-5xl grid grid-cols-1 md:grid-cols-3 gap-6 relative z-20">
             {(state.projects || []).map((project) => (
-              <ProjectNode key={project.slug} project={project} onSelect={onSelectProject} />
+              <ProjectNode key={project.slug} project={project} onSelect={selectProject} />
             ))}
             <AddNodeTile badge={nextNodeBadge} onClick={() => setShowPurchaseModal(true)} />
             {(!state.projects || state.projects.length === 0) && (
@@ -245,27 +214,13 @@ export default function App() {
             error={doctorError}
           />
 
-          <div className="flex justify-between items-end border-b border-white/10 pb-2">
-            <h2 className="text-sm font-medium tracking-[0.2em] text-white uppercase flex items-center gap-2">
-              <TerminalIcon />
-              Global Directives
-            </h2>
-            <span className="text-[#00e5ff] font-mono text-[10px] uppercase tracking-widest">Live Feed</span>
-          </div>
-
-          <div className="flex-grow space-y-4">
-            {directives.map((dir, index) => (
-              <DirectiveLog key={`${dir.id || 'directive'}-${index}`} directive={dir} />
-            ))}
-          </div>
-
-          <div className="mt-auto p-5 border border-white/10 bg-black/40 text-center relative overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
-            <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest block mb-2">Input Authority</span>
-            <span className="text-xs text-slate-300 block font-light tracking-wide">
-              Issue voice or text commands via Telegram to propagate instructions fleet-wide.
-            </span>
-          </div>
+          <SystemDirectivesPanel
+            availableActions={awareness?.available_actions || []}
+            fallbackDirectives={state.directives || []}
+            onChanged={async () => {
+              await Promise.all([loadState(), loadAwareness()])
+            }}
+          />
         </div>
       </div>
 
@@ -276,9 +231,7 @@ export default function App() {
           awareness={awareness}
           control={selectedControl}
           onClose={() => {
-            setSelectedProject(null)
-            setSelectedDetail(null)
-            setSelectedControl(null)
+            clearSelection()
           }}
         />
       )}
@@ -298,3 +251,4 @@ export default function App() {
     </div>
   )
 }
+

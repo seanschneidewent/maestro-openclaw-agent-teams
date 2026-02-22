@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .agent_role import is_company_role
 from .config import (
     HIGHLIGHT_MODEL,
     IMAGE_GEN_MODEL,
@@ -88,7 +89,13 @@ class MaestroTools:
             load_dotenv(workspace_root)
         else:
             load_dotenv()
-        
+
+        if is_company_role(workspace_root):
+            raise RuntimeError(
+                "Company Maestro is control-plane only. "
+                "Project knowledge tools are disabled in this workspace."
+            )
+
         # Validate license (unless explicitly skipped for testing)
         if not skip_license_check:
             self._validate_license()

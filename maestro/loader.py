@@ -15,6 +15,45 @@ from .config import get_store_path
 from .utils import load_json
 
 
+def _is_project_dir(path: Path) -> bool:
+    """Return True when the directory is a valid project root."""
+    return path.is_dir() and (path / "project.json").exists()
+
+
+def _iter_project_dirs(store: Path) -> list[Path]:
+    """Return sorted project directories under a multi-project store."""
+    projects: list[Path] = []
+    for child in sorted(store.iterdir(), key=lambda p: p.name.lower()):
+        if child.name.startswith("."):
+            continue
+        if _is_project_dir(child):
+            projects.append(child)
+    return projects
+
+
+def _find_named_project(store: Path, project_name: str) -> Path | None:
+    """Find a project by directory name, project.json name, or slug."""
+    needle = project_name.strip().lower()
+    if not needle:
+        return None
+
+    direct = store / project_name
+    if _is_project_dir(direct):
+        return direct
+
+    for candidate in _iter_project_dirs(store):
+        if candidate.name.lower() == needle:
+            return candidate
+        project_meta = load_json(candidate / "project.json")
+        if not isinstance(project_meta, dict):
+            continue
+        meta_name = str(project_meta.get("name", "")).strip().lower()
+        meta_slug = str(project_meta.get("slug", "")).strip().lower()
+        if needle in (meta_name, meta_slug):
+            return candidate
+    return None
+
+
 def load_project(
     store_path: str | Path | None = None,
     project_name: str | None = None,
@@ -35,17 +74,36 @@ def load_project(
         print(f"No knowledge_store at {store}. Run: maestro ingest <folder>", file=sys.stderr)
         return None
 
-    if project_name:
-        project_dir = store / project_name
-        if not project_dir.exists() or not project_dir.is_dir():
-            print(f"Project '{project_name}' not found in {store}", file=sys.stderr)
-            return None
+    # Single-project mode: store path is already the project root.
+    if _is_project_dir(store):
+        project_dir = store
+        if project_name:
+            project_meta = load_json(project_dir / "project.json")
+            valid_names = {project_dir.name.lower()}
+            if isinstance(project_meta, dict):
+                for raw in (project_meta.get("name"), project_meta.get("slug")):
+                    if isinstance(raw, str) and raw.strip():
+                        valid_names.add(raw.strip().lower())
+            if project_name.strip().lower() not in valid_names:
+                print(f"Project '{project_name}' not found in {store}", file=sys.stderr)
+                return None
     else:
-        projects = [d for d in sorted(store.iterdir(), key=lambda p: p.name.lower()) if d.is_dir()]
-        if not projects:
-            print(f"No projects in {store}. Run: maestro ingest <folder>", file=sys.stderr)
-            return None
-        project_dir = projects[0]
+        if project_name:
+            found = _find_named_project(store, project_name)
+            if not found:
+                print(f"Project '{project_name}' not found in {store}", file=sys.stderr)
+                return None
+            project_dir = found
+        else:
+            projects = _iter_project_dirs(store)
+            if not projects:
+                print(f"No projects in {store}. Run: maestro ingest <folder>", file=sys.stderr)
+                return None
+            project_dir = projects[0]
+
+    if not _is_project_dir(project_dir):
+        print(f"Project '{project_dir}' missing project.json", file=sys.stderr)
+        return None
 
     project = load_json(project_dir / "project.json")
     if not isinstance(project, dict):
@@ -68,6 +126,9 @@ def load_project(
     if pages_dir.exists():
         for page_dir in sorted(pages_dir.iterdir(), key=lambda p: p.name.lower()):
             if not page_dir.is_dir():
+                continue
+            # Treat only ingest page directories as pages.
+            if not (page_dir / "pass1.json").exists():
                 continue
             _load_page(project, page_dir)
 

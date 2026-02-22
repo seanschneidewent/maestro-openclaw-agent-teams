@@ -43,6 +43,15 @@ def _default_telegram() -> dict:
     }
 
 
+def _default_bindings() -> list[dict]:
+    return [
+        {
+            "agentId": "maestro-company",
+            "match": {"channel": "telegram", "accountId": "maestro-company"},
+        }
+    ]
+
+
 def test_update_no_changes_when_already_current(tmp_path: Path):
     home = tmp_path / "home"
     openclaw_dir = home / ".openclaw"
@@ -58,7 +67,7 @@ def test_update_no_changes_when_already_current(tmp_path: Path):
             "list": [
                 {
                     "id": "maestro-company",
-                    "name": "Maestro (TestCo)",
+                    "name": "The Commander",
                     "default": True,
                     "model": "google/gemini-3-pro-preview",
                     "workspace": str(workspace),
@@ -66,6 +75,7 @@ def test_update_no_changes_when_already_current(tmp_path: Path):
             ]
         },
         "channels": {"telegram": _default_telegram()},
+        "bindings": _default_bindings(),
     }
     config_path = openclaw_dir / "openclaw.json"
     _write_json(config_path, config)
@@ -74,7 +84,10 @@ def test_update_no_changes_when_already_current(tmp_path: Path):
     for filename in ("SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md"):
         (workspace / filename).write_text("existing\n", encoding="utf-8")
     (workspace / "TOOLS.md").write_text("existing\n", encoding="utf-8")
-    (workspace / ".env").write_text("MAESTRO_STORE=knowledge_store/\n", encoding="utf-8")
+    (workspace / ".env").write_text(
+        "MAESTRO_AGENT_ROLE=company\nMAESTRO_STORE=knowledge_store/\n",
+        encoding="utf-8",
+    )
     (workspace / "knowledge_store").mkdir(exist_ok=True)
     (workspace / "skills" / "maestro").mkdir(parents=True, exist_ok=True)
     sessions.mkdir(parents=True, exist_ok=True)
@@ -145,11 +158,17 @@ def test_update_migrates_legacy_agent_and_preserves_telegram(tmp_path: Path):
     updated = json.loads(config_path.read_text(encoding="utf-8"))
     agents = updated.get("agents", {}).get("list", [])
     assert any(a.get("id") == "maestro-company" for a in agents if isinstance(a, dict))
+    assert any(a.get("id") == "maestro-company" and a.get("name") == "The Commander" for a in agents if isinstance(a, dict))
     assert updated.get("maestro") is None
 
     telegram = updated.get("channels", {}).get("telegram", {})
     accounts = telegram.get("accounts", {})
     assert accounts.get("maestro-company", {}).get("botToken") == "123456:ABC_DEF"
+    bindings = updated.get("bindings", [])
+    assert {
+        "agentId": "maestro-company",
+        "match": {"channel": "telegram", "accountId": "maestro-company"},
+    } in bindings
 
 
 def test_update_dry_run_does_not_write_files(tmp_path: Path):

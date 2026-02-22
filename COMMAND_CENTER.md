@@ -1,63 +1,49 @@
 # Command Center
 
-Current implementation reference for Company Maestro Command Center.
+Current implementation reference for **The Commander** control-plane UI.
 
-## What Is Implemented
+## Implemented Now
 
-- React tactical UI served at `/command-center`
-- Fleet topology cards + project node selection
-- Node Intelligence modal drawers per project
-- Command Center websocket updates (`/ws/command-center`)
-- Read API surface:
-  - `GET /api/command-center/state`
-  - `GET /api/command-center/projects/{slug}`
-  - `GET /api/system/awareness`
-  - `GET /api/command-center/fleet-registry`
-- Control-plane actions via:
-  - `POST /api/command-center/actions`
+- Tactical topology React UI at `/command-center`
+- Top commander node + project node cards
+- Expanded node modal with live conversation (manual send for project nodes)
+- Per-node status report (heartbeat overlay + computed fallback) in modal
+- Compact System Doctor and System Directives panels
+- Fleet provisioning helper (`maestro-purchase`) still available in UI
 
-## UI Behavior
+## Core APIs
 
-- Command Center is the **control-plane display** for Company Maestro.
-- Telegram/default-agent conversation remains primary for orchestration.
-- UI includes controlled mutations through action API (for example `doctor_fix`).
-- Node click opens modal with:
-  - operational health
-  - critical path + constraints
-  - RFI/submittal control
-  - decision + exposure
-  - scope watchlist
+- `GET /api/command-center/state`
+- `GET /api/command-center/projects/{slug}` (legacy modal contract kept)
+- `GET /api/command-center/nodes/{slug}/status`
+- `GET /api/command-center/nodes/{slug}/conversation`
+- `POST /api/command-center/nodes/{slug}/conversation/send`
+- `GET /api/system/awareness`
+- `GET /api/command-center/fleet-registry`
+- `POST /api/command-center/actions`
+- `WS /ws/command-center`
 
-## Data Contracts
+## Chain-of-Command Guards
 
-The frontend consumes normalized backend contracts only.
-It does not parse raw project store JSON directly.
+- Commander send endpoint only targets `maestro-project-*` agents.
+- Archived/unregistered nodes are rejected.
+- Manual UI source guard is enforced (`source=command_center_ui`).
+- Commander remains read-only against raw project plan files.
 
-Primary server modules:
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/command_center.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/control_plane.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/server.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/maestro/server_actions.py`
+## Data Notes
 
-## Store Layout Support
+- Heartbeat file path per project:
+  - `<project_store>/.command_center/heartbeat.json`
+- Registry path:
+  - `<fleet_store_root>/.command_center/fleet_registry.json`
+- Directive store path:
+  - `<fleet_store_root>/.command_center/system_directives.json`
 
-Command Center supports both:
-1. single-project root (`<store>/project.json`)
-2. multi-project root (`<store>/<project>/project.json`)
-
-Fixture path used during implementation/testing:
+Fixture path used during testing:
 - `/Users/seanschneidewent/Desktop/knowledge_store_data`
 
-## Operational Notes
+## Operations
 
-- Preferred runtime command: `maestro up`
-- Use `maestro up --tui` for live monitor mode.
-- Use `maestro update` after upgrades.
-- Use `maestro doctor --fix` for repair/self-heal.
-
-## Related Docs
-
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/command-center.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/api-contracts.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/operations.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/troubleshooting.md`
+- Preferred startup: `maestro up`
+- Repairs: `maestro doctor --fix`
+- Upgrade migration: `maestro update`

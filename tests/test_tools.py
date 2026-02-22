@@ -166,6 +166,11 @@ class TestKnowledgeQueries:
         assert isinstance(result, list)
         assert any(g["type"] == "broken_ref" for g in result)
 
+    def test_company_role_blocks_tools(self, mock_store, monkeypatch):
+        monkeypatch.setenv("MAESTRO_AGENT_ROLE", "company")
+        with pytest.raises(RuntimeError, match="control-plane only"):
+            MaestroTools(store_path=mock_store)
+
 
 class TestWorkspaces:
     def test_create_workspace(self, tools):

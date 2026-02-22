@@ -28,13 +28,23 @@ from .command_center import (
     build_project_snapshot,
     discover_project_dirs,
 )
+from .commander_chat import (
+    MAX_MESSAGE_CHARS,
+    build_conversation_preview,
+    read_agent_conversation,
+    send_agent_message,
+)
 from .config import THUMBNAIL_CACHE_DIR
 from .control_plane import (
     build_awareness_state,
+    resolve_node_identity,
+    save_fleet_registry,
     sync_fleet_registry,
 )
 from .doctor import build_doctor_report
 from .server_actions import ActionError, run_command_center_action
+from .server_command_center import CommandCenterRouterContext, create_command_center_router
+from . import server_command_center_state as command_center_state_ops
 from .utils import load_json, slugify
 
 # ── Config ──────────────────────────────────────────────────────
@@ -66,6 +76,8 @@ command_center_state: dict[str, Any] = {}
 command_center_ws_clients: set[WebSocket] = set()
 fleet_registry: dict[str, Any] = {}
 awareness_state: dict[str, Any] = {}
+agent_project_slug_index: dict[str, str] = {}
+COMMANDER_NODE_SLUG = "commander"
 
 
 def load_all_projects():
@@ -111,8 +123,12 @@ def _load_project(project_dir: Path, slug: str) -> dict[str, Any]:
     pages_dir = project_dir / "pages"
     if pages_dir.exists():
         for page_dir in sorted(pages_dir.iterdir(), key=lambda p: p.name.lower()):
-            if page_dir.is_dir():
-                _load_page(proj, page_dir)
+            if not page_dir.is_dir():
+                continue
+            # Treat only ingest page directories as pages.
+            if not (page_dir / "pass1.json").exists():
+                continue
+            _load_page(proj, page_dir)
 
     proj["disciplines"] = sorted({
         str(p.get("discipline", "General")).strip() or "General"
@@ -176,48 +192,32 @@ def _get_project(slug: str) -> dict[str, Any] | None:
 
 
 def _registry_by_slug(registry: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    items = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
-    by_slug: dict[str, dict[str, Any]] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        slug = str(item.get("project_slug", "")).strip()
-        if slug:
-            by_slug[slug] = item
-    return by_slug
+    return command_center_state_ops.registry_by_slug(registry)
+
+
+def _workspace_route_payload(slug: str, entry: dict[str, Any] | None = None) -> dict[str, str]:
+    return command_center_state_ops.workspace_route_payload(slug, entry)
+
+
+def _build_conversation_preview_for_node(agent_id: str, project_slug: str) -> dict[str, Any]:
+    return build_conversation_preview(agent_id, project_slug=project_slug)
 
 
 def _apply_registry_identity(snapshot: dict[str, Any], entry: dict[str, Any] | None):
-    if not isinstance(snapshot, dict) or not isinstance(entry, dict):
-        return
-
-    assignee = str(entry.get("assignee", "")).strip()
-    superintendent = str(entry.get("superintendent", "")).strip()
-
-    if superintendent.lower() in ("", "unknown") and assignee.lower() not in ("", "unassigned"):
-        superintendent = assignee
-
-    if assignee:
-        snapshot["assignee"] = assignee
-    if superintendent:
-        snapshot["superintendent"] = superintendent
+    command_center_state_ops.apply_registry_identity(
+        snapshot,
+        entry,
+        resolve_node_identity_fn=resolve_node_identity,
+        conversation_preview_builder=_build_conversation_preview_for_node,
+    )
 
 
 def _apply_registry_identity_to_command_center_state(state: dict[str, Any], registry: dict[str, Any]):
-    if not isinstance(state, dict):
-        return
-    projects_payload = state.get("projects")
-    if not isinstance(projects_payload, list):
-        return
-
-    by_slug = _registry_by_slug(registry)
-    for project in projects_payload:
-        if not isinstance(project, dict):
-            continue
-        slug = str(project.get("slug", "")).strip()
-        if not slug:
-            continue
-        _apply_registry_identity(project, by_slug.get(slug))
+    command_center_state_ops.apply_registry_identity_to_command_center_state(
+        state,
+        registry,
+        apply_registry_identity_fn=_apply_registry_identity,
+    )
 
 
 def _refresh_command_center_state():
@@ -232,10 +232,10 @@ def _refresh_command_center_state():
         command_center_state = {
             "updated_at": "",
             "store_root": str(store_path),
-            "commander": {"name": "Sean (GC Owner)", "lastSeen": "Unknown"},
+            "commander": {"name": "The Commander", "lastSeen": "Unknown"},
             "orchestrator": {
                 "id": "CM-01",
-                "name": "Company Maestro",
+                "name": "The Commander",
                 "status": "Error",
                 "currentAction": "Failed to load command center state",
             },
@@ -246,9 +246,15 @@ def _refresh_command_center_state():
 
 def _refresh_control_plane_state():
     """Recompute fleet registry + machine-specific awareness state."""
-    global fleet_registry, awareness_state, command_center_state
+    global fleet_registry, awareness_state, command_center_state, agent_project_slug_index
     try:
         fleet_registry = sync_fleet_registry(store_path)
+        by_slug = _registry_by_slug(fleet_registry)
+        agent_project_slug_index = {}
+        for slug in projects.keys():
+            entry = by_slug.get(slug)
+            routes = _workspace_route_payload(slug, entry)
+            agent_project_slug_index[routes["agent_id"]] = slug
         if command_center_state:
             _apply_registry_identity_to_command_center_state(command_center_state, fleet_registry)
     except Exception as exc:
@@ -259,6 +265,7 @@ def _refresh_control_plane_state():
             "store_root": str(store_path),
             "projects": [],
         }
+        agent_project_slug_index = {}
 
     try:
         awareness_state = build_awareness_state(
@@ -282,18 +289,28 @@ def _refresh_all_state():
     _refresh_control_plane_state()
 
 
+def _resolve_agent_slug(agent_id: str) -> str | None:
+    clean = str(agent_id).strip()
+    if not clean:
+        return None
+    slug = agent_project_slug_index.get(clean)
+    if slug and slug in projects:
+        return slug
+
+    fallback_prefix = "maestro-project-"
+    if clean.startswith(fallback_prefix):
+        fallback = clean[len(fallback_prefix):].strip()
+        if fallback in projects:
+            return fallback
+    return None
+
+
 def _command_center_project_dirs_by_slug() -> dict[str, Path]:
-    """Index discoverable project directories by normalized slug."""
-    result: dict[str, Path] = {}
-    for project_dir in discover_project_dirs(store_path):
-        try:
-            snapshot = build_project_snapshot(project_dir)
-            slug = snapshot.get("slug")
-            if isinstance(slug, str) and slug:
-                result[slug] = project_dir
-        except Exception:
-            continue
-    return result
+    return command_center_state_ops.command_center_project_dirs_by_slug(
+        store_path,
+        discover_project_dirs_fn=discover_project_dirs,
+        build_project_snapshot_fn=build_project_snapshot,
+    )
 
 
 def _is_command_center_relevant(path: Path) -> bool:
@@ -495,6 +512,183 @@ def _get_page_bboxes(proj: dict[str, Any], page_name: str, pointer_ids: list[str
     return bboxes
 
 
+def _ensure_command_center_state():
+    if not command_center_state:
+        _refresh_command_center_state()
+
+
+def _ensure_awareness_state():
+    if not awareness_state:
+        _refresh_control_plane_state()
+
+
+def _ensure_fleet_registry():
+    if not fleet_registry:
+        _refresh_control_plane_state()
+
+
+def _load_command_center_project_detail(slug: str) -> dict[str, Any]:
+    return command_center_state_ops.load_command_center_project_detail(
+        slug,
+        store_path=store_path,
+        fleet_registry=fleet_registry,
+        ensure_fleet_registry=_ensure_fleet_registry,
+        discover_project_dirs_fn=discover_project_dirs,
+        build_project_snapshot_fn=build_project_snapshot,
+        build_project_detail_fn=build_project_detail,
+        apply_registry_identity_fn=_apply_registry_identity,
+    )
+
+
+def _registry_entry_for_slug(slug: str) -> dict[str, Any] | None:
+    return command_center_state_ops.registry_entry_for_slug(
+        slug,
+        fleet_registry=fleet_registry,
+        ensure_fleet_registry=_ensure_fleet_registry,
+    )
+
+
+def _node_agent_id_for_slug(slug: str) -> str:
+    return command_center_state_ops.node_agent_id_for_slug(
+        slug,
+        entry=_registry_entry_for_slug(slug),
+    )
+
+
+def _load_command_center_node_status(slug: str) -> dict[str, Any]:
+    return command_center_state_ops.load_command_center_node_status(
+        slug,
+        commander_node_slug=COMMANDER_NODE_SLUG,
+        awareness_state=awareness_state,
+        command_center_state=command_center_state,
+        ensure_awareness_state=_ensure_awareness_state,
+        load_project_detail_fn=_load_command_center_project_detail,
+        node_agent_id_for_slug_fn=_node_agent_id_for_slug,
+    )
+
+
+def _load_node_conversation(slug: str, limit: int = 100, before: str | None = None) -> dict[str, Any]:
+    return command_center_state_ops.load_node_conversation(
+        slug,
+        commander_node_slug=COMMANDER_NODE_SLUG,
+        projects=projects,
+        node_agent_id_for_slug_fn=_node_agent_id_for_slug,
+        read_agent_conversation_fn=read_agent_conversation,
+        limit=limit,
+        before=before,
+    )
+
+
+def _send_node_message(slug: str, message: str, source: str) -> dict[str, Any]:
+    payload = command_center_state_ops.send_node_message(
+        slug,
+        message,
+        source,
+        commander_node_slug=COMMANDER_NODE_SLUG,
+        projects=projects,
+        store_path=store_path,
+        fleet_registry=fleet_registry,
+        registry_entry_for_slug_fn=_registry_entry_for_slug,
+        send_agent_message_fn=send_agent_message,
+        save_fleet_registry_fn=save_fleet_registry,
+        max_message_chars=MAX_MESSAGE_CHARS,
+    )
+
+    _refresh_command_center_state()
+    _refresh_control_plane_state()
+    try:
+        asyncio.create_task(_broadcast_command_center_update())
+    except RuntimeError:
+        pass
+
+    return payload
+
+
+async def _run_command_center_action_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return await run_command_center_action(
+        payload,
+        store_path=store_path,
+        refresh_all_state=_refresh_all_state,
+        broadcast_command_center_update=_broadcast_command_center_update,
+        get_fleet_registry=lambda: fleet_registry,
+        get_awareness_state=lambda: awareness_state,
+        doctor_builder=build_doctor_report,
+    )
+
+
+async def api_command_center_state():
+    """Compatibility wrapper for tests and internal callers."""
+    _ensure_command_center_state()
+    _ensure_awareness_state()
+    return command_center_state
+
+
+async def api_command_center_project_detail(slug: str):
+    """Compatibility wrapper for tests and internal callers."""
+    try:
+        return _load_command_center_project_detail(slug)
+    except KeyError:
+        return JSONResponse({"error": f"Project '{slug}' not found"}, status_code=404)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to build project detail: {exc}"}, status_code=500)
+
+
+async def api_command_center_node_status(slug: str):
+    """Compatibility wrapper for node status endpoint."""
+    try:
+        return _load_command_center_node_status(slug)
+    except KeyError:
+        return JSONResponse({"error": f"Node '{slug}' not found"}, status_code=404)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to load node status: {exc}"}, status_code=500)
+
+
+async def api_command_center_node_conversation(slug: str, limit: int = 100, before: str | None = None):
+    """Compatibility wrapper for node conversation endpoint."""
+    try:
+        return _load_node_conversation(slug, limit=limit, before=before)
+    except KeyError:
+        return JSONResponse({"error": f"Node '{slug}' not found"}, status_code=404)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to load node conversation: {exc}"}, status_code=500)
+
+
+async def api_command_center_node_send(slug: str, payload: dict[str, Any]):
+    """Compatibility wrapper for node send endpoint."""
+    try:
+        return _send_node_message(
+            slug,
+            str(payload.get("message", "")),
+            str(payload.get("source", "command_center_ui")),
+        )
+    except KeyError:
+        return JSONResponse({"error": f"Node '{slug}' not found"}, status_code=404)
+    except ActionError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to send node message: {exc}"}, status_code=500)
+
+
+async def api_system_awareness():
+    """Compatibility wrapper for tests and internal callers."""
+    _ensure_awareness_state()
+    return awareness_state
+
+
+async def api_fleet_registry():
+    """Compatibility wrapper for tests and internal callers."""
+    _ensure_fleet_registry()
+    return fleet_registry
+
+
+async def api_command_center_actions(payload: dict[str, Any]):
+    """Compatibility wrapper for tests and internal callers."""
+    try:
+        return await _run_command_center_action_payload(payload)
+    except ActionError as exc:
+        return JSONResponse(exc.payload, status_code=exc.status_code)
+
+
 # ── FastAPI app ─────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -511,6 +705,22 @@ async def _lifespan(_: FastAPI):
 
 app = FastAPI(title="Maestro", docs_url=None, redoc_url=None, lifespan=_lifespan)
 
+app.include_router(create_command_center_router(CommandCenterRouterContext(
+    command_center_dir=COMMAND_CENTER_DIR,
+    command_center_ws_clients=command_center_ws_clients,
+    ensure_command_center_state=_ensure_command_center_state,
+    ensure_awareness_state=_ensure_awareness_state,
+    ensure_fleet_registry=_ensure_fleet_registry,
+    get_command_center_state=lambda: command_center_state,
+    get_awareness_state=lambda: awareness_state,
+    get_fleet_registry=lambda: fleet_registry,
+    load_project_detail=_load_command_center_project_detail,
+    load_project_status=_load_command_center_node_status,
+    read_node_conversation=_load_node_conversation,
+    send_node_message=_send_node_message,
+    run_action=_run_command_center_action_payload,
+)))
+
 
 @app.get("/api/projects")
 async def api_projects():
@@ -526,63 +736,25 @@ async def api_projects():
     ]}
 
 
-@app.get("/api/command-center/state")
-async def api_command_center_state():
-    if not command_center_state:
-        _refresh_command_center_state()
-    if not awareness_state:
-        _refresh_control_plane_state()
-    return command_center_state
-
-
-@app.get("/api/command-center/projects/{slug}")
-async def api_command_center_project_detail(slug: str):
-    project_dirs = _command_center_project_dirs_by_slug()
-    project_dir = project_dirs.get(slug)
-    if not project_dir:
-        return JSONResponse({"error": f"Project '{slug}' not found"}, status_code=404)
-
-    try:
-        detail = build_project_detail(project_dir)
-        if not fleet_registry:
-            _refresh_control_plane_state()
-        snapshot = detail.get("snapshot")
-        if isinstance(snapshot, dict):
-            entry = _registry_by_slug(fleet_registry).get(slug)
-            _apply_registry_identity(snapshot, entry)
-        return detail
-    except Exception as exc:
-        return JSONResponse({"error": f"Failed to build project detail: {exc}"}, status_code=500)
-
-
-@app.get("/api/system/awareness")
-async def api_system_awareness():
-    if not awareness_state:
-        _refresh_control_plane_state()
-    return awareness_state
-
-
-@app.get("/api/command-center/fleet-registry")
-async def api_fleet_registry():
+@app.get("/api/agents/workspaces")
+async def api_agent_workspace_index():
     if not fleet_registry:
         _refresh_control_plane_state()
-    return fleet_registry
-
-
-@app.post("/api/command-center/actions")
-async def api_command_center_actions(payload: dict[str, Any]):
-    try:
-        return await run_command_center_action(
-            payload,
-            store_path=store_path,
-            refresh_all_state=_refresh_all_state,
-            broadcast_command_center_update=_broadcast_command_center_update,
-            get_fleet_registry=lambda: fleet_registry,
-            get_awareness_state=lambda: awareness_state,
-            doctor_builder=build_doctor_report,
-        )
-    except ActionError as exc:
-        return JSONResponse(exc.payload, status_code=exc.status_code)
+    by_slug = _registry_by_slug(fleet_registry)
+    payload = []
+    for slug, proj in projects.items():
+        entry = by_slug.get(slug)
+        routes = _workspace_route_payload(slug, entry)
+        payload.append({
+            "slug": slug,
+            "name": proj.get("name", slug),
+            "status": str(entry.get("status", "active")) if isinstance(entry, dict) else "active",
+            "agent_id": routes["agent_id"],
+            "project_workspace_url": routes["project_workspace_url"],
+            "agent_workspace_url": routes["agent_workspace_url"],
+        })
+    payload.sort(key=lambda item: str(item.get("name", "")).lower())
+    return {"agents": payload}
 
 
 @app.get("/{slug}/api/project")
@@ -593,6 +765,7 @@ async def api_project(slug: str):
     return {
         "name": proj["name"],
         "slug": proj["slug"],
+        "routes": _workspace_route_payload(slug, _registry_by_slug(fleet_registry).get(slug)),
         "page_count": len(proj.get("pages", {})),
         "pointer_count": sum(len(p.get("pointers", {})) for p in proj.get("pages", {}).values()),
         "disciplines": proj.get("disciplines", []),
@@ -829,30 +1002,119 @@ async def api_workspace(slug: str, ws_slug: str):
     return {**ws, "pages": enriched_pages, "generated_images": generated_images}
 
 
+# ── Agent-scoped workspace API routes ──────────────────────────
+
+@app.get("/agents/{agent_id}/workspace/api/project")
+async def api_agent_project(agent_id: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_project(slug)
+
+
+@app.get("/agents/{agent_id}/workspace/api/disciplines")
+async def api_agent_disciplines(agent_id: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_disciplines(slug)
+
+
+@app.get("/agents/{agent_id}/workspace/api/pages")
+async def api_agent_pages(agent_id: str, discipline: str | None = None):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_pages(slug, discipline=discipline)
+
+
+@app.get("/agents/{agent_id}/workspace/api/pages/{page_name}")
+async def api_agent_page(agent_id: str, page_name: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_page(slug, page_name)
+
+
+@app.get("/agents/{agent_id}/workspace/api/pages/{page_name}/thumb")
+async def api_agent_page_thumb(agent_id: str, page_name: str, w: int = 800, q: int = 80):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_page_thumb(slug, page_name, w=w, q=q)
+
+
+@app.get("/agents/{agent_id}/workspace/api/pages/{page_name}/image")
+async def api_agent_page_image(agent_id: str, page_name: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_page_image(slug, page_name)
+
+
+@app.get("/agents/{agent_id}/workspace/api/pages/{page_name}/regions")
+async def api_agent_page_regions(agent_id: str, page_name: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_page_regions(slug, page_name)
+
+
+@app.get("/agents/{agent_id}/workspace/api/pages/{page_name}/regions/{region_id}")
+async def api_agent_region(agent_id: str, page_name: str, region_id: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_region(slug, page_name, region_id)
+
+
+@app.get("/agents/{agent_id}/workspace/api/pages/{page_name}/regions/{region_id}/crop")
+async def api_agent_region_crop(agent_id: str, page_name: str, region_id: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_region_crop(slug, page_name, region_id)
+
+
+@app.get("/agents/{agent_id}/workspace/api/workspaces")
+async def api_agent_workspaces_for_agent(agent_id: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_workspaces(slug)
+
+
+@app.get("/agents/{agent_id}/workspace/api/workspaces/{ws_slug}")
+async def api_agent_workspace(agent_id: str, ws_slug: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_workspace(slug, ws_slug)
+
+
+@app.get("/agents/{agent_id}/workspace/api/workspaces/{ws_slug}/images/{filename}")
+async def api_agent_workspace_image(agent_id: str, ws_slug: str, filename: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_workspace_image(slug, ws_slug, filename)
+
+
+@app.get("/agents/{agent_id}/workspace/api/workspaces/{ws_slug}/images/{filename}/thumb")
+async def api_agent_workspace_image_thumb(
+    agent_id: str,
+    ws_slug: str,
+    filename: str,
+    w: int = 800,
+    q: int = 80,
+):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_workspace_image_thumb(slug, ws_slug, filename, w=w, q=q)
+
+
 # ── WebSocket ───────────────────────────────────────────────────
-
-@app.websocket("/ws/command-center")
-async def websocket_command_center(websocket: WebSocket):
-    await websocket.accept()
-    command_center_ws_clients.add(websocket)
-    try:
-        if not command_center_state:
-            _refresh_command_center_state()
-        if not awareness_state:
-            _refresh_control_plane_state()
-        await websocket.send_text(json.dumps({
-            "type": "command_center_init",
-            "state": command_center_state,
-            "awareness": awareness_state,
-        }))
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        command_center_ws_clients.discard(websocket)
-
-
 @app.websocket("/{slug}/ws")
 async def websocket_endpoint(slug: str, websocket: WebSocket):
     proj = _get_project(slug)
@@ -876,48 +1138,16 @@ async def websocket_endpoint(slug: str, websocket: WebSocket):
         ws_clients.get(slug, set()).discard(websocket)
 
 
+@app.websocket("/agents/{agent_id}/workspace/ws")
+async def websocket_agent_workspace(agent_id: str, websocket: WebSocket):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        await websocket.close(code=4004)
+        return
+    await websocket_endpoint(slug, websocket)
+
+
 # ── Frontend SPA ────────────────────────────────────────────────
-
-
-def _command_center_index_path() -> Path:
-    return COMMAND_CENTER_DIR / "index.html"
-
-
-@app.get("/command-center")
-async def command_center():
-    index_path = _command_center_index_path()
-    if index_path.exists():
-        return FileResponse(index_path)
-    return JSONResponse(
-        {
-            "error": "Command Center frontend not found",
-            "hint": "Build with: cd command_center_frontend && npm install && npm run build",
-        },
-        status_code=404,
-    )
-
-
-@app.get("/command-center/assets/{rest:path}")
-async def command_center_assets(rest: str):
-    asset_path = COMMAND_CENTER_DIR / "assets" / rest
-    if asset_path.exists() and asset_path.is_file():
-        return FileResponse(asset_path)
-    return JSONResponse({"error": "Not found"}, status_code=404)
-
-
-@app.get("/command-center/{rest:path}")
-async def command_center_spa(rest: str):
-    if rest.startswith("api/") or rest.startswith("ws/"):
-        return JSONResponse({"error": "Not found"}, status_code=404)
-
-    file_path = COMMAND_CENTER_DIR / rest
-    if file_path.exists() and file_path.is_file():
-        return FileResponse(file_path)
-
-    index_path = _command_center_index_path()
-    if index_path.exists():
-        return FileResponse(index_path)
-    return JSONResponse({"error": "Command Center frontend not found"}, status_code=404)
 
 
 @app.get("/assets/{rest:path}")
@@ -927,6 +1157,32 @@ async def serve_static_assets(rest: str):
         if asset_path.exists() and asset_path.is_file():
             return FileResponse(asset_path)
     return JSONResponse({"error": "Not found"}, status_code=404)
+
+
+@app.get("/agents/{agent_id}/workspace/{rest:path}")
+async def serve_agent_workspace(agent_id: str, rest: str = ""):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+
+    if rest.startswith("api/") or rest.startswith("ws/"):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    if rest and FRONTEND_DIR.exists():
+        asset_path = FRONTEND_DIR / rest
+        if asset_path.exists() and asset_path.is_file():
+            return FileResponse(asset_path)
+
+    index_path = FRONTEND_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+
+    return JSONResponse({"error": "Frontend not built"}, status_code=404)
+
+
+@app.get("/agents/{agent_id}/workspace")
+async def serve_agent_workspace_root(agent_id: str):
+    return await serve_agent_workspace(agent_id, "")
 
 
 @app.get("/{slug}/{rest:path}")

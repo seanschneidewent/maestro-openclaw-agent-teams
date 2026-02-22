@@ -18,6 +18,7 @@ import json
 import sys
 from pathlib import Path
 
+from .agent_role import is_company_role
 from .install_state import resolve_fleet_store_root
 
 
@@ -405,14 +406,29 @@ def _run_license(args: argparse.Namespace):
 
 def _run_tools(args: argparse.Namespace):
     import os
+    from .config import load_dotenv
     from .tools import MaestroTools
 
-    store = os.environ.get("MAESTRO_STORE", "knowledge_store")
     workspace = os.environ.get("MAESTRO_WORKSPACE")
-    tools = MaestroTools(
-        store_path=store,
-        workspace_root=Path(workspace) if workspace else None,
-    )
+    load_dotenv(Path(workspace) if workspace else None)
+
+    workspace_path = Path(workspace) if workspace else None
+    if is_company_role(workspace_path):
+        print(json.dumps({
+            "error": "Company Maestro is control-plane only. Project knowledge tools are disabled here.",
+            "next_step": "Route the question to a project maestro node from Command Center.",
+        }, indent=2))
+        return
+
+    store = os.environ.get("MAESTRO_STORE", "knowledge_store")
+    try:
+        tools = MaestroTools(
+            store_path=store,
+            workspace_root=workspace_path,
+        )
+    except RuntimeError as exc:
+        print(json.dumps({"error": str(exc)}, indent=2))
+        return
 
     commands = {
         "list_disciplines": lambda: tools.list_disciplines(),

@@ -201,3 +201,79 @@ def test_doctor_fix_auto_approves_single_device_pairing_request(tmp_path: Path, 
     )
     assert code == 0
     assert ["openclaw", "devices", "approve", "--latest", "--json"] in commands
+
+
+def test_doctor_fix_adds_missing_telegram_bindings(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    workspace = home / ".openclaw" / "workspace-maestro"
+    store = tmp_path / "knowledge_store"
+    store.mkdir(parents=True, exist_ok=True)
+
+    config_path = home / ".openclaw" / "openclaw.json"
+    _write_json(
+        config_path,
+        {
+            "env": {"OPENAI_API_KEY": "sk-test-1234567890"},
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-company",
+                        "name": "Maestro (TestCo)",
+                        "default": True,
+                        "model": "openai/gpt-5.2",
+                        "workspace": str(workspace),
+                    },
+                    {
+                        "id": "maestro-project-alpha",
+                        "name": "Maestro (Alpha)",
+                        "default": False,
+                        "model": "openai/gpt-5.2",
+                        "workspace": str(workspace / "projects" / "alpha"),
+                    },
+                ]
+            },
+            "channels": {
+                "telegram": {
+                    "enabled": True,
+                    "accounts": {
+                        "maestro-company": {"botToken": "123456:AAA"},
+                        "maestro-project-alpha": {"botToken": "123456:BBB"},
+                    },
+                }
+            },
+            "gateway": {
+                "mode": "local",
+                "auth": {"token": "abc123"},
+                "remote": {"token": "abc123"},
+            },
+        },
+    )
+
+    def _fake_run_cmd(args: list[str], timeout: int = 25):
+        if args[:2] == ["openclaw", "status"]:
+            return True, "gateway service running"
+        if args[:3] == ["openclaw", "devices", "list"]:
+            return True, '{"pending":[],"paired":[]}'
+        return True, ""
+
+    monkeypatch.setattr(doctor, "_run_cmd", _fake_run_cmd)
+
+    code = run_doctor(
+        fix=True,
+        store_override=str(store),
+        restart_gateway=False,
+        json_output=False,
+        home_dir=home,
+    )
+    assert code == 0
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    bindings = saved.get("bindings", [])
+    assert {
+        "agentId": "maestro-company",
+        "match": {"channel": "telegram", "accountId": "maestro-company"},
+    } in bindings
+    assert {
+        "agentId": "maestro-project-alpha",
+        "match": {"channel": "telegram", "accountId": "maestro-project-alpha"},
+    } in bindings

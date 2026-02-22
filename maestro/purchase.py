@@ -19,6 +19,7 @@ from rich.prompt import Confirm, Prompt
 from .control_plane import (
     build_purchase_status,
     create_project_node,
+    ensure_telegram_account_bindings,
     project_control_payload,
     resolve_network_urls,
     sync_fleet_registry,
@@ -103,20 +104,21 @@ def _validate_api_key(provider_env_key: str, key: str) -> tuple[bool, str]:
     return False, "Unsupported provider"
 
 
-def _validate_telegram_token(token: str) -> tuple[bool, str, str]:
+def _validate_telegram_token(token: str) -> tuple[bool, str, str, str]:
     try:
         response = httpx.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10)
     except Exception as exc:
-        return False, "", f"Network error: {exc}"
+        return False, "", "", f"Network error: {exc}"
 
     if response.status_code != 200:
-        return False, "", f"Telegram status={response.status_code}"
+        return False, "", "", f"Telegram status={response.status_code}"
     payload = response.json()
     if not isinstance(payload, dict) or not payload.get("ok"):
-        return False, "", "Telegram API did not return ok=true"
+        return False, "", "", "Telegram API did not return ok=true"
     result = payload.get("result", {})
     username = result.get("username", "") if isinstance(result, dict) else ""
-    return True, str(username), "validated"
+    display_name = result.get("first_name", "") if isinstance(result, dict) else ""
+    return True, str(username), str(display_name), "validated"
 
 
 def _project_exists(registry: dict[str, Any], slug: str) -> bool:
@@ -170,7 +172,7 @@ def _ensure_card_on_file(*, non_interactive: bool, dry_run: bool) -> tuple[dict[
         return state, False
 
     console.print(Panel(
-        "No billing card found for this Company Maestro.\n"
+        "No billing card found for this Commander workspace.\n"
         "Add a card to purchase and activate additional project nodes.",
         title="Billing",
         border_style="yellow",
@@ -231,6 +233,8 @@ def _update_openclaw_for_project(
     provider_env_key: str | None,
     provider_key: str | None,
     telegram_token: str,
+    telegram_bot_username: str,
+    telegram_bot_display_name: str,
     assignee: str,
     project_workspace: Path,
     project_store_path: Path,
@@ -258,13 +262,17 @@ def _update_openclaw_for_project(
         "dmPolicy": "pairing",
         "groupPolicy": "allowlist",
         "streamMode": "partial",
+        "username": telegram_bot_username.strip(),
+        "display_name": telegram_bot_display_name.strip(),
     }
+    binding_changes = ensure_telegram_account_bindings(config)
 
     workspace_env = render_workspace_env(
         store_path=str(project_store_path),
         provider_env_key=provider_env_key,
         provider_key=provider_key,
         gemini_key=env.get("GEMINI_API_KEY") if isinstance(env.get("GEMINI_API_KEY"), str) else None,
+        agent_role="project",
     )
     metadata = {
         "project_slug": project_slug,
@@ -273,6 +281,8 @@ def _update_openclaw_for_project(
         "model": model,
         "provider_env_key": provider_env_key or "",
         "telegram_token_hash": hashlib.sha256(telegram_token.encode()).hexdigest(),
+        "telegram_bot_username": telegram_bot_username.strip(),
+        "telegram_bot_display_name": telegram_bot_display_name.strip(),
     }
 
     if not dry_run:
@@ -285,6 +295,7 @@ def _update_openclaw_for_project(
         "agent_id": agent_id,
         "workspace_env_written": not dry_run,
         "metadata_written": not dry_run,
+        "binding_changes": binding_changes,
     }
 
 
@@ -506,8 +517,14 @@ def run_purchase(
         selected_telegram_token = Prompt.ask("Project Telegram bot token").strip()
 
     bot_username = ""
+    bot_display_name = ""
     if not skip_remote_validation:
-        ok, bot_username, detail = _validate_telegram_token(selected_telegram_token)
+        validation = _validate_telegram_token(selected_telegram_token)
+        if len(validation) == 4:
+            ok, bot_username, bot_display_name, detail = validation
+        else:  # Backward-compat for monkeypatched tests returning legacy tuple.
+            ok, bot_username, detail = validation  # type: ignore[misc]
+            bot_display_name = bot_username
         if not ok:
             if non_interactive:
                 console.print(f"[red]Telegram token validation failed: {detail}[/]")
@@ -570,6 +587,8 @@ def run_purchase(
         ingest_input_root=None,
         superintendent=superintendent or assignee,
         assignee=assignee,
+        telegram_bot_username=bot_username,
+        telegram_bot_display_name=bot_display_name,
         register_agent=True,
         agent_model=selected_model,
         dry_run=dry_run,
@@ -594,6 +613,8 @@ def run_purchase(
         provider_env_key=provider_env_key,
         provider_key=selected_api_key,
         telegram_token=selected_telegram_token,
+        telegram_bot_username=bot_username,
+        telegram_bot_display_name=bot_display_name,
         assignee=assignee,
         project_workspace=workspace_path,
         project_store_path=project_store_path,
@@ -622,6 +643,8 @@ def run_purchase(
         "project_slug": project_slug,
         "project_name": project_name,
         "assignee": assignee,
+        "telegram_bot_username": bot_username,
+        "telegram_bot_display_name": bot_display_name,
         "store_root": str(store_root),
         "project_store_path": str(project_store_path),
         "model": selected_model,

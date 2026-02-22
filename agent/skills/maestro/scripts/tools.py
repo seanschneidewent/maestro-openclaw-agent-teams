@@ -23,6 +23,16 @@ WORKSPACE = Path(os.environ.get("MAESTRO_WORKSPACE", SCRIPT_DIR.parent.parent.pa
 if not os.environ.get("MAESTRO_STORE"):
     os.environ["MAESTRO_STORE"] = str(WORKSPACE / "knowledge_store")
 
+# Company workspace is control-plane only.
+from maestro.agent_role import is_company_role
+
+if is_company_role(WORKSPACE):
+    print(
+        "{\"error\": \"Company Maestro is control-plane only. "
+        "Project knowledge tools are disabled here.\"}"
+    )
+    raise SystemExit(0)
+
 # Delegate to the package CLI
 from maestro.cli import _run_tools
 import argparse

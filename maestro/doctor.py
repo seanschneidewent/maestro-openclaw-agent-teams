@@ -15,10 +15,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .control_plane import resolve_network_urls
+from .control_plane import ensure_telegram_account_bindings, resolve_network_urls
 from .utils import load_json, save_json
 from .install_state import resolve_fleet_store_root, save_install_state
-from .workspace_templates import provider_env_key_for_model, render_tools_md
+from .workspace_templates import provider_env_key_for_model, render_company_agents_md, render_tools_md
 
 
 PROVIDER_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY")
@@ -182,6 +182,124 @@ def _sync_workspace_tools_md(
     )
 
 
+def _sync_workspace_agents_md(
+    workspace_root: Path | None,
+    fix: bool,
+) -> DoctorCheck:
+    if not workspace_root:
+        return DoctorCheck(
+            name="workspace_agents_md",
+            ok=False,
+            detail="Company workspace not configured",
+            warning=True,
+        )
+
+    agents_path = workspace_root / "AGENTS.md"
+    desired = render_company_agents_md()
+    if not agents_path.exists():
+        if fix:
+            agents_path.parent.mkdir(parents=True, exist_ok=True)
+            agents_path.write_text(desired, encoding="utf-8")
+            return DoctorCheck(
+                name="workspace_agents_md",
+                ok=True,
+                detail=f"Created {agents_path}",
+                fixed=True,
+            )
+        return DoctorCheck(
+            name="workspace_agents_md",
+            ok=False,
+            detail=f"Missing AGENTS.md at {agents_path}",
+            warning=True,
+        )
+
+    current = agents_path.read_text(encoding="utf-8")
+    if "Check `knowledge_store/` — this is what you know" in current:
+        if fix:
+            agents_path.write_text(desired, encoding="utf-8")
+            return DoctorCheck(
+                name="workspace_agents_md",
+                ok=True,
+                detail="Updated company AGENTS.md to control-plane policy",
+                fixed=True,
+            )
+        return DoctorCheck(
+            name="workspace_agents_md",
+            ok=False,
+            detail="Company AGENTS.md is legacy project-style policy",
+            warning=True,
+        )
+
+    return DoctorCheck(name="workspace_agents_md", ok=True, detail="Company AGENTS.md policy is current")
+
+
+def _sync_workspace_env_role(
+    workspace_root: Path | None,
+    fix: bool,
+) -> DoctorCheck:
+    if not workspace_root:
+        return DoctorCheck(
+            name="workspace_env_role",
+            ok=False,
+            detail="Company workspace not configured",
+            warning=True,
+        )
+
+    env_path = workspace_root / ".env"
+    if not env_path.exists():
+        return DoctorCheck(
+            name="workspace_env_role",
+            ok=False,
+            detail=f"Missing .env at {env_path}",
+            warning=True,
+        )
+
+    current = env_path.read_text(encoding="utf-8")
+    for raw_line in current.splitlines():
+        line = raw_line.strip()
+        if line.startswith("MAESTRO_AGENT_ROLE="):
+            value = line.split("=", 1)[1].strip().lower()
+            if value == "company":
+                return DoctorCheck(name="workspace_env_role", ok=True, detail="MAESTRO_AGENT_ROLE=company")
+            if fix:
+                lines = current.splitlines()
+                out = []
+                for item in lines:
+                    if item.strip().startswith("MAESTRO_AGENT_ROLE="):
+                        out.append("MAESTRO_AGENT_ROLE=company")
+                    else:
+                        out.append(item)
+                env_path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
+                return DoctorCheck(
+                    name="workspace_env_role",
+                    ok=True,
+                    detail="Normalized MAESTRO_AGENT_ROLE=company in .env",
+                    fixed=True,
+                )
+            return DoctorCheck(
+                name="workspace_env_role",
+                ok=False,
+                detail=f"MAESTRO_AGENT_ROLE is '{value}', expected 'company'",
+                warning=True,
+            )
+
+    if fix:
+        with env_path.open("a", encoding="utf-8") as handle:
+            handle.write("MAESTRO_AGENT_ROLE=company\n")
+        return DoctorCheck(
+            name="workspace_env_role",
+            ok=True,
+            detail="Added MAESTRO_AGENT_ROLE=company to .env",
+            fixed=True,
+        )
+    return DoctorCheck(
+        name="workspace_env_role",
+        ok=False,
+        detail="MAESTRO_AGENT_ROLE missing in .env",
+        warning=True,
+    )
+
+
 def _tail_text(path: Path, max_bytes: int = 180_000) -> str:
     if not path.exists():
         return ""
@@ -331,6 +449,38 @@ def _sync_gateway_auth_tokens(
         name="gateway_auth_tokens",
         ok=True,
         detail="Normalized gateway auth token and synced remote token",
+        fixed=True,
+    )
+
+
+def _sync_telegram_bindings(
+    config: dict[str, Any],
+    config_path: Path,
+    fix: bool,
+) -> DoctorCheck:
+    changes = ensure_telegram_account_bindings(config)
+    if not changes:
+        return DoctorCheck(
+            name="telegram_bindings",
+            ok=True,
+            detail="Telegram account routing bindings are aligned",
+        )
+
+    if not fix:
+        return DoctorCheck(
+            name="telegram_bindings",
+            ok=False,
+            detail=(
+                f"{len(changes)} Telegram account binding(s) missing. "
+                "Run maestro doctor --fix."
+            ),
+        )
+
+    save_json(config_path, config)
+    return DoctorCheck(
+        name="telegram_bindings",
+        ok=True,
+        detail=f"Added {len(changes)} Telegram account routing binding(s)",
         fixed=True,
     )
 
@@ -561,8 +711,11 @@ def build_doctor_report(
         active_provider_env_key=provider_env_key,
         fix=fix,
     ))
+    checks.append(_sync_workspace_agents_md(workspace, fix=fix))
+    checks.append(_sync_workspace_env_role(workspace, fix=fix))
     checks.append(_sync_launchagent_env(home, config_env=config_env, fix=fix))
     checks.append(_rotate_stale_sessions(home, fix=fix))
+    checks.append(_sync_telegram_bindings(config, config_path=config_path, fix=fix))
     gateway_token_check = _sync_gateway_auth_tokens(config, config_path=config_path, fix=fix)
     checks.append(gateway_token_check)
     checks.append(_sync_gateway_launchagent_token(fix=fix, token_check=gateway_token_check))

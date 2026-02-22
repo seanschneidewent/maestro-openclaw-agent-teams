@@ -15,6 +15,7 @@ from maestro.control_plane import (
     move_project_store,
     onboard_project_store,
     project_control_payload,
+    register_project_agent,
     sync_fleet_registry,
 )
 
@@ -129,9 +130,67 @@ def test_awareness_state_contract(tmp_path: Path):
     assert awareness["paths"]["store_root"] == str(tmp_path.resolve())
     assert "ingest_command" in awareness["available_actions"]
     assert "doctor_fix" in awareness["available_actions"]
+    assert "conversation_read" in awareness["available_actions"]
+    assert "conversation_send" in awareness["available_actions"]
+    assert awareness["commander"]["display_name"] == "The Commander"
     assert awareness["purchase"]["purchase_command"] == "maestro-purchase"
     assert "gateway_auth" in awareness["services"]["openclaw"]
     assert "device_pairing" in awareness["services"]["openclaw"]
+    assert "routing" in awareness["services"]["telegram"]
+
+
+def test_register_project_agent_adds_telegram_binding(tmp_path: Path):
+    home = tmp_path / "home"
+    workspace = home / ".openclaw" / "workspace-maestro"
+    project_slug = "alpha-project"
+    agent_id = f"maestro-project-{project_slug}"
+
+    _write_json(
+        home / ".openclaw" / "openclaw.json",
+        {
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-company",
+                        "name": "Maestro (TestCo)",
+                        "default": True,
+                        "model": "openai/gpt-5.2",
+                        "workspace": str(workspace),
+                    }
+                ]
+            },
+            "channels": {
+                "telegram": {
+                    "enabled": True,
+                    "accounts": {
+                        agent_id: {
+                            "botToken": "123456:ABCDEF",
+                            "dmPolicy": "pairing",
+                            "groupPolicy": "allowlist",
+                            "streamMode": "partial",
+                        }
+                    },
+                }
+            },
+        },
+    )
+
+    result = register_project_agent(
+        store_root=tmp_path,
+        project_slug=project_slug,
+        project_name="Alpha Project",
+        project_store_path=str(tmp_path / "alpha-project"),
+        home_dir=home,
+        dry_run=False,
+    )
+    assert result["ok"] is True
+    assert result["binding_changes"]
+
+    saved = json.loads((home / ".openclaw" / "openclaw.json").read_text(encoding="utf-8"))
+    assert {
+        "agentId": agent_id,
+        "match": {"channel": "telegram", "accountId": agent_id},
+    } in saved.get("bindings", [])
 
 
 def test_server_control_plane_endpoints(tmp_path: Path, monkeypatch):
@@ -184,6 +243,34 @@ def test_server_control_plane_endpoints(tmp_path: Path, monkeypatch):
     assert doctor["ok"] is True
     assert doctor["doctor"]["ok"] is True
     assert "awareness" in doctor
+
+    upsert_directive = asyncio.run(server.api_command_center_actions({
+        "action": "upsert_system_directive",
+        "directive": {
+            "id": "DIR-TEST",
+            "title": "Test Directive",
+            "body": "Use command center as control plane",
+            "status": "active",
+            "scope": "global",
+            "priority": 90,
+        },
+    }))
+    assert upsert_directive["ok"] is True
+    assert upsert_directive["directive"]["id"] == "DIR-TEST"
+
+    list_directives = asyncio.run(server.api_command_center_actions({
+        "action": "list_system_directives",
+    }))
+    assert list_directives["ok"] is True
+    assert list_directives["count"] >= 1
+    assert any(item.get("id") == "DIR-TEST" for item in list_directives["directives"])
+
+    archive_directive = asyncio.run(server.api_command_center_actions({
+        "action": "archive_system_directive",
+        "directive_id": "DIR-TEST",
+    }))
+    assert archive_directive["ok"] is True
+    assert archive_directive["directive"]["status"] == "archived"
 
     missing = asyncio.run(server.api_command_center_actions({"action": "preflight_ingest"}))
     assert isinstance(missing, JSONResponse)

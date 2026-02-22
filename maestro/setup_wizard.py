@@ -26,10 +26,10 @@ from rich.prompt import Prompt, Confirm
 from rich.align import Align
 from rich import box
 try:
-    from .workspace_templates import render_tools_md, render_workspace_env
+    from .workspace_templates import render_company_agents_md, render_tools_md, render_workspace_env
     from .install_state import save_install_state
 except ImportError:  # pragma: no cover - direct script execution fallback
-    from maestro.workspace_templates import render_tools_md, render_workspace_env
+    from maestro.workspace_templates import render_company_agents_md, render_tools_md, render_workspace_env
     from maestro.install_state import save_install_state
 
 # Theme colors
@@ -735,7 +735,7 @@ class SetupWizard:
         config['env'][env_key] = self.progress['provider_key']
         config['env']['GEMINI_API_KEY'] = self.progress['gemini_key']
 
-        # Company Maestro as default agent
+        # The Commander as default agent
         if 'agents' not in config:
             config['agents'] = {}
         if 'list' not in config['agents']:
@@ -749,7 +749,7 @@ class SetupWizard:
 
         config['agents']['list'].append({
             "id": "maestro-company",
-            "name": f"Maestro ({self.progress.get('company_name', 'Company')})",
+            "name": "The Commander",
             "default": True,
             "model": self.progress['model'],
             "workspace": workspace_path,
@@ -791,8 +791,8 @@ class SetupWizard:
         return True
 
     def step_configure_maestro(self) -> bool:
-        """Step 8: Configure Company Maestro workspace"""
-        step_header(8, "Company Maestro Workspace")
+        """Step 8: Configure Commander workspace"""
+        step_header(8, "Commander Workspace")
 
         default_workspace = Path.home() / ".openclaw" / "workspace-maestro"
 
@@ -823,6 +823,11 @@ class SetupWizard:
                 success(f"Copied {filename}")
             else:
                 warning(f"Couldn't find {filename} — you can add it later")
+
+        # Company workspace uses control-plane-only AGENTS instructions.
+        with open(workspace / "AGENTS.md", "w") as f:
+            f.write(render_company_agents_md())
+        success("Generated Company AGENTS.md")
 
         company_name = self.progress.get('company_name', 'My Company')
         provider_env_key = self.progress.get('provider_env_key', 'GEMINI_API_KEY')
@@ -857,6 +862,7 @@ class SetupWizard:
             provider_env_key=self.progress.get('provider_env_key', 'GEMINI_API_KEY'),
             provider_key=self.progress.get('provider_key', ''),
             gemini_key=self.progress.get('gemini_key', ''),
+            agent_role="company",
         )
         with open(env_file, 'w') as f:
             f.write(env_content)
@@ -1011,7 +1017,7 @@ class SetupWizard:
         # Build summary rows
         rows = []
         rows.append(f"[bold white]Company:[/]     {company_name}")
-        rows.append(f"[bold white]Agent:[/]       Company Maestro (default)")
+        rows.append(f"[bold white]Agent:[/]       The Commander (default)")
         rows.append(f"[bold white]Provider:[/]    {self.progress.get('provider', 'N/A').title()}")
         rows.append(f"[bold white]Model:[/]       {self.progress.get('model', 'N/A')}")
         if self.progress.get('bot_username'):
@@ -1043,7 +1049,7 @@ class SetupWizard:
                 next_lines.append(f"  2. Message your bot:        [bold white]@{self.progress['bot_username']}[/] on Telegram")
             next_lines.append(f"  3. Open Command Center:     [bold white]{cc_url}[/]")
         next_lines.append("")
-        next_lines.append(f"  [{DIM}]Company Maestro will help you set up your first project.[/]")
+        next_lines.append(f"  [{DIM}]The Commander will help you set up your first project.[/]")
 
         console.print()
         console.print(Panel(

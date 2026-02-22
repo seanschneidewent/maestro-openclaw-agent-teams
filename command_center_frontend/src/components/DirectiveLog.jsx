@@ -10,7 +10,8 @@ function SignalPulse() {
 }
 
 export default function DirectiveLog({ directive }) {
-  const isActive = directive.status === 'broadcasting'
+  const loweredStatus = String(directive.status || '').toLowerCase()
+  const isActive = loweredStatus === 'broadcasting' || loweredStatus === 'active'
 
   return (
     <div
@@ -34,7 +35,7 @@ export default function DirectiveLog({ directive }) {
 
       <div className="mb-4">
         <span className="text-[9px] uppercase tracking-widest text-slate-500 block mb-1">
-          Source: {directive.source || 'Command Center'}
+          Source: {directive.source || 'System Directive'}
         </span>
         <p className="text-slate-300 text-sm leading-relaxed font-sans border-l border-slate-700 pl-3">
           "{directive.command || 'No directives yet. Company Maestro is monitoring project telemetry.'}"
@@ -44,7 +45,7 @@ export default function DirectiveLog({ directive }) {
       <div className="bg-black/40 p-2 border border-white/5 flex items-center justify-between">
         <span className="text-[9px] uppercase tracking-widest text-slate-500">Fleet Response</span>
         <span className={`text-[10px] font-mono ${isActive ? 'text-amber-400' : 'text-[#00e676]'}`}>
-          {directive.acknowledgments || 'Monitoring'}
+          {directive.acknowledgments || `Scope: ${directive.scope || 'global'}`}
         </span>
       </div>
     </div>

@@ -12,6 +12,11 @@ from .control_plane import (
     project_control_payload,
     register_project_agent,
 )
+from .system_directives import (
+    archive_system_directive,
+    list_system_directives,
+    upsert_system_directive,
+)
 
 
 class ActionError(Exception):
@@ -79,6 +84,43 @@ async def run_command_center_action(
             "awareness": get_awareness_state(),
         }
 
+    if action == "list_system_directives":
+        include_archived = _to_bool(payload.get("include_archived"), default=False)
+        directives = list_system_directives(store_path, include_archived=include_archived)
+        return {
+            "ok": True,
+            "directives": directives,
+            "count": len(directives),
+        }
+
+    if action == "upsert_system_directive":
+        directive = payload.get("directive")
+        if not isinstance(directive, dict):
+            raise ActionError(400, {"error": "Missing directive object"})
+        result = upsert_system_directive(
+            store_path,
+            directive,
+            updated_by=str(payload.get("updated_by", "command_center")),
+        )
+        refresh_all_state()
+        await broadcast_command_center_update()
+        return result
+
+    if action == "archive_system_directive":
+        directive_id = str(payload.get("directive_id", "")).strip()
+        if not directive_id:
+            raise ActionError(400, {"error": "Missing directive_id"})
+        result = archive_system_directive(
+            store_path,
+            directive_id,
+            updated_by=str(payload.get("updated_by", "command_center")),
+        )
+        if not result.get("ok"):
+            raise ActionError(404, result)
+        refresh_all_state()
+        await broadcast_command_center_update()
+        return result
+
     if action == "create_project_node":
         project_name = str(payload.get("project_name", "")).strip()
         if not project_name:
@@ -142,6 +184,7 @@ async def run_command_center_action(
             return {
                 "ok": True,
                 "project": control.get("project"),
+                "workspace": control.get("workspace"),
                 "ingest": control.get("ingest"),
                 "preflight": control.get("preflight"),
             }
@@ -149,11 +192,13 @@ async def run_command_center_action(
             return {
                 "ok": True,
                 "project": control.get("project"),
+                "workspace": control.get("workspace"),
                 "preflight": control.get("preflight"),
             }
         return {
             "ok": True,
             "project": control.get("project"),
+            "workspace": control.get("workspace"),
             "index_command": control.get("index_command"),
         }
 
