@@ -2,13 +2,12 @@ import React, { useEffect, useRef } from 'react'
 import useNodeModalData from '../hooks/useNodeModalData'
 import ControlPlaneSection from './node_modal/ControlPlaneSection'
 import ConversationSection from './node_modal/ConversationSection'
-import ProjectDrawersSection from './node_modal/ProjectDrawersSection'
+import ScheduleSection from './node_modal/ScheduleSection'
+import WorkspaceAccessSection from './node_modal/WorkspaceAccessSection'
 
 export default function NodeIntelligenceModal({ project, detail, awareness, control, onClose }) {
   const panelRef = useRef(null)
-  const drawers = detail?.drawers || {}
   const {
-    copied,
     agentWorkspaces,
     workspacesLoading,
     workspacesError,
@@ -19,11 +18,9 @@ export default function NodeIntelligenceModal({ project, detail, awareness, cont
     draft,
     sending,
     isCommander,
-    preflightChecks,
     workspaceBase,
     canSend,
     setDraft,
-    copyCommand,
     sendMessage,
   } = useNodeModalData(project, control, awareness)
 
@@ -98,14 +95,14 @@ export default function NodeIntelligenceModal({ project, detail, awareness, cont
             awareness={awareness}
             statusPayload={statusPayload}
             isCommander={isCommander}
+          />
+
+          <WorkspaceAccessSection
+            isCommander={isCommander}
             workspaceBase={workspaceBase}
             workspacesLoading={workspacesLoading}
             workspacesError={workspacesError}
             agentWorkspaces={agentWorkspaces}
-            control={control}
-            preflightChecks={preflightChecks}
-            copied={copied}
-            onCopyCommand={copyCommand}
           />
 
           <ConversationSection
@@ -119,10 +116,13 @@ export default function NodeIntelligenceModal({ project, detail, awareness, cont
             onSend={sendMessage}
           />
 
-          {!isCommander && <ProjectDrawersSection drawers={drawers} />}
+          <ScheduleSection
+            isCommander={isCommander}
+            detail={detail}
+            statusPayload={statusPayload}
+          />
         </div>
       </div>
     </div>
   )
 }
-

@@ -303,9 +303,13 @@ def _pending_device_pairing(
 def resolve_network_urls(
     web_port: int = DEFAULT_WEB_PORT,
     command_runner: CommandRunner | None = None,
+    route_path: str = "/command-center",
 ) -> dict[str, Any]:
     runner = command_runner or _default_runner
-    localhost = f"http://localhost:{web_port}/command-center"
+    path = str(route_path or "/").strip()
+    if not path.startswith("/"):
+        path = f"/{path}"
+    localhost = f"http://localhost:{web_port}{path}"
 
     tailnet_ip: str | None = None
     if shutil.which("tailscale"):
@@ -313,7 +317,7 @@ def resolve_network_urls(
         if ok:
             tailnet_ip = _parse_tailscale_ipv4(out)
 
-    tailnet = f"http://{tailnet_ip}:{web_port}/command-center" if tailnet_ip else None
+    tailnet = f"http://{tailnet_ip}:{web_port}{path}" if tailnet_ip else None
     return {
         "localhost_url": localhost,
         "tailnet_url": tailnet,

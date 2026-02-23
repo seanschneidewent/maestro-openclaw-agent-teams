@@ -26,10 +26,18 @@ from rich.prompt import Prompt, Confirm
 from rich.align import Align
 from rich import box
 try:
-    from .workspace_templates import render_company_agents_md, render_tools_md, render_workspace_env
+    from .workspace_templates import (
+        render_personal_agents_md,
+        render_personal_tools_md,
+        render_workspace_env,
+    )
     from .install_state import save_install_state
 except ImportError:  # pragma: no cover - direct script execution fallback
-    from maestro.workspace_templates import render_company_agents_md, render_tools_md, render_workspace_env
+    from maestro.workspace_templates import (
+        render_personal_agents_md,
+        render_personal_tools_md,
+        render_workspace_env,
+    )
     from maestro.install_state import save_install_state
 
 # Theme colors
@@ -133,7 +141,7 @@ class SetupWizard:
                 self.progress.pop('company_name', None)
 
         if not self.progress.get('company_name'):
-            console.print(f"  [{DIM}]This appears in your Command Center and agent conversations.[/]")
+            console.print(f"  [{DIM}]This appears in your Maestro identity and future fleet views.[/]")
             company_name = Prompt.ask(f"  [{CYAN}]Company name[/]", console=console).strip()
 
             if not company_name:
@@ -549,6 +557,16 @@ class SetupWizard:
 
         step_header(4, "Gemini Vision Key")
 
+        if not self.progress.get('gemini_key'):
+            configure_now = Confirm.ask(
+                f"  [{CYAN}]Configure Gemini vision key now? (optional)[/]",
+                default=False,
+                console=console,
+            )
+            if not configure_now:
+                warning("Skipping Gemini key for now — vision/image tools stay disabled until added.")
+                return True
+
         if self.progress.get('gemini_key'):
             info("Using saved Gemini API key")
             if not Confirm.ask(f"  [{CYAN}]Keep this key?[/]", default=True, console=console):
@@ -596,6 +614,22 @@ class SetupWizard:
     def step_telegram_bot(self) -> bool:
         """Step 5: Telegram bot setup"""
         step_header(5, "Telegram Bot Setup")
+
+        if self.progress.get('telegram_skip'):
+            info("Telegram setup skipped")
+            return True
+
+        if not self.progress.get('telegram_token'):
+            configure_now = Confirm.ask(
+                f"  [{CYAN}]Configure Telegram bot now? (optional)[/]",
+                default=False,
+                console=console,
+            )
+            if not configure_now:
+                self.progress['telegram_skip'] = True
+                self.save_progress()
+                warning("Skipping Telegram bot setup for now.")
+                return True
 
         if self.progress.get('telegram_token'):
             info("Using saved Telegram bot token")
@@ -651,9 +685,20 @@ class SetupWizard:
         """Step 6: Tailscale setup"""
         step_header(6, "Tailscale Setup")
 
+        configure_now = Confirm.ask(
+            f"  [{CYAN}]Configure Tailscale now? (recommended for field access)[/]",
+            default=True,
+            console=console,
+        )
+        if not configure_now:
+            warning("Skipping Tailscale for now — workspace will only be reachable on this machine.")
+            self.progress['tailscale_skip'] = True
+            self.save_progress()
+            return True
+
         console.print(Panel(
             "Tailscale creates a secure private network so you can\n"
-            "access your plan viewer from anywhere.",
+            "access your workspace from the field (phone/tablet/laptop).",
             border_style=CYAN,
             width=60,
         ))
@@ -733,23 +778,24 @@ class SetupWizard:
 
         env_key = self.progress['provider_env_key']
         config['env'][env_key] = self.progress['provider_key']
-        config['env']['GEMINI_API_KEY'] = self.progress['gemini_key']
+        if self.progress.get('gemini_key'):
+            config['env']['GEMINI_API_KEY'] = self.progress['gemini_key']
 
-        # The Commander as default agent
+        # Solo default agent is project-capable Maestro Personal.
         if 'agents' not in config:
             config['agents'] = {}
         if 'list' not in config['agents']:
             config['agents']['list'] = []
 
-        # Remove any existing maestro/company agent
+        # Remove legacy defaults to keep a single clean personal agent.
         config['agents']['list'] = [
             a for a in config['agents']['list']
-            if a.get('id') not in ('maestro', 'maestro-company')
+            if a.get('id') not in ('maestro', 'maestro-company', 'maestro-personal')
         ]
 
         config['agents']['list'].append({
-            "id": "maestro-company",
-            "name": "The Commander",
+            "id": "maestro-personal",
+            "name": "Maestro Personal",
             "default": True,
             "model": self.progress['model'],
             "workspace": workspace_path,
@@ -758,22 +804,25 @@ class SetupWizard:
         if 'channels' not in config:
             config['channels'] = {}
 
-        bot_token = self.progress['telegram_token']
-        config['channels']['telegram'] = {
-            "enabled": True,
-            "botToken": bot_token,
-            "dmPolicy": "pairing",
-            "groupPolicy": "allowlist",
-            "streamMode": "partial",
-            "accounts": {
-                "maestro-company": {
-                    "botToken": bot_token,
-                    "dmPolicy": "pairing",
-                    "groupPolicy": "allowlist",
-                    "streamMode": "partial",
-                }
-            },
-        }
+        bot_token = str(self.progress.get('telegram_token', '')).strip()
+        if bot_token:
+            config['channels']['telegram'] = {
+                "enabled": True,
+                "botToken": bot_token,
+                "dmPolicy": "pairing",
+                "groupPolicy": "allowlist",
+                "streamMode": "partial",
+                "accounts": {
+                    "maestro-personal": {
+                        "botToken": bot_token,
+                        "dmPolicy": "pairing",
+                        "groupPolicy": "allowlist",
+                        "streamMode": "partial",
+                    }
+                },
+            }
+        else:
+            warning("Telegram is not configured — local/web usage remains fully available.")
 
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
@@ -781,7 +830,7 @@ class SetupWizard:
         success(f"OpenClaw config written to {config_file}")
 
         # Create session directory that OpenClaw expects
-        sessions_dir = config_dir / "agents" / "maestro-company" / "sessions"
+        sessions_dir = config_dir / "agents" / "maestro-personal" / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         success("Created agent session directory")
 
@@ -791,8 +840,8 @@ class SetupWizard:
         return True
 
     def step_configure_maestro(self) -> bool:
-        """Step 8: Configure Commander workspace"""
-        step_header(8, "Commander Workspace")
+        """Step 8: Configure personal workspace"""
+        step_header(8, "Personal Workspace")
 
         default_workspace = Path.home() / ".openclaw" / "workspace-maestro"
 
@@ -824,17 +873,13 @@ class SetupWizard:
             else:
                 warning(f"Couldn't find {filename} — you can add it later")
 
-        # Company workspace uses control-plane-only AGENTS instructions.
+        # Solo workspace uses project-capable AGENTS policy.
         with open(workspace / "AGENTS.md", "w") as f:
-            f.write(render_company_agents_md())
-        success("Generated Company AGENTS.md")
+            f.write(render_personal_agents_md())
+        success("Generated Personal AGENTS.md")
 
-        company_name = self.progress.get('company_name', 'My Company')
         provider_env_key = self.progress.get('provider_env_key', 'GEMINI_API_KEY')
-        tools_md = render_tools_md(
-            company_name=company_name,
-            active_provider_env_key=provider_env_key,
-        )
+        tools_md = render_personal_tools_md(active_provider_env_key=provider_env_key)
         with open(workspace / "TOOLS.md", 'w') as f:
             f.write(tools_md)
         success("Generated TOOLS.md")
@@ -843,6 +888,7 @@ class SetupWizard:
         knowledge_store.mkdir(exist_ok=True)
         success("Created knowledge_store/")
         self.progress['fleet_store_root'] = str(knowledge_store.resolve())
+        self.progress['store_root'] = str(knowledge_store.resolve())
 
         skills_dir = workspace / "skills" / "maestro"
         skills_dir.mkdir(parents=True, exist_ok=True)
@@ -862,7 +908,7 @@ class SetupWizard:
             provider_env_key=self.progress.get('provider_env_key', 'GEMINI_API_KEY'),
             provider_key=self.progress.get('provider_key', ''),
             gemini_key=self.progress.get('gemini_key', ''),
-            agent_role="company",
+            agent_role="project",
         )
         with open(env_file, 'w') as f:
             f.write(env_content)
@@ -905,10 +951,16 @@ class SetupWizard:
         self.save_progress()
 
         install_state = {
+            "version": 2,
             "install_id": self.progress.get("install_id", ""),
             "company_name": self.progress.get("company_name", "Company"),
+            "profile": "solo",
+            "fleet_enabled": False,
             "workspace_root": str(workspace.resolve()),
+            "store_root": str(knowledge_store.resolve()),
             "fleet_store_root": str(knowledge_store.resolve()),
+            "active_project_slug": "",
+            "active_project_name": "",
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         save_install_state(install_state)
@@ -928,6 +980,10 @@ class SetupWizard:
         if self.progress.get('openclaw_skip'):
             warning("OpenClaw not installed — skipping Telegram connection")
             info("After installing OpenClaw, run: maestro up")
+            return True
+
+        if not self.progress.get('telegram_token'):
+            info("Telegram not configured in setup. You can add it later from fleet tooling.")
             return True
 
         bot_username = self.progress.get('bot_username', 'your bot')
@@ -1012,22 +1068,27 @@ class SetupWizard:
 
         company_name = self.progress.get('company_name', 'N/A')
         tailscale_ip = self.progress.get('tailscale_ip')
-        cc_url = f"http://{tailscale_ip}:3000/command-center" if tailscale_ip else "http://localhost:3000/command-center"
+        local_workspace_url = "http://localhost:3000/workspace"
+        tailnet_workspace_url = f"http://{tailscale_ip}:3000/workspace" if tailscale_ip else ""
+        workspace_url = tailnet_workspace_url or local_workspace_url
 
         # Build summary rows
         rows = []
         rows.append(f"[bold white]Company:[/]     {company_name}")
-        rows.append(f"[bold white]Agent:[/]       The Commander (default)")
+        rows.append(f"[bold white]Profile:[/]     Solo")
+        rows.append(f"[bold white]Agent:[/]       maestro-personal (default)")
         rows.append(f"[bold white]Provider:[/]    {self.progress.get('provider', 'N/A').title()}")
         rows.append(f"[bold white]Model:[/]       {self.progress.get('model', 'N/A')}")
         if self.progress.get('bot_username'):
             rows.append(f"[bold white]Telegram:[/]    @{self.progress['bot_username']}")
         if tailscale_ip:
             rows.append(f"[bold white]Tailscale:[/]   {tailscale_ip}")
-        rows.append(f"[bold white]Cmd Center:[/]  {cc_url}")
+        rows.append(f"[bold white]Workspace (Local):[/] {local_workspace_url}")
+        if tailnet_workspace_url:
+            rows.append(f"[bold white]Workspace (Tailnet):[/] {tailnet_workspace_url}")
         rows.append(f"[bold white]Workspace:[/]   {self.progress.get('workspace', 'N/A')}")
-        if self.progress.get('fleet_store_root'):
-            rows.append(f"[bold white]Fleet Store:[/] {self.progress.get('fleet_store_root')}")
+        if self.progress.get('store_root') or self.progress.get('fleet_store_root'):
+            rows.append(f"[bold white]Store Root:[/]  {self.progress.get('store_root') or self.progress.get('fleet_store_root')}")
 
         console.print(Panel(
             "\n".join(rows),
@@ -1038,18 +1099,17 @@ class SetupWizard:
 
         # Next steps
         next_lines = []
-        if self.progress.get('telegram_paired'):
-            next_lines.append(f"  1. Start chatting:          [bold white]@{self.progress.get('bot_username', 'your bot')}[/] on Telegram")
-            next_lines.append(f"  2. Open Command Center:     [bold white]{cc_url}[/]")
-            next_lines.append("")
-            next_lines.append(f"  [{DIM}]Use maestro up anytime to re-run health checks + launch server.[/]")
-        else:
-            next_lines.append(f"  1. Start Maestro:           [bold white]maestro up[/]")
-            if self.progress.get('bot_username'):
-                next_lines.append(f"  2. Message your bot:        [bold white]@{self.progress['bot_username']}[/] on Telegram")
-            next_lines.append(f"  3. Open Command Center:     [bold white]{cc_url}[/]")
+        next_lines.append(f"  1. Start Maestro:           [bold white]maestro up[/]")
+        next_lines.append(f"  2. Open workspace:          [bold white]{workspace_url}[/]")
+        next_lines.append(f"  3. Ingest your plans:       [bold white]maestro ingest <path-to-pdfs>[/]")
         next_lines.append("")
-        next_lines.append(f"  [{DIM}]The Commander will help you set up your first project.[/]")
+        if self.progress.get('telegram_paired'):
+            next_lines.append(f"  Optional chat channel:      [bold white]@{self.progress.get('bot_username', 'your bot')}[/]")
+        else:
+            next_lines.append(f"  Optional: connect Telegram later for mobile chat.")
+        next_lines.append(f"  Optional Fleet mode:        [bold white]maestro fleet enable[/]")
+        next_lines.append("")
+        next_lines.append(f"  [{DIM}]Use maestro up anytime to run doctor checks + launch workspace server.[/]")
 
         console.print()
         console.print(Panel(
@@ -1066,7 +1126,7 @@ class SetupWizard:
 
         if self.progress.get('tailscale_skip'):
             console.print()
-            warning("Tailscale skipped — Command Center only accessible on localhost.")
+            warning("Tailscale skipped — workspace is accessible on localhost only.")
             console.print(f"  [{DIM}]Install Tailscale to access from your phone.[/]")
 
         console.print()
@@ -1098,17 +1158,17 @@ class SetupWizard:
                 if not step_func():
                     console.print()
                     error(f"Setup failed at: {step_name}")
-                    console.print(f"  [{DIM}]Progress saved. Run[/] [bold white]maestro-setup[/] [{DIM}]again to resume.[/]")
+                    console.print(f"  [{DIM}]Progress saved. Run[/] [bold white]maestro setup[/] [{DIM}]again to resume.[/]")
                     sys.exit(1)
             except KeyboardInterrupt:
                 console.print()
                 warning("Setup interrupted")
-                console.print(f"  [{DIM}]Progress saved. Run[/] [bold white]maestro-setup[/] [{DIM}]again to resume.[/]")
+                console.print(f"  [{DIM}]Progress saved. Run[/] [bold white]maestro setup[/] [{DIM}]again to resume.[/]")
                 sys.exit(0)
             except Exception as e:
                 console.print()
                 error(f"Unexpected error in {step_name}: {e}")
-                console.print(f"  [{DIM}]Progress saved. Run[/] [bold white]maestro-setup[/] [{DIM}]again to resume.[/]")
+                console.print(f"  [{DIM}]Progress saved. Run[/] [bold white]maestro setup[/] [{DIM}]again to resume.[/]")
                 sys.exit(1)
 
         # All steps complete

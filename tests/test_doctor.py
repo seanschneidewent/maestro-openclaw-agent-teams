@@ -277,3 +277,51 @@ def test_doctor_fix_adds_missing_telegram_bindings(tmp_path: Path, monkeypatch):
         "agentId": "maestro-project-alpha",
         "match": {"channel": "telegram", "accountId": "maestro-project-alpha"},
     } in bindings
+
+
+def test_doctor_solo_field_access_required_fails_without_tailscale(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    workspace = home / ".openclaw" / "workspace-maestro"
+    store = tmp_path / "knowledge_store"
+    workspace.mkdir(parents=True, exist_ok=True)
+    store.mkdir(parents=True, exist_ok=True)
+
+    _write_json(
+        home / ".openclaw" / "openclaw.json",
+        {
+            "env": {"OPENAI_API_KEY": "sk-test-1234567890"},
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-personal",
+                        "name": "Maestro Personal",
+                        "default": True,
+                        "model": "openai/gpt-5.2",
+                        "workspace": str(workspace),
+                    }
+                ]
+            },
+        },
+    )
+    (workspace / ".env").write_text(f"MAESTRO_STORE={store}\nMAESTRO_AGENT_ROLE=project\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        doctor,
+        "resolve_network_urls",
+        lambda web_port=3000, route_path="/workspace": {
+            "localhost_url": f"http://localhost:{web_port}{route_path}",
+            "tailnet_url": None,
+            "recommended_url": f"http://localhost:{web_port}{route_path}",
+            "tailscale_ip": None,
+        },
+    )
+
+    code = run_doctor(
+        fix=False,
+        store_override=str(store),
+        restart_gateway=False,
+        field_access_required=True,
+        json_output=False,
+        home_dir=home,
+    )
+    assert code == 1

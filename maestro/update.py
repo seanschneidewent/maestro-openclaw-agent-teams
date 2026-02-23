@@ -20,13 +20,16 @@ from .control_plane import (
     save_fleet_registry,
     sync_fleet_registry,
 )
+from .profile import PROFILE_FLEET, PROFILE_SOLO, infer_profile_from_openclaw_config
 from .workspace_templates import (
     provider_env_key_for_model,
     render_company_agents_md,
+    render_personal_agents_md,
+    render_personal_tools_md,
     render_tools_md,
     render_workspace_env,
 )
-from .install_state import save_install_state
+from .install_state import load_install_state, save_install_state
 
 
 CommandRunner = Callable[[str], tuple[bool, str]]
@@ -94,6 +97,10 @@ def _resolve_workspace(config: dict, home_dir: Path, override: str | None) -> tu
     agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
 
     for agent in agent_list:
+        if isinstance(agent, dict) and agent.get("id") == "maestro-personal" and agent.get("workspace"):
+            return Path(str(agent["workspace"])).expanduser().resolve(), False
+
+    for agent in agent_list:
         if isinstance(agent, dict) and agent.get("id") == "maestro-company" and agent.get("workspace"):
             return Path(str(agent["workspace"])).expanduser().resolve(), False
 
@@ -122,6 +129,22 @@ def _resolve_company_agent(config: dict) -> dict:
     return default_agent if isinstance(default_agent, dict) else {}
 
 
+def _resolve_personal_agent(config: dict) -> dict:
+    agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
+    personal = next(
+        (a for a in agent_list if isinstance(a, dict) and a.get("id") == "maestro-personal"),
+        None,
+    )
+    if isinstance(personal, dict):
+        return personal
+    default_agent = next(
+        (a for a in agent_list if isinstance(a, dict) and a.get("default")),
+        None,
+    )
+    return default_agent if isinstance(default_agent, dict) else {}
+
+
 def _company_name_from_agent(agent: dict) -> str:
     raw_name = str(agent.get("name", "")).strip()
     if raw_name == COMMANDER_DISPLAY_NAME:
@@ -131,7 +154,20 @@ def _company_name_from_agent(agent: dict) -> str:
     return raw_name or "Company"
 
 
-def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bool) -> tuple[dict, list[str]]:
+def _resolve_target_profile(config: dict, install_state: dict) -> str:
+    state_profile = str(install_state.get("profile", "")).strip().lower()
+    if state_profile in (PROFILE_SOLO, PROFILE_FLEET):
+        return state_profile
+    return infer_profile_from_openclaw_config(config)
+
+
+def _apply_config_migrations(
+    config: dict,
+    workspace: Path,
+    workspace_forced: bool,
+    *,
+    target_profile: str,
+) -> tuple[dict, list[str]]:
     migrated = copy.deepcopy(config)
     changes: list[str] = []
 
@@ -159,57 +195,119 @@ def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bo
 
     agents = migrated["agents"]["list"]
     company_agent = next((a for a in agents if isinstance(a, dict) and a.get("id") == "maestro-company"), None)
+    personal_agent = next((a for a in agents if isinstance(a, dict) and a.get("id") == "maestro-personal"), None)
     legacy_agent = next((a for a in agents if isinstance(a, dict) and a.get("id") == "maestro"), None)
 
     default_exists = any(isinstance(a, dict) and a.get("default") for a in agents)
-
-    if company_agent is None:
-        if legacy_agent is not None:
-            new_company = copy.deepcopy(legacy_agent)
-            new_company["id"] = "maestro-company"
-            new_company["name"] = COMMANDER_DISPLAY_NAME
-            new_company["workspace"] = str(workspace)
-            if not default_exists:
-                new_company["default"] = True
-            agents.append(new_company)
-            changes.append("Added maestro-company agent from legacy maestro config")
-            company_agent = new_company
-        else:
-            default_model = "google/gemini-3-pro-preview"
-            for agent in agents:
-                if isinstance(agent, dict) and agent.get("default") and agent.get("model"):
-                    default_model = str(agent.get("model"))
-                    break
-            if default_model == "google/gemini-3-pro-preview":
+    if target_profile == PROFILE_SOLO:
+        if personal_agent is None:
+            if legacy_agent is not None:
+                new_personal = copy.deepcopy(legacy_agent)
+                new_personal["id"] = "maestro-personal"
+                new_personal["name"] = "Maestro Personal"
+                new_personal["workspace"] = str(workspace)
+                if not default_exists:
+                    new_personal["default"] = True
+                agents.append(new_personal)
+                changes.append("Added maestro-personal agent from legacy maestro config")
+                personal_agent = new_personal
+            elif company_agent is not None and not any(str(a.get("id", "")) == "maestro-project" for a in agents if isinstance(a, dict)):
+                new_personal = copy.deepcopy(company_agent)
+                new_personal["id"] = "maestro-personal"
+                new_personal["name"] = "Maestro Personal"
+                new_personal["workspace"] = str(workspace)
+                if not default_exists:
+                    new_personal["default"] = True
+                agents.append(new_personal)
+                changes.append("Added maestro-personal agent from existing default config")
+                personal_agent = new_personal
+            else:
+                default_model = "google/gemini-3-pro-preview"
                 for agent in agents:
-                    if isinstance(agent, dict) and agent.get("model"):
+                    if isinstance(agent, dict) and agent.get("default") and agent.get("model"):
                         default_model = str(agent.get("model"))
                         break
+                personal_agent = {
+                    "id": "maestro-personal",
+                    "name": "Maestro Personal",
+                    "default": True,
+                    "model": default_model,
+                    "workspace": str(workspace),
+                }
+                agents.append(personal_agent)
+                changes.append("Added missing maestro-personal agent")
+        else:
+            if workspace_forced and personal_agent.get("workspace") != str(workspace):
+                personal_agent["workspace"] = str(workspace)
+                changes.append("Updated maestro-personal workspace from --workspace")
+            elif not personal_agent.get("workspace"):
+                personal_agent["workspace"] = str(workspace)
+                changes.append("Set maestro-personal workspace")
 
-            company_agent = {
-                "id": "maestro-company",
-                "name": COMMANDER_DISPLAY_NAME,
-                "default": True if not default_exists else False,
-                "model": default_model,
-                "workspace": str(workspace),
-            }
-            agents.append(company_agent)
-            changes.append("Added missing maestro-company agent")
+            if personal_agent.get("name") != "Maestro Personal":
+                personal_agent["name"] = "Maestro Personal"
+                changes.append("Set maestro-personal display name")
+
+        # Ensure only personal is default in Solo mode.
+        for agent in agents:
+            if not isinstance(agent, dict):
+                continue
+            agent_id = str(agent.get("id", "")).strip()
+            if agent_id == "maestro-personal":
+                if not agent.get("default"):
+                    agent["default"] = True
+                    changes.append("Marked maestro-personal as default agent")
+            elif agent.get("default") and agent_id != "maestro-personal":
+                agent["default"] = False
+                changes.append(f"Cleared default flag from {agent_id}")
     else:
-        if workspace_forced and company_agent.get("workspace") != str(workspace):
-            company_agent["workspace"] = str(workspace)
-            changes.append("Updated maestro-company workspace from --workspace")
-        elif not company_agent.get("workspace"):
-            company_agent["workspace"] = str(workspace)
-            changes.append("Set maestro-company workspace")
+        if company_agent is None:
+            if legacy_agent is not None:
+                new_company = copy.deepcopy(legacy_agent)
+                new_company["id"] = "maestro-company"
+                new_company["name"] = COMMANDER_DISPLAY_NAME
+                new_company["workspace"] = str(workspace)
+                if not default_exists:
+                    new_company["default"] = True
+                agents.append(new_company)
+                changes.append("Added maestro-company agent from legacy maestro config")
+                company_agent = new_company
+            else:
+                default_model = "google/gemini-3-pro-preview"
+                for agent in agents:
+                    if isinstance(agent, dict) and agent.get("default") and agent.get("model"):
+                        default_model = str(agent.get("model"))
+                        break
+                if default_model == "google/gemini-3-pro-preview":
+                    for agent in agents:
+                        if isinstance(agent, dict) and agent.get("model"):
+                            default_model = str(agent.get("model"))
+                            break
 
-        if company_agent.get("name") != COMMANDER_DISPLAY_NAME:
-            company_agent["name"] = COMMANDER_DISPLAY_NAME
-            changes.append("Set maestro-company display name to The Commander")
+                company_agent = {
+                    "id": "maestro-company",
+                    "name": COMMANDER_DISPLAY_NAME,
+                    "default": True if not default_exists else False,
+                    "model": default_model,
+                    "workspace": str(workspace),
+                }
+                agents.append(company_agent)
+                changes.append("Added missing maestro-company agent")
+        else:
+            if workspace_forced and company_agent.get("workspace") != str(workspace):
+                company_agent["workspace"] = str(workspace)
+                changes.append("Updated maestro-company workspace from --workspace")
+            elif not company_agent.get("workspace"):
+                company_agent["workspace"] = str(workspace)
+                changes.append("Set maestro-company workspace")
 
-        if not default_exists:
-            company_agent["default"] = True
-            changes.append("Marked maestro-company as default agent")
+            if company_agent.get("name") != COMMANDER_DISPLAY_NAME:
+                company_agent["name"] = COMMANDER_DISPLAY_NAME
+                changes.append("Set maestro-company display name to The Commander")
+
+            if not default_exists:
+                company_agent["default"] = True
+                changes.append("Marked maestro-company as default agent")
 
     if not isinstance(migrated.get("channels"), dict):
         migrated["channels"] = {}
@@ -224,14 +322,16 @@ def _apply_config_migrations(config: dict, workspace: Path, workspace_forced: bo
             changes.append("Initialized telegram.accounts")
 
         bot_token = telegram.get("botToken")
-        if telegram.get("enabled") and bot_token and "maestro-company" not in accounts:
-            accounts["maestro-company"] = {
-                "botToken": bot_token,
-                "dmPolicy": telegram.get("dmPolicy", "pairing"),
-                "groupPolicy": telegram.get("groupPolicy", "allowlist"),
-                "streamMode": telegram.get("streamMode", "partial"),
-            }
-            changes.append("Added telegram account mapping for maestro-company")
+        if telegram.get("enabled") and bot_token:
+            default_account_id = "maestro-company" if target_profile == PROFILE_FLEET else "maestro-personal"
+            if default_account_id not in accounts:
+                accounts[default_account_id] = {
+                    "botToken": bot_token,
+                    "dmPolicy": telegram.get("dmPolicy", "pairing"),
+                    "groupPolicy": telegram.get("groupPolicy", "allowlist"),
+                    "streamMode": telegram.get("streamMode", "partial"),
+                }
+                changes.append(f"Added telegram account mapping for {default_account_id}")
 
     binding_changes = ensure_telegram_account_bindings(migrated)
     changes.extend(binding_changes)
@@ -244,6 +344,7 @@ def _sync_workspace_assets(
     template_root: Path | None,
     dry_run: bool,
     *,
+    profile: str,
     company_name: str,
     active_provider_env_key: str | None,
     provider_key: str | None,
@@ -276,28 +377,27 @@ def _sync_workspace_assets(
                 shutil.copytree(skill_src, skill_dst)
             changes.append("Added missing Maestro skill in workspace")
 
-    company_agents = render_company_agents_md()
-    agents_md = workspace / "AGENTS.md"
-    if not agents_md.exists():
-        if not dry_run:
-            agents_md.write_text(company_agents, encoding="utf-8")
-        changes.append("Added missing Company AGENTS.md")
-    else:
-        current_agents = agents_md.read_text(encoding="utf-8")
-        # Migrate legacy project-style AGENTS in company workspace.
-        if "Check `knowledge_store/` — this is what you know" in current_agents:
-            if not dry_run:
-                agents_md.write_text(company_agents, encoding="utf-8")
-            changes.append("Updated company AGENTS.md to control-plane policy")
-
-    tools_md = workspace / "TOOLS.md"
-    if not tools_md.exists():
-        content = render_tools_md(
+    desired_agents = render_company_agents_md() if profile == PROFILE_FLEET else render_personal_agents_md()
+    desired_role = "company" if profile == PROFILE_FLEET else "project"
+    desired_tools = (
+        render_tools_md(
             company_name=company_name,
             active_provider_env_key=active_provider_env_key,
         )
+        if profile == PROFILE_FLEET
+        else render_personal_tools_md(active_provider_env_key=active_provider_env_key)
+    )
+
+    agents_md = workspace / "AGENTS.md"
+    if not agents_md.exists():
         if not dry_run:
-            tools_md.write_text(content, encoding="utf-8")
+            agents_md.write_text(desired_agents, encoding="utf-8")
+        changes.append("Added missing AGENTS.md")
+
+    tools_md = workspace / "TOOLS.md"
+    if not tools_md.exists():
+        if not dry_run:
+            tools_md.write_text(desired_tools, encoding="utf-8")
         changes.append("Added missing TOOLS.md")
 
     env_file = workspace / ".env"
@@ -309,18 +409,19 @@ def _sync_workspace_assets(
                     provider_env_key=active_provider_env_key,
                     provider_key=provider_key,
                     gemini_key=gemini_key,
-                    agent_role="company",
+                    agent_role=desired_role,
                 ),
                 encoding="utf-8",
             )
         changes.append("Added missing workspace .env")
     else:
         current_env = env_file.read_text(encoding="utf-8")
-        if "MAESTRO_AGENT_ROLE=" not in current_env:
+        expected_line = f"MAESTRO_AGENT_ROLE={desired_role}"
+        if expected_line not in current_env:
             if not dry_run:
                 with env_file.open("a", encoding="utf-8") as handle:
-                    handle.write("MAESTRO_AGENT_ROLE=company\n")
-            changes.append("Set MAESTRO_AGENT_ROLE=company in workspace .env")
+                    handle.write(f"{expected_line}\n")
+            changes.append(f"Set {expected_line} in workspace .env")
 
     knowledge_store = workspace / "knowledge_store"
     if not knowledge_store.exists():
@@ -331,8 +432,9 @@ def _sync_workspace_assets(
     return changes, warnings
 
 
-def _ensure_session_dir(home_dir: Path, dry_run: bool) -> bool:
-    sessions = home_dir / ".openclaw" / "agents" / "maestro-company" / "sessions"
+def _ensure_session_dir(home_dir: Path, dry_run: bool, *, profile: str) -> bool:
+    agent_id = "maestro-company" if profile == PROFILE_FLEET else "maestro-personal"
+    sessions = home_dir / ".openclaw" / "agents" / agent_id / "sessions"
     if sessions.exists():
         return False
     if not dry_run:
@@ -425,13 +527,14 @@ def _telegram_is_configured(config: dict) -> bool:
     )
 
 
-def _resolve_command_center_url(command_runner: CommandRunner) -> str:
+def _resolve_profile_url(command_runner: CommandRunner, *, profile: str) -> str:
+    path = "/command-center" if profile == PROFILE_FLEET else "/workspace"
     ok, output = command_runner("tailscale ip -4")
     if ok and output:
         ip = output.splitlines()[0].strip()
         if ip:
-            return f"http://{ip}:3000/command-center"
-    return "http://localhost:3000/command-center"
+            return f"http://{ip}:3000{path}"
+    return f"http://localhost:3000{path}"
 
 
 def _restart_gateway_if_available(
@@ -485,17 +588,28 @@ def perform_update(
     except Exception as exc:
         summary.warnings.append(f"Could not read {config_path}: {exc}")
         return summary, 1
+    current_install_state = load_install_state(home_dir=home)
+    target_profile = _resolve_target_profile(config, current_install_state)
 
     workspace, workspace_forced = _resolve_workspace(config, home, workspace_override)
     summary.workspace = workspace
 
-    migrated, config_changes = _apply_config_migrations(config, workspace, workspace_forced)
+    migrated, config_changes = _apply_config_migrations(
+        config,
+        workspace,
+        workspace_forced,
+        target_profile=target_profile,
+    )
     summary.config_changed = bool(config_changes)
     summary.changes.extend(config_changes)
 
-    company_agent = _resolve_company_agent(migrated)
-    company_name = _company_name_from_agent(company_agent)
-    model = str(company_agent.get("model", "")).strip()
+    primary_agent = (
+        _resolve_company_agent(migrated)
+        if target_profile == PROFILE_FLEET
+        else _resolve_personal_agent(migrated)
+    )
+    company_name = _company_name_from_agent(primary_agent)
+    model = str(primary_agent.get("model", "")).strip()
     provider_env_key = provider_env_key_for_model(model)
     env = migrated.get("env", {}) if isinstance(migrated.get("env"), dict) else {}
     provider_key = env.get(provider_env_key) if provider_env_key else None
@@ -508,6 +622,7 @@ def perform_update(
         workspace,
         template_root,
         dry_run=dry_run,
+        profile=target_profile,
         company_name=company_name,
         active_provider_env_key=provider_env_key,
         provider_key=provider_key_str,
@@ -516,14 +631,16 @@ def perform_update(
     summary.workspace_changed = bool(workspace_changes)
     summary.changes.extend(workspace_changes)
     summary.warnings.extend(workspace_warnings)
-    identity_changes = _backfill_registry_identity(workspace, migrated, dry_run=dry_run)
-    if identity_changes:
-        summary.workspace_changed = True
-        summary.changes.extend(identity_changes)
+    if target_profile == PROFILE_FLEET:
+        identity_changes = _backfill_registry_identity(workspace, migrated, dry_run=dry_run)
+        if identity_changes:
+            summary.workspace_changed = True
+            summary.changes.extend(identity_changes)
 
-    if _ensure_session_dir(home, dry_run=dry_run):
+    if _ensure_session_dir(home, dry_run=dry_run, profile=target_profile):
         summary.session_dir_created = True
-        summary.changes.append("Created maestro-company session directory")
+        session_agent_id = "maestro-company" if target_profile == PROFILE_FLEET else "maestro-personal"
+        summary.changes.append(f"Created {session_agent_id} session directory")
 
     if summary.config_changed and not dry_run:
         summary.backup_dir = _create_backup(config_path, home)
@@ -540,10 +657,14 @@ def perform_update(
         command_runner=runner,
         warnings=summary.warnings,
     )
-    summary.command_center_url = _resolve_command_center_url(runner)
+    summary.command_center_url = _resolve_profile_url(runner, profile=target_profile)
 
     install_state = {
+        "version": 2,
+        "profile": target_profile,
+        "fleet_enabled": target_profile == PROFILE_FLEET,
         "workspace_root": str(workspace.resolve()),
+        "store_root": str((workspace / "knowledge_store").resolve()),
         "fleet_store_root": str((workspace / "knowledge_store").resolve()),
         "company_name": company_name,
         "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -575,6 +696,9 @@ def run_update(
 
     print("Maestro update summary")
     print(f"- Workspace: {summary.workspace}")
+    state = load_install_state()
+    profile = str(state.get("profile", "solo")).strip() or "solo"
+    print(f"- Profile: {profile}")
 
     if summary.changed:
         print("- Changes applied:" if not dry_run else "- Planned changes:")
@@ -587,7 +711,10 @@ def run_update(
         print(f"- Backup: {summary.backup_dir}")
 
     print(f"- Telegram configured: {'yes' if summary.telegram_configured else 'no'}")
-    print(f"- Command Center: {summary.command_center_url}")
+    if profile == PROFILE_FLEET:
+        print(f"- Command Center: {summary.command_center_url}")
+    else:
+        print(f"- Workspace: {summary.command_center_url}")
 
     for warning in summary.warnings:
         print(f"[WARN] {warning}")

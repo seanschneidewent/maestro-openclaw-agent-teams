@@ -15,23 +15,40 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+import subprocess
 import sys
 from pathlib import Path
 
 from .agent_role import is_company_role
-from .install_state import resolve_fleet_store_root
+from .install_state import (
+    load_install_state,
+    record_active_project,
+    resolve_fleet_store_root,
+    update_install_state,
+)
+from .profile import PROFILE_SOLO, fleet_enabled, get_profile_state, resolve_profile, set_profile
+from .utils import slugify
 
 
 def _add_ingest_parser(subparsers: argparse._SubParsersAction):
     parser = subparsers.add_parser("ingest", help="Ingest PDFs into knowledge store")
     parser.add_argument("folder", help="Path to folder containing PDFs")
     parser.add_argument("--project-name", "-n", help="Project name")
+    parser.add_argument(
+        "--new-project-name",
+        help="Create/use a new project name in Solo mode (advanced)",
+    )
     parser.add_argument("--dpi", type=int, default=200, help="Render DPI (default: 200)")
     parser.add_argument("--store", help="Override knowledge_store path")
 
 
+def _add_setup_parser(subparsers: argparse._SubParsersAction):
+    subparsers.add_parser("setup", help="Run Maestro setup wizard (Solo default)")
+
+
 def _add_start_parser(subparsers: argparse._SubParsersAction):
-    parser = subparsers.add_parser("start", help="Start Maestro runtime (TUI dashboard)")
+    parser = subparsers.add_parser("start", help=argparse.SUPPRESS)
     parser.add_argument("--port", type=int, default=3000)
     parser.add_argument("--store", type=str, default=None, help="Override fleet store root")
 
@@ -55,6 +72,11 @@ def _add_doctor_parser(subparsers: argparse._SubParsersAction):
     parser.add_argument("--fix", action="store_true", help="Apply safe fixes in-place")
     parser.add_argument("--store", help="Override knowledge store path used in checks")
     parser.add_argument("--no-restart", action="store_true", help="Skip gateway restart checks")
+    parser.add_argument(
+        "--field-access-required",
+        action="store_true",
+        help="Fail if Tailscale field access URL is not available (Solo)",
+    )
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output")
 
 
@@ -67,10 +89,15 @@ def _add_up_parser(subparsers: argparse._SubParsersAction):
     parser.add_argument("--skip-doctor", action="store_true", help="Skip doctor pass before serving")
     parser.add_argument("--no-fix", action="store_true", help="Run doctor in validate-only mode")
     parser.add_argument("--no-restart", action="store_true", help="Skip gateway restart during doctor pass")
+    parser.add_argument(
+        "--field-access-required",
+        action="store_true",
+        help="Fail startup if Tailscale field access URL is unavailable (Solo)",
+    )
 
 
 def _add_tools_parser(subparsers: argparse._SubParsersAction):
-    parser = subparsers.add_parser("tools", help="Run knowledge tools")
+    parser = subparsers.add_parser("tools", help=argparse.SUPPRESS)
     tools_sub = parser.add_subparsers(dest="command", required=True)
 
     tools_sub.add_parser("list_disciplines")
@@ -99,6 +126,48 @@ def _add_tools_parser(subparsers: argparse._SubParsersAction):
 
     tools_sub.add_parser("list_modifications")
     tools_sub.add_parser("check_gaps")
+    tools_sub.add_parser("get_schedule_status")
+
+    lsi = tools_sub.add_parser("list_schedule_items")
+    lsi.add_argument("--status", default=None)
+
+    usi = tools_sub.add_parser("upsert_schedule_item")
+    usi.add_argument("item_id", nargs="?", default="")
+    usi.add_argument("--title", default=None)
+    usi.add_argument(
+        "--type",
+        dest="item_type",
+        default=None,
+        choices=["activity", "milestone", "constraint", "inspection", "delivery", "task"],
+    )
+    usi.add_argument(
+        "--status",
+        default=None,
+        choices=["pending", "in_progress", "blocked", "done", "cancelled"],
+    )
+    usi.add_argument("--due-date", dest="due_date", default=None)
+    usi.add_argument("--owner", default=None)
+    usi.add_argument("--activity-id", dest="activity_id", default=None)
+    usi.add_argument("--impact", default=None)
+    usi.add_argument("--notes", default=None)
+
+    ssc = tools_sub.add_parser("set_schedule_constraint")
+    ssc.add_argument("constraint_id")
+    ssc.add_argument("description")
+    ssc.add_argument("--activity-id", dest="activity_id", default=None)
+    ssc.add_argument("--impact", default=None)
+    ssc.add_argument("--due-date", dest="due_date", default=None)
+    ssc.add_argument("--owner", default=None)
+    ssc.add_argument(
+        "--status",
+        default="blocked",
+        choices=["pending", "in_progress", "blocked", "done", "cancelled"],
+    )
+
+    csi = tools_sub.add_parser("close_schedule_item")
+    csi.add_argument("item_id")
+    csi.add_argument("--reason", default=None)
+    csi.add_argument("--status", default="done", choices=["done", "cancelled"])
 
     cw = tools_sub.add_parser("create_workspace")
     cw.add_argument("title")
@@ -160,12 +229,12 @@ def _add_tools_parser(subparsers: argparse._SubParsersAction):
 
 
 def _add_index_parser(subparsers: argparse._SubParsersAction):
-    parser = subparsers.add_parser("index", help="Rebuild project index")
+    parser = subparsers.add_parser("index", help=argparse.SUPPRESS)
     parser.add_argument("project_dir", help="Path to project directory")
 
 
 def _add_license_parser(subparsers: argparse._SubParsersAction):
-    parser = subparsers.add_parser("license", help="License management")
+    parser = subparsers.add_parser("license", help=argparse.SUPPRESS)
     lic_sub = parser.add_subparsers(dest="license_command", required=True)
 
     gen_company = lic_sub.add_parser("generate-company", help="Generate a test company license key")
@@ -186,48 +255,145 @@ def _add_license_parser(subparsers: argparse._SubParsersAction):
     lic_sub.add_parser("info", help="Show license details")
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _add_fleet_purchase_flags(parser: argparse.ArgumentParser):
+    parser.add_argument("--project-name")
+    parser.add_argument("--assignee")
+    parser.add_argument("--superintendent")
+    parser.add_argument("--model")
+    parser.add_argument("--api-key")
+    parser.add_argument("--telegram-token")
+    parser.add_argument("--pairing-code")
+    parser.add_argument(
+        "--maestro-license-key",
+        "--project-license-key",
+        dest="maestro_license_key",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("--store")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--non-interactive", action="store_true")
+    parser.add_argument("--skip-remote-validation", action="store_true")
+
+
+def _add_fleet_parser(subparsers: argparse._SubParsersAction):
+    parser = subparsers.add_parser("fleet", help="Fleet/enterprise command surface")
+    fleet_sub = parser.add_subparsers(dest="fleet_command", required=True)
+
+    enable = fleet_sub.add_parser("enable", help="Enable Fleet profile + command center")
+    enable.add_argument("--no-restart", action="store_true", help="Skip gateway restart flows")
+    enable.add_argument("--dry-run", action="store_true", help="Show actions without changing profile")
+
+    fleet_sub.add_parser("status", help="Show profile/capability status")
+
+    purchase = fleet_sub.add_parser("purchase", help="Provision a project-specific Maestro")
+    _add_fleet_purchase_flags(purchase)
+
+    cc = fleet_sub.add_parser("command-center", help="Show/open command center URL")
+    cc.add_argument("--open", action="store_true", help="Open URL in browser")
+
+
+def build_parser(*, include_legacy: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="maestro",
         description="Maestro — AI that understands construction plans",
     )
     subparsers = parser.add_subparsers(dest="mode", required=True)
 
+    _add_setup_parser(subparsers)
     _add_ingest_parser(subparsers)
-    _add_start_parser(subparsers)
     _add_serve_parser(subparsers)
     _add_doctor_parser(subparsers)
     _add_update_parser(subparsers)
     _add_up_parser(subparsers)
-    _add_tools_parser(subparsers)
-    _add_index_parser(subparsers)
-    _add_license_parser(subparsers)
+    _add_fleet_parser(subparsers)
+    if include_legacy:
+        _add_start_parser(subparsers)
+        _add_tools_parser(subparsers)
+        _add_index_parser(subparsers)
+        _add_license_parser(subparsers)
 
     return parser
 
 
 def _handle_start(args: argparse.Namespace):
+    print("[deprecated] `maestro start` is legacy. Use `maestro up`.")
     from .runtime import main as runtime_main
 
     runtime_main(port=args.port, store=str(resolve_fleet_store_root(args.store)))
 
 
+def _handle_setup(_: argparse.Namespace):
+    from .setup_wizard import main as setup_main
+
+    setup_main()
+
+
+def _resolve_solo_ingest_project_name(args: argparse.Namespace, default_folder_name: str) -> tuple[str | None, bool]:
+    state = load_install_state()
+    active_name = str(state.get("active_project_name", "")).strip()
+    explicit_new = False
+
+    if getattr(args, "new_project_name", None):
+        return str(args.new_project_name).strip(), True
+
+    if getattr(args, "project_name", None):
+        print("[compat] `--project-name` in Solo mode is treated as `--new-project-name`.")
+        return str(args.project_name).strip(), True
+
+    if active_name:
+        print(f"Solo ingest target: active project '{active_name}'")
+        return active_name, False
+
+    return default_folder_name, False
+
+
 def _handle_ingest(args: argparse.Namespace):
     from .ingest import ingest
 
-    ingest(args.folder, args.project_name, args.dpi, args.store)
+    resolved_store = str(resolve_fleet_store_root(args.store))
+    profile = resolve_profile()
+    folder_name = Path(args.folder).expanduser().resolve().name
+
+    project_name = args.project_name
+    if profile == PROFILE_SOLO:
+        project_name, _ = _resolve_solo_ingest_project_name(args, folder_name)
+
+    ingest(args.folder, project_name, args.dpi, resolved_store)
+
+    final_name = str(project_name or folder_name).strip()
+    if profile == PROFILE_SOLO and final_name:
+        active_slug = slugify(final_name)
+        record_active_project(project_slug=active_slug, project_name=final_name)
+        update_install_state({"store_root": resolved_store, "fleet_store_root": resolved_store})
 
 
 def _handle_serve(args: argparse.Namespace):
     from .server import app
     import maestro.server as srv
     import uvicorn
+    from .control_plane import resolve_network_urls
 
     resolved_store = resolve_fleet_store_root(args.store)
     srv.store_path = resolved_store
     srv.server_port = int(args.port)
+    profile = resolve_profile()
+    route_path = "/command-center" if profile != PROFILE_SOLO else "/workspace"
+    network = resolve_network_urls(web_port=int(args.port), route_path=route_path)
     print(f"Maestro server starting on http://localhost:{args.port}")
     print(f"Knowledge store: {srv.store_path}")
+    if profile == PROFILE_SOLO:
+        print(f"Workspace (local): {network.get('localhost_url')}")
+        tailnet_url = network.get("tailnet_url")
+        if tailnet_url:
+            print(f"Workspace (tailnet): {tailnet_url}")
+        else:
+            print("Workspace (tailnet): unavailable — connect Tailscale for field access")
+    else:
+        print(f"Command Center (local): {network.get('localhost_url')}")
+        tailnet_url = network.get("tailnet_url")
+        if tailnet_url:
+            print(f"Command Center (tailnet): {tailnet_url}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning", access_log=False)
 
 
@@ -251,6 +417,7 @@ def _handle_doctor(args: argparse.Namespace):
         store_override=args.store,
         restart_gateway=not args.no_restart,
         json_output=bool(args.json),
+        field_access_required=bool(getattr(args, "field_access_required", False)),
     )
     if code != 0:
         sys.exit(code)
@@ -266,6 +433,7 @@ def _handle_up(args: argparse.Namespace):
             store_override=resolved_store,
             restart_gateway=not args.no_restart,
             json_output=False,
+            field_access_required=bool(getattr(args, "field_access_required", False)),
         )
         if doctor_code != 0:
             sys.exit(doctor_code)
@@ -287,6 +455,97 @@ def _handle_index(args: argparse.Namespace):
         f"Index built: {summary['page_count']} pages, {summary['pointer_count']} pointers, "
         f"{summary['unique_material_count']} materials, {summary['unique_keyword_count']} keywords"
     )
+
+
+def _open_url(url: str):
+    try:
+        system = platform.system().lower()
+        if system == "darwin":
+            subprocess.run(["open", url], check=False)
+        elif system == "windows":
+            subprocess.run(["cmd", "/c", "start", "", url], check=False)
+        else:
+            subprocess.run(["xdg-open", url], check=False)
+    except Exception:
+        pass
+
+
+def _run_fleet(args: argparse.Namespace):
+    from .control_plane import resolve_network_urls
+    from .doctor import run_doctor
+    from .purchase import run_purchase
+    from .update import run_update
+
+    command = str(args.fleet_command or "").strip()
+    if command == "enable":
+        if args.dry_run:
+            print("Fleet enable dry-run")
+            print("- Would set profile=fleet and fleet_enabled=true")
+            print("- Would run `maestro update` then `maestro doctor --fix`")
+            return
+
+        state = set_profile("fleet", fleet=True)
+        print("Fleet profile enabled")
+        print(f"- Profile: {state.get('profile')}")
+        print(f"- Fleet enabled: {state.get('fleet_enabled')}")
+        update_code = run_update(restart_gateway=not args.no_restart, dry_run=False)
+        if update_code != 0:
+            sys.exit(update_code)
+        doctor_code = run_doctor(fix=True, restart_gateway=not args.no_restart, json_output=False)
+        if doctor_code != 0:
+            sys.exit(doctor_code)
+        network = resolve_network_urls(web_port=3000)
+        print(f"- Command Center: {network.get('recommended_url')}")
+        return
+
+    if command == "status":
+        state = get_profile_state()
+        network = resolve_network_urls(web_port=3000)
+        print("Maestro profile status")
+        print(f"- profile: {state.get('profile')}")
+        print(f"- fleet_enabled: {state.get('fleet_enabled')}")
+        print(f"- workspace_root: {state.get('workspace_root', '')}")
+        print(f"- store_root: {state.get('store_root') or state.get('fleet_store_root') or ''}")
+        print(f"- command_center_url: {network.get('recommended_url')}")
+        return
+
+    if command == "command-center":
+        if not fleet_enabled():
+            print("Fleet mode is not enabled.")
+            print("Run: maestro fleet enable")
+            return
+        network = resolve_network_urls(web_port=3000)
+        url = str(network.get("recommended_url", "http://localhost:3000/command-center"))
+        print(url)
+        if getattr(args, "open", False):
+            _open_url(url)
+        return
+
+    if command == "purchase":
+        if not fleet_enabled():
+            print("Fleet mode is not enabled.")
+            print("Run: maestro fleet enable")
+            sys.exit(1)
+        code = run_purchase(
+            project_name=args.project_name,
+            assignee=args.assignee,
+            superintendent=args.superintendent,
+            model=args.model,
+            api_key=args.api_key,
+            telegram_token=args.telegram_token,
+            pairing_code=args.pairing_code,
+            maestro_license_key=args.maestro_license_key,
+            store_override=args.store,
+            dry_run=bool(args.dry_run),
+            json_output=bool(args.json),
+            non_interactive=bool(args.non_interactive),
+            skip_remote_validation=bool(args.skip_remote_validation),
+        )
+        if code != 0:
+            sys.exit(code)
+        return
+
+    raise SystemExit(f"Unknown fleet command: {command}")
 
 
 def _run_license(args: argparse.Namespace):
@@ -441,6 +700,33 @@ def _run_tools(args: argparse.Namespace):
         "find_cross_references": lambda: tools.find_cross_references(args.page_name),
         "list_modifications": lambda: tools.list_modifications(),
         "check_gaps": lambda: tools.check_gaps(),
+        "get_schedule_status": lambda: tools.get_schedule_status(),
+        "list_schedule_items": lambda: tools.list_schedule_items(getattr(args, "status", None)),
+        "upsert_schedule_item": lambda: tools.upsert_schedule_item(
+            args.item_id,
+            title=getattr(args, "title", None),
+            item_type=getattr(args, "item_type", None),
+            status=getattr(args, "status", None),
+            due_date=getattr(args, "due_date", None),
+            owner=getattr(args, "owner", None),
+            activity_id=getattr(args, "activity_id", None),
+            impact=getattr(args, "impact", None),
+            notes=getattr(args, "notes", None),
+        ),
+        "set_schedule_constraint": lambda: tools.set_schedule_constraint(
+            args.constraint_id,
+            args.description,
+            activity_id=getattr(args, "activity_id", None),
+            impact=getattr(args, "impact", None),
+            due_date=getattr(args, "due_date", None),
+            owner=getattr(args, "owner", None),
+            status=getattr(args, "status", "blocked"),
+        ),
+        "close_schedule_item": lambda: tools.close_schedule_item(
+            args.item_id,
+            reason=getattr(args, "reason", None),
+            status=getattr(args, "status", "done"),
+        ),
         "create_workspace": lambda: tools.create_workspace(args.title, args.description),
         "list_workspaces": lambda: tools.list_workspaces(),
         "get_workspace": lambda: tools.get_workspace(args.slug),
@@ -468,16 +754,21 @@ def _run_tools(args: argparse.Namespace):
 
 
 def main(argv: list[str] | None = None):
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    parsed_argv = list(argv) if argv is not None else sys.argv[1:]
+    legacy_modes = {"start", "tools", "index", "license"}
+    include_legacy = bool(parsed_argv and parsed_argv[0] in legacy_modes)
+    parser = build_parser(include_legacy=include_legacy)
+    args = parser.parse_args(parsed_argv)
 
     handlers = {
+        "setup": _handle_setup,
         "start": _handle_start,
         "ingest": _handle_ingest,
         "serve": _handle_serve,
         "doctor": _handle_doctor,
         "update": _handle_update,
         "up": _handle_up,
+        "fleet": _run_fleet,
         "index": _handle_index,
         "license": _run_license,
         "tools": _run_tools,

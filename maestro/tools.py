@@ -41,6 +41,49 @@ from .utils import (
 )
 
 
+# ── Schedule Constants ───────────────────────────────────────────────────────
+
+MANAGED_SCHEDULE_FILE = "maestro_schedule.json"
+SCHEDULE_ITEM_TYPES = {"activity", "milestone", "constraint", "inspection", "delivery", "task"}
+SCHEDULE_ITEM_STATUSES = {"pending", "in_progress", "blocked", "done", "cancelled"}
+CLOSED_SCHEDULE_ITEM_STATUSES = {"done", "cancelled"}
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _derive_schedule_variance_days(current_update: dict[str, Any]) -> int:
+    activity_updates = current_update.get("activity_updates") if isinstance(current_update.get("activity_updates"), list) else []
+    delays: list[int] = []
+    for act in activity_updates:
+        if not isinstance(act, dict):
+            continue
+        raw = act.get("variance_days")
+        if raw is None:
+            continue
+        val = _safe_int(raw, 0)
+        # Source schedule files often use positive days as delayed.
+        if val > 0:
+            val = -val
+        delays.append(val)
+    return min(delays) if delays else 0
+
+
 # ── License Enforcement ───────────────────────────────────────────────────────
 
 def requires_license(func):
@@ -155,6 +198,102 @@ class MaestroTools:
 
     def _resolve_page(self, page_name: str) -> dict[str, Any] | None:
         return resolve_page(self.project, page_name)
+
+    @staticmethod
+    def _normalize_schedule_type(value: Any, default: str = "activity") -> str:
+        raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        return raw if raw in SCHEDULE_ITEM_TYPES else default
+
+    @staticmethod
+    def _normalize_schedule_status(value: Any, default: str = "pending") -> str:
+        raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        return raw if raw in SCHEDULE_ITEM_STATUSES else default
+
+    @staticmethod
+    def _text(value: Any) -> str:
+        return str(value).strip() if value is not None else ""
+
+    def _project_dir(self) -> Path:
+        project_path = self.project.get("_dir")
+        if isinstance(project_path, str) and project_path.strip():
+            return Path(project_path)
+        return self._store_path / str(self.project.get("name", "default"))
+
+    def _schedule_dir(self) -> Path:
+        schedule_dir = self._project_dir() / "schedule"
+        schedule_dir.mkdir(parents=True, exist_ok=True)
+        return schedule_dir
+
+    def _managed_schedule_path(self) -> Path:
+        return self._schedule_dir() / MANAGED_SCHEDULE_FILE
+
+    def _load_managed_schedule(self) -> dict[str, Any]:
+        path = self._managed_schedule_path()
+        payload = load_json(path)
+        if not isinstance(payload, dict):
+            payload = {}
+        items = payload.get("items")
+        if not isinstance(items, list):
+            items = []
+
+        normalized_items: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = slugify_underscore(self._text(item.get("id")))
+            if not item_id:
+                continue
+            normalized_items.append({
+                "id": item_id,
+                "title": self._text(item.get("title")),
+                "type": self._normalize_schedule_type(item.get("type")),
+                "status": self._normalize_schedule_status(item.get("status")),
+                "due_date": self._text(item.get("due_date")),
+                "owner": self._text(item.get("owner")),
+                "activity_id": self._text(item.get("activity_id")),
+                "impact": self._text(item.get("impact")),
+                "notes": self._text(item.get("notes")),
+                "created_at": self._text(item.get("created_at")),
+                "updated_at": self._text(item.get("updated_at")),
+                "closed_at": self._text(item.get("closed_at")),
+                "close_reason": self._text(item.get("close_reason")),
+            })
+
+        return {
+            "version": _safe_int(payload.get("version"), 1),
+            "updated_at": self._text(payload.get("updated_at")),
+            "items": normalized_items,
+        }
+
+    def _save_managed_schedule(self, payload: dict[str, Any]):
+        data = {
+            "version": _safe_int(payload.get("version"), 1),
+            "updated_at": _iso_now(),
+            "items": payload.get("items", []),
+        }
+        save_json(self._managed_schedule_path(), data)
+
+    @staticmethod
+    def _sort_schedule_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        def _key(item: dict[str, Any]) -> tuple[str, str, str]:
+            return (
+                str(item.get("due_date", "") or "9999-12-31"),
+                str(item.get("updated_at", "") or ""),
+                str(item.get("id", "") or ""),
+            )
+
+        return sorted(items, key=_key)
+
+    def _build_schedule_summary(self, current_update: dict[str, Any], lookahead: dict[str, Any], managed_items: list[dict[str, Any]]) -> str:
+        percent_complete = _safe_int(current_update.get("percent_complete"), 0)
+        spi = _safe_float(current_update.get("schedule_performance_index"), 1.0)
+        variance_days = _derive_schedule_variance_days(current_update)
+        blockers = sum(1 for item in managed_items if item.get("status") == "blocked")
+        constraints = len(lookahead.get("constraints", [])) if isinstance(lookahead.get("constraints"), list) else 0
+        return (
+            f"{percent_complete}% complete · SPI {spi:.2f} · variance {variance_days}d · "
+            f"managed blockers {blockers} · lookahead constraints {constraints}"
+        )
 
     # ── Knowledge Queries ─────────────────────────────────────────────────────
 
@@ -276,6 +415,254 @@ class MaestroTools:
                         "label": region.get("label", ""),
                     })
         return gaps if gaps else "No gaps found"
+
+    # ── Schedule Management ───────────────────────────────────────────────────
+
+    @requires_license
+    def get_schedule_status(self) -> dict[str, Any]:
+        schedule_dir = self._schedule_dir()
+        current_path = schedule_dir / "current_update.json"
+        lookahead_path = schedule_dir / "lookahead.json"
+        baseline_path = schedule_dir / "baseline.json"
+
+        current_update = load_json(current_path)
+        lookahead = load_json(lookahead_path)
+        baseline = load_json(baseline_path)
+        if not isinstance(current_update, dict):
+            current_update = {}
+        if not isinstance(lookahead, dict):
+            lookahead = {}
+        if not isinstance(baseline, dict):
+            baseline = {}
+
+        managed = self._load_managed_schedule()
+        managed_items = managed.get("items", []) if isinstance(managed.get("items"), list) else []
+        status_counts = {status: 0 for status in sorted(SCHEDULE_ITEM_STATUSES)}
+        for item in managed_items:
+            if not isinstance(item, dict):
+                continue
+            status = self._normalize_schedule_status(item.get("status"))
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+        upcoming_critical = current_update.get("upcoming_critical_activities")
+        if not isinstance(upcoming_critical, list):
+            upcoming_critical = []
+        constraints = lookahead.get("constraints")
+        if not isinstance(constraints, list):
+            constraints = []
+
+        return {
+            "schedule_root": str(schedule_dir),
+            "files": {
+                "current_update": current_path.exists(),
+                "lookahead": lookahead_path.exists(),
+                "baseline": baseline_path.exists(),
+                "managed_schedule": self._managed_schedule_path().exists(),
+            },
+            "current": {
+                "data_date": self._text(current_update.get("data_date")),
+                "percent_complete": _safe_int(current_update.get("percent_complete"), 0),
+                "schedule_performance_index": _safe_float(current_update.get("schedule_performance_index"), 1.0),
+                "variance_days": _derive_schedule_variance_days(current_update),
+                "weather_delays": _safe_int(current_update.get("weather_delays"), 0),
+                "updated_substantial_completion": self._text(current_update.get("updated_substantial_completion")),
+                "updated_final_completion": self._text(current_update.get("updated_final_completion")),
+            },
+            "lookahead": {
+                "generated": self._text(lookahead.get("generated")),
+                "constraint_count": len(constraints),
+                "upcoming_critical_count": len(upcoming_critical),
+                "next_critical_ids": [
+                    self._text(item.get("id"))
+                    for item in upcoming_critical
+                    if isinstance(item, dict) and self._text(item.get("id"))
+                ][:5],
+            },
+            "baseline": {
+                "contract_duration_days": _safe_int(baseline.get("contract_duration_days"), 0),
+                "substantial_completion": self._text(baseline.get("substantial_completion")),
+                "final_completion": self._text(baseline.get("final_completion")),
+            },
+            "managed": {
+                "updated_at": self._text(managed.get("updated_at")),
+                "item_count": len(managed_items),
+                "status_counts": status_counts,
+                "active_count": sum(
+                    1 for item in managed_items
+                    if isinstance(item, dict) and self._normalize_schedule_status(item.get("status")) not in CLOSED_SCHEDULE_ITEM_STATUSES
+                ),
+            },
+            "summary": self._build_schedule_summary(current_update, lookahead, managed_items),
+        }
+
+    @requires_license
+    def list_schedule_items(self, status: str | None = None) -> list[dict[str, Any]] | str:
+        payload = self._load_managed_schedule()
+        items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
+        target_status = None
+        if status is not None:
+            normalized = self._normalize_schedule_status(status, default="")
+            if not normalized:
+                valid = ", ".join(sorted(SCHEDULE_ITEM_STATUSES))
+                return f"Invalid status '{status}'. Valid statuses: {valid}."
+            target_status = normalized
+        if target_status:
+            items = [
+                item for item in items
+                if isinstance(item, dict) and self._normalize_schedule_status(item.get("status")) == target_status
+            ]
+        return self._sort_schedule_items([item for item in items if isinstance(item, dict)])
+
+    @requires_license
+    def upsert_schedule_item(
+        self,
+        item_id: str | None = None,
+        *,
+        title: str | None = None,
+        item_type: str | None = None,
+        status: str | None = None,
+        due_date: str | None = None,
+        owner: str | None = None,
+        activity_id: str | None = None,
+        impact: str | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any] | str:
+        payload = self._load_managed_schedule()
+        items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
+
+        normalized_id = slugify_underscore(self._text(item_id))
+        if not normalized_id:
+            title_for_id = self._text(title)
+            normalized_id = slugify_underscore(title_for_id)
+        if not normalized_id:
+            return "item_id or title is required to upsert a schedule item."
+
+        existing = None
+        for item in items:
+            if isinstance(item, dict) and self._text(item.get("id")) == normalized_id:
+                existing = item
+                break
+
+        creating = existing is None
+        if creating:
+            clean_title = self._text(title)
+            if not clean_title:
+                return "title is required when creating a schedule item."
+            existing = {
+                "id": normalized_id,
+                "title": clean_title,
+                "type": "activity",
+                "status": "pending",
+                "due_date": "",
+                "owner": "",
+                "activity_id": "",
+                "impact": "",
+                "notes": "",
+                "created_at": _iso_now(),
+                "updated_at": _iso_now(),
+                "closed_at": "",
+                "close_reason": "",
+            }
+            items.append(existing)
+
+        if title is not None:
+            existing["title"] = self._text(title)
+        current_type = self._normalize_schedule_type(existing.get("type"), default="activity")
+        if item_type is not None:
+            existing["type"] = self._normalize_schedule_type(item_type, default=current_type)
+        else:
+            existing["type"] = current_type
+
+        current_status = self._normalize_schedule_status(existing.get("status"), default="pending")
+        if status is not None:
+            existing["status"] = self._normalize_schedule_status(status, default=current_status)
+        else:
+            existing["status"] = current_status
+
+        if due_date is not None:
+            existing["due_date"] = self._text(due_date)
+        if owner is not None:
+            existing["owner"] = self._text(owner)
+        if activity_id is not None:
+            existing["activity_id"] = self._text(activity_id)
+        if impact is not None:
+            existing["impact"] = self._text(impact)
+        if notes is not None:
+            existing["notes"] = self._text(notes)
+
+        if existing["status"] in CLOSED_SCHEDULE_ITEM_STATUSES:
+            if not self._text(existing.get("closed_at")):
+                existing["closed_at"] = _iso_now()
+        else:
+            existing["closed_at"] = ""
+            existing["close_reason"] = ""
+
+        existing["updated_at"] = _iso_now()
+        self._save_managed_schedule({"version": payload.get("version", 1), "items": items})
+
+        return {
+            "status": "created" if creating else "updated",
+            "item": existing,
+            "managed_item_count": len([i for i in items if isinstance(i, dict)]),
+        }
+
+    @requires_license
+    def set_schedule_constraint(
+        self,
+        constraint_id: str,
+        description: str,
+        *,
+        activity_id: str | None = None,
+        impact: str | None = None,
+        due_date: str | None = None,
+        owner: str | None = None,
+        status: str = "blocked",
+    ) -> dict[str, Any] | str:
+        clean_description = self._text(description)
+        if not clean_description:
+            return "description is required."
+        return self.upsert_schedule_item(
+            constraint_id,
+            title=clean_description,
+            item_type="constraint",
+            status=status,
+            due_date=due_date,
+            owner=owner,
+            activity_id=activity_id,
+            impact=impact,
+        )
+
+    @requires_license
+    def close_schedule_item(self, item_id: str, reason: str | None = None, status: str = "done") -> dict[str, Any] | str:
+        normalized_id = slugify_underscore(self._text(item_id))
+        if not normalized_id:
+            return "item_id is required."
+
+        normalized_status = self._normalize_schedule_status(status, default="")
+        if normalized_status not in CLOSED_SCHEDULE_ITEM_STATUSES:
+            return "close status must be one of: done, cancelled."
+
+        payload = self._load_managed_schedule()
+        items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
+
+        target = None
+        for item in items:
+            if isinstance(item, dict) and self._text(item.get("id")) == normalized_id:
+                target = item
+                break
+
+        if not isinstance(target, dict):
+            return f"Schedule item '{normalized_id}' not found."
+
+        target["status"] = normalized_status
+        target["close_reason"] = self._text(reason)
+        target["closed_at"] = _iso_now()
+        target["updated_at"] = _iso_now()
+        self._save_managed_schedule({"version": payload.get("version", 1), "items": items})
+        return {
+            "status": "closed",
+            "item": target,
+        }
 
     # ── Workspace Management ──────────────────────────────────────────────────
 

@@ -1,17 +1,20 @@
 # Runtime Runbook
 
-## Preferred Daily Startup
+## Solo Daily Path (Default)
 
 ```bash
 maestro up
 ```
 
-This runs doctor/fix and starts server.
+Then open:
+
+- `http://localhost:3000/workspace`
+- `http://<tailscale-ip>:3000/workspace` (same tailnet for field devices)
 
 ## Setup and Upgrade
 
 ```bash
-maestro-setup
+maestro setup
 maestro update
 ```
 
@@ -21,13 +24,25 @@ maestro update
 maestro doctor --fix
 ```
 
+Require field URL readiness in Solo:
+
+```bash
+maestro doctor --fix --field-access-required
+```
+
 ## Server Only
 
 ```bash
 maestro serve --port 3000
 ```
 
-## Validation URLs
+## Fleet Enablement (Advanced)
 
-- local: `http://localhost:3000/command-center`
-- tailnet: `http://<tailscale-ip>:3000/command-center`
+```bash
+maestro fleet enable
+maestro fleet status
+```
+
+Then open:
+
+- `http://localhost:3000/command-center`

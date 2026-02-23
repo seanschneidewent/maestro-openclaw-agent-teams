@@ -41,11 +41,29 @@ from .control_plane import (
     save_fleet_registry,
     sync_fleet_registry,
 )
+from .install_state import load_install_state
+from .profile import fleet_enabled as profile_fleet_enabled
 from .doctor import build_doctor_report
 from .server_actions import ActionError, run_command_center_action
 from .server_command_center import CommandCenterRouterContext, create_command_center_router
+from .server_schedule import (
+    close_schedule_item_for_project as _close_schedule_item_for_project,
+    schedule_items_payload as _schedule_items_payload,
+    schedule_status_payload as _schedule_status_payload,
+    upsert_schedule_item_for_project as _upsert_schedule_item_for_project,
+)
+from .server_project_store import (
+    load_all_projects as load_projects_from_store,
+    load_page as load_project_page,
+)
+from .server_workspace_data import (
+    get_page_bboxes as _get_page_bboxes,
+    load_all_workspaces as _load_all_workspaces,
+    load_workspace as _load_workspace,
+    workspaces_dir as _workspaces_dir,
+)
 from . import server_command_center_state as command_center_state_ops
-from .utils import load_json, slugify
+from .utils import slugify, slugify_underscore
 
 # ── Config ──────────────────────────────────────────────────────
 
@@ -80,111 +98,54 @@ agent_project_slug_index: dict[str, str] = {}
 COMMANDER_NODE_SLUG = "commander"
 
 
+def _fleet_mode_enabled() -> bool:
+    return profile_fleet_enabled()
+
+
+def _workspace_missing_project_response() -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "No active project available in Solo workspace.",
+            "next_step": "Run maestro ingest <path-to-pdfs>",
+        },
+        status_code=404,
+    )
+
+
+def _active_workspace_slug() -> str | None:
+    state = load_install_state()
+    active_slug = str(state.get("active_project_slug", "")).strip()
+    if active_slug and active_slug in projects:
+        return active_slug
+
+    active_name = str(state.get("active_project_name", "")).strip()
+    if active_name:
+        by_name = slugify(active_name)
+        if by_name in projects:
+            return by_name
+        for slug, proj in projects.items():
+            if str(proj.get("name", "")).strip().lower() == active_name.lower():
+                return slug
+
+    if projects:
+        return next(iter(sorted(projects.keys())))
+    return None
+
+
 def load_all_projects():
     """Load all project directories from knowledge_store."""
     global projects, ws_clients, project_dir_slug_index
-    projects = {}
-    ws_clients = {}
-    project_dir_slug_index = {}
-    if not store_path.exists():
-        return
-
-    for project_dir in discover_project_dirs(store_path):
-        try:
-            cc_snapshot = build_project_snapshot(project_dir)
-            slug = str(cc_snapshot.get("slug", "")) or slugify(project_dir.name)
-        except Exception:
-            slug = slugify(project_dir.name)
-        project_dir_slug_index[project_dir.name] = slug
-        projects[slug] = _load_project(project_dir, slug)
-        ws_clients.setdefault(slug, set())
+    projects, project_dir_slug_index = load_projects_from_store(
+        store_path,
+        discover_project_dirs_fn=discover_project_dirs,
+        build_project_snapshot_fn=build_project_snapshot,
+    )
+    ws_clients = {slug: set() for slug in projects.keys()}
 
     for slug, proj in projects.items():
         page_count = len(proj.get("pages", {}))
         pointer_count = sum(len(p.get("pointers", {})) for p in proj.get("pages", {}).values())
         print(f"Loaded: {proj['name']} ({slug}) — {page_count} pages, {pointer_count} pointers")
-
-
-def _load_project(project_dir: Path, slug: str) -> dict[str, Any]:
-    project_meta = load_json(project_dir / "project.json")
-    project_name = project_dir.name
-    if isinstance(project_meta, dict):
-        maybe_name = project_meta.get("name")
-        if isinstance(maybe_name, str) and maybe_name.strip():
-            project_name = maybe_name.strip()
-
-    proj: dict[str, Any] = {
-        "name": project_name,
-        "slug": slug,
-        "path": str(project_dir),
-        "pages": {},
-    }
-
-    pages_dir = project_dir / "pages"
-    if pages_dir.exists():
-        for page_dir in sorted(pages_dir.iterdir(), key=lambda p: p.name.lower()):
-            if not page_dir.is_dir():
-                continue
-            # Treat only ingest page directories as pages.
-            if not (page_dir / "pass1.json").exists():
-                continue
-            _load_page(proj, page_dir)
-
-    proj["disciplines"] = sorted({
-        str(p.get("discipline", "General")).strip() or "General"
-        for p in proj["pages"].values()
-    })
-
-    return proj
-
-
-def _load_page(proj: dict[str, Any], page_dir: Path) -> dict[str, Any] | None:
-    page_name = page_dir.name
-    page: dict[str, Any] = {
-        "name": page_name,
-        "path": str(page_dir),
-        "page_type": "unknown",
-        "discipline": "General",
-        "sheet_reflection": "",
-        "index": {},
-        "cross_references": [],
-        "regions": [],
-        "pointers": {},
-    }
-
-    pass1 = load_json(page_dir / "pass1.json")
-    if isinstance(pass1, dict):
-        page["page_type"] = pass1.get("page_type", "unknown")
-        page["discipline"] = pass1.get("discipline", "General") or "General"
-        page["sheet_reflection"] = pass1.get("sheet_reflection", "")
-        page["index"] = pass1.get("index", {}) if isinstance(pass1.get("index"), dict) else {}
-        page["cross_references"] = pass1.get("cross_references", []) if isinstance(pass1.get("cross_references"), list) else []
-        page["regions"] = pass1.get("regions", []) if isinstance(pass1.get("regions"), list) else []
-        page["sheet_info"] = pass1.get("sheet_info", {})
-
-    pointers_dir = page_dir / "pointers"
-    if pointers_dir.exists():
-        for pointer_dir in sorted(pointers_dir.iterdir(), key=lambda p: p.name.lower()):
-            if not pointer_dir.is_dir():
-                continue
-            region_id = pointer_dir.name
-            pass2_path = pointer_dir / "pass2.json"
-            if pass2_path.exists():
-                try:
-                    pointer_data = json.loads(pass2_path.read_text(encoding="utf-8"))
-                    if not isinstance(pointer_data, dict):
-                        pointer_data = {}
-                    pointer_data.setdefault("content_markdown", "")
-                    page["pointers"][region_id] = pointer_data
-                except Exception:
-                    pass
-
-    proj["pages"][page_name] = page
-    proj["disciplines"] = sorted({
-        str(p.get("discipline", "General")).strip() or "General"
-        for p in proj["pages"].values()
-    })
-    return page
 
 
 def _get_project(slug: str) -> dict[str, Any] | None:
@@ -389,7 +350,7 @@ async def watch_knowledge_store():
             if not pg_dir.is_dir():
                 continue
 
-            _load_page(proj, pg_dir)
+            load_project_page(proj, pg_dir)
 
             if path.name == "pass1.json":
                 event = {"type": "page_added", "page": pg_name}
@@ -473,44 +434,8 @@ def get_thumbnail(page_dir: Path, width: int = 800, quality: int = 80) -> bytes 
 
 # ── Workspace helpers ───────────────────────────────────────────
 
-def _workspaces_dir(proj: dict[str, Any]) -> Path:
-    ws_dir = Path(proj["path"]) / "workspaces"
-    ws_dir.mkdir(exist_ok=True)
-    return ws_dir
-
-
-def _load_workspace(proj: dict[str, Any], ws_slug: str) -> dict[str, Any] | None:
-    ws_path = _workspaces_dir(proj) / ws_slug / "workspace.json"
-    return load_json(ws_path) if ws_path.exists() else None
-
-
-def _load_all_workspaces(proj: dict[str, Any]) -> list[dict[str, Any]]:
-    ws_dir = _workspaces_dir(proj)
-    workspaces = []
-    for d in sorted(ws_dir.iterdir()):
-        if d.is_dir():
-            ws = _load_workspace(proj, d.name)
-            if ws:
-                workspaces.append(ws)
-    return workspaces
-
-
-def _get_page_bboxes(proj: dict[str, Any], page_name: str, pointer_ids: list[str]) -> list[dict[str, Any]]:
-    page = proj.get("pages", {}).get(page_name, {})
-    regions = page.get("regions", [])
-    bboxes = []
-    for r in regions:
-        if not isinstance(r, dict):
-            continue
-        if r.get("id") in pointer_ids:
-            bboxes.append({
-                "id": r["id"],
-                "label": r.get("label", ""),
-                "type": r.get("type", ""),
-                "bbox": r.get("bbox", {}),
-            })
-    return bboxes
-
+# Workspace data helpers moved to `maestro.server_workspace_data`.
+# Schedule data helpers moved to `maestro.server_schedule`.
 
 def _ensure_command_center_state():
     if not command_center_state:
@@ -719,6 +644,7 @@ app.include_router(create_command_center_router(CommandCenterRouterContext(
     read_node_conversation=_load_node_conversation,
     send_node_message=_send_node_message,
     run_action=_run_command_center_action_payload,
+    fleet_enabled_fn=_fleet_mode_enabled,
 )))
 
 
@@ -755,6 +681,157 @@ async def api_agent_workspace_index():
         })
     payload.sort(key=lambda item: str(item.get("name", "")).lower())
     return {"agents": payload}
+
+
+def _workspace_slug_or_response() -> tuple[str | None, JSONResponse | None]:
+    slug = _active_workspace_slug()
+    if not slug:
+        return None, _workspace_missing_project_response()
+    return slug, None
+
+
+@app.get("/workspace/api/project")
+async def api_workspace_project():
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_project(str(slug))
+
+
+@app.get("/workspace/api/disciplines")
+async def api_workspace_disciplines():
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_disciplines(str(slug))
+
+
+@app.get("/workspace/api/pages")
+async def api_workspace_pages(discipline: str | None = None):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_pages(str(slug), discipline=discipline)
+
+
+@app.get("/workspace/api/pages/{page_name}")
+async def api_workspace_page(page_name: str):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_page(str(slug), page_name)
+
+
+@app.get("/workspace/api/pages/{page_name}/thumb")
+async def api_workspace_page_thumb(page_name: str, w: int = 800, q: int = 80):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_page_thumb(str(slug), page_name, w=w, q=q)
+
+
+@app.get("/workspace/api/pages/{page_name}/image")
+async def api_workspace_page_image(page_name: str):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_page_image(str(slug), page_name)
+
+
+@app.get("/workspace/api/pages/{page_name}/regions")
+async def api_workspace_regions(page_name: str):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_page_regions(str(slug), page_name)
+
+
+@app.get("/workspace/api/pages/{page_name}/regions/{region_id}")
+async def api_workspace_region(page_name: str, region_id: str):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_region(str(slug), page_name, region_id)
+
+
+@app.get("/workspace/api/pages/{page_name}/regions/{region_id}/crop")
+async def api_workspace_region_crop(page_name: str, region_id: str):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_region_crop(str(slug), page_name, region_id)
+
+
+@app.get("/workspace/api/workspaces")
+async def api_workspace_workspaces():
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_workspaces(str(slug))
+
+
+@app.get("/workspace/api/workspaces/{ws_slug}")
+async def api_workspace_workspace(ws_slug: str):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_workspace(str(slug), ws_slug)
+
+
+@app.get("/workspace/api/workspaces/{ws_slug}/images/{filename}")
+async def api_workspace_generated_image(ws_slug: str, filename: str):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_workspace_image(str(slug), ws_slug, filename)
+
+
+@app.get("/workspace/api/workspaces/{ws_slug}/images/{filename}/thumb")
+async def api_workspace_generated_image_thumb(ws_slug: str, filename: str, w: int = 800, q: int = 80):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_workspace_image_thumb(str(slug), ws_slug, filename, w=w, q=q)
+
+
+@app.get("/workspace/api/schedule/status")
+async def api_workspace_schedule_status():
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_schedule_status(str(slug))
+
+
+@app.get("/workspace/api/schedule/items")
+async def api_workspace_schedule_items(status: str | None = None):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_schedule_items(str(slug), status=status)
+
+
+@app.post("/workspace/api/schedule/items/upsert")
+async def api_workspace_schedule_upsert(payload: dict[str, Any]):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_schedule_upsert_item(str(slug), payload)
+
+
+@app.post("/workspace/api/schedule/constraints")
+async def api_workspace_schedule_constraint(payload: dict[str, Any]):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_schedule_set_constraint(str(slug), payload)
+
+
+@app.post("/workspace/api/schedule/items/{item_id}/close")
+async def api_workspace_schedule_close(item_id: str, payload: dict[str, Any] | None = None):
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_schedule_close_item(str(slug), item_id, payload)
 
 
 @app.get("/{slug}/api/project")
@@ -1002,6 +1079,92 @@ async def api_workspace(slug: str, ws_slug: str):
     return {**ws, "pages": enriched_pages, "generated_images": generated_images}
 
 
+@app.get("/{slug}/api/schedule/status")
+async def api_schedule_status(slug: str):
+    proj = _get_project(slug)
+    if not proj:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    return _schedule_status_payload(proj)
+
+
+@app.get("/{slug}/api/schedule/items")
+async def api_schedule_items(slug: str, status: str | None = None):
+    proj = _get_project(slug)
+    if not proj:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    try:
+        return _schedule_items_payload(proj, status=status)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/{slug}/api/schedule/items/upsert")
+async def api_schedule_upsert_item(slug: str, payload: dict[str, Any]):
+    proj = _get_project(slug)
+    if not proj:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    try:
+        result, _ = _upsert_schedule_item_for_project(proj, payload if isinstance(payload, dict) else {})
+        await broadcast(slug, {"type": "schedule_updated"})
+        return result
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/{slug}/api/schedule/constraints")
+async def api_schedule_set_constraint(slug: str, payload: dict[str, Any]):
+    proj = _get_project(slug)
+    if not proj:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    data = payload if isinstance(payload, dict) else {}
+    description = str(data.get("description", "")).strip()
+    if not description:
+        return JSONResponse({"error": "description is required."}, status_code=400)
+
+    constraint_id = slugify_underscore(str(data.get("constraint_id") or data.get("id") or "").strip())
+    if not constraint_id:
+        constraint_id = slugify_underscore(description)
+
+    try:
+        result, _ = _upsert_schedule_item_for_project(proj, {
+            "item_id": constraint_id,
+            "title": description,
+            "type": "constraint",
+            "status": data.get("status", "blocked"),
+            "activity_id": data.get("activity_id"),
+            "impact": data.get("impact"),
+            "due_date": data.get("due_date"),
+            "owner": data.get("owner"),
+            "notes": data.get("notes"),
+        })
+        await broadcast(slug, {"type": "schedule_updated"})
+        return result
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.post("/{slug}/api/schedule/items/{item_id}/close")
+async def api_schedule_close_item(slug: str, item_id: str, payload: dict[str, Any] | None = None):
+    proj = _get_project(slug)
+    if not proj:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    body = payload if isinstance(payload, dict) else {}
+    try:
+        result = _close_schedule_item_for_project(
+            proj,
+            item_id,
+            reason=body.get("reason"),
+            status=str(body.get("status", "done")),
+        )
+        await broadcast(slug, {"type": "schedule_updated"})
+        return result
+    except KeyError:
+        return JSONResponse({"error": f"Schedule item '{item_id}' not found."}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
 # ── Agent-scoped workspace API routes ──────────────────────────
 
 @app.get("/agents/{agent_id}/workspace/api/project")
@@ -1092,6 +1255,46 @@ async def api_agent_workspace(agent_id: str, ws_slug: str):
     return await api_workspace(slug, ws_slug)
 
 
+@app.get("/agents/{agent_id}/workspace/api/schedule/status")
+async def api_agent_schedule_status(agent_id: str):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_schedule_status(slug)
+
+
+@app.get("/agents/{agent_id}/workspace/api/schedule/items")
+async def api_agent_schedule_items(agent_id: str, status: str | None = None):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_schedule_items(slug, status=status)
+
+
+@app.post("/agents/{agent_id}/workspace/api/schedule/items/upsert")
+async def api_agent_schedule_upsert_item(agent_id: str, payload: dict[str, Any]):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_schedule_upsert_item(slug, payload)
+
+
+@app.post("/agents/{agent_id}/workspace/api/schedule/constraints")
+async def api_agent_schedule_constraint(agent_id: str, payload: dict[str, Any]):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_schedule_set_constraint(slug, payload)
+
+
+@app.post("/agents/{agent_id}/workspace/api/schedule/items/{item_id}/close")
+async def api_agent_schedule_close_item(agent_id: str, item_id: str, payload: dict[str, Any] | None = None):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        return JSONResponse({"error": f"Agent '{agent_id}' not found"}, status_code=404)
+    return await api_schedule_close_item(slug, item_id, payload)
+
+
 @app.get("/agents/{agent_id}/workspace/api/workspaces/{ws_slug}/images/{filename}")
 async def api_agent_workspace_image(agent_id: str, ws_slug: str, filename: str):
     slug = _resolve_agent_slug(agent_id)
@@ -1115,6 +1318,24 @@ async def api_agent_workspace_image_thumb(
 
 
 # ── WebSocket ───────────────────────────────────────────────────
+@app.websocket("/workspace/ws")
+async def websocket_workspace(websocket: WebSocket):
+    slug = _active_workspace_slug()
+    if not slug:
+        await websocket.close(code=4004)
+        return
+    await websocket_endpoint(slug, websocket)
+
+
+@app.websocket("/agents/{agent_id}/workspace/ws")
+async def websocket_agent_workspace(agent_id: str, websocket: WebSocket):
+    slug = _resolve_agent_slug(agent_id)
+    if not slug:
+        await websocket.close(code=4004)
+        return
+    await websocket_endpoint(slug, websocket)
+
+
 @app.websocket("/{slug}/ws")
 async def websocket_endpoint(slug: str, websocket: WebSocket):
     proj = _get_project(slug)
@@ -1136,15 +1357,6 @@ async def websocket_endpoint(slug: str, websocket: WebSocket):
         pass
     finally:
         ws_clients.get(slug, set()).discard(websocket)
-
-
-@app.websocket("/agents/{agent_id}/workspace/ws")
-async def websocket_agent_workspace(agent_id: str, websocket: WebSocket):
-    slug = _resolve_agent_slug(agent_id)
-    if not slug:
-        await websocket.close(code=4004)
-        return
-    await websocket_endpoint(slug, websocket)
 
 
 # ── Frontend SPA ────────────────────────────────────────────────
@@ -1185,6 +1397,28 @@ async def serve_agent_workspace_root(agent_id: str):
     return await serve_agent_workspace(agent_id, "")
 
 
+@app.get("/workspace/{rest:path}")
+async def serve_workspace(rest: str = ""):
+    if rest.startswith("api/") or rest.startswith("ws/"):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    if rest and FRONTEND_DIR.exists():
+        asset_path = FRONTEND_DIR / rest
+        if asset_path.exists() and asset_path.is_file():
+            return FileResponse(asset_path)
+
+    index_path = FRONTEND_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+
+    return JSONResponse({"error": "Frontend not built"}, status_code=404)
+
+
+@app.get("/workspace")
+async def serve_workspace_root():
+    return await serve_workspace("")
+
+
 @app.get("/{slug}/{rest:path}")
 async def serve_frontend(slug: str, rest: str = ""):
     if slug in ("api", "ws"):
@@ -1213,6 +1447,10 @@ async def serve_frontend_root(slug: str):
 
 @app.get("/")
 async def root():
+    if not _fleet_mode_enabled():
+        from starlette.responses import RedirectResponse
+
+        return RedirectResponse(url="/workspace")
     if len(projects) == 1:
         slug = list(projects.keys())[0]
         from starlette.responses import RedirectResponse

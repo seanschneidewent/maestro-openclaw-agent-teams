@@ -77,6 +77,35 @@ def mock_store(tmp_path):
     # Workspaces dir
     (project_dir / "workspaces").mkdir()
 
+    # Schedule fixtures
+    schedule_dir = project_dir / "schedule"
+    schedule_dir.mkdir()
+    (schedule_dir / "current_update.json").write_text(json.dumps({
+        "data_date": "2026-02-23",
+        "percent_complete": 34,
+        "schedule_performance_index": 0.97,
+        "weather_delays": 1,
+        "activity_updates": [
+            {"id": "A1000", "variance_days": 2},
+            {"id": "A1010", "variance_days": 0},
+        ],
+        "upcoming_critical_activities": [
+            {"id": "A1100", "name": "Podium pour"},
+            {"id": "A1200", "name": "Steel install"},
+        ],
+    }), encoding="utf-8")
+    (schedule_dir / "lookahead.json").write_text(json.dumps({
+        "generated": "2026-02-23T08:00:00Z",
+        "constraints": [
+            {"activity_id": "A1100", "description": "RFI-012 response due"},
+        ],
+    }), encoding="utf-8")
+    (schedule_dir / "baseline.json").write_text(json.dumps({
+        "contract_duration_days": 180,
+        "substantial_completion": "2026-06-30",
+        "final_completion": "2026-07-15",
+    }), encoding="utf-8")
+
     return tmp_path
 
 
@@ -216,3 +245,61 @@ class TestWorkspaces:
         tools.add_workspace_page("test", "A101")
         result = tools.remove_workspace_page("test", "A101_Floor_Plan_p001")
         assert result["status"] == "removed"
+
+
+class TestSchedule:
+    def test_get_schedule_status(self, tools):
+        status = tools.get_schedule_status()
+        assert status["files"]["current_update"] is True
+        assert status["current"]["percent_complete"] == 34
+        assert status["lookahead"]["constraint_count"] == 1
+        assert status["baseline"]["contract_duration_days"] == 180
+        assert "SPI" in status["summary"]
+
+    def test_upsert_schedule_item_create_and_list(self, tools):
+        created = tools.upsert_schedule_item(
+            "milestone_podium_pour",
+            title="Podium pour",
+            item_type="milestone",
+            status="pending",
+            due_date="2026-03-01",
+            owner="andy",
+        )
+        assert created["status"] == "created"
+        assert created["item"]["id"] == "milestone_podium_pour"
+
+        items = tools.list_schedule_items()
+        assert isinstance(items, list)
+        assert any(item["id"] == "milestone_podium_pour" for item in items)
+
+    def test_set_schedule_constraint_and_filter(self, tools):
+        result = tools.set_schedule_constraint(
+            "constraint_rfi_012",
+            "RFI-012 response needed before podium pour",
+            activity_id="A1100",
+            status="blocked",
+        )
+        assert result["status"] == "created"
+        assert result["item"]["type"] == "constraint"
+
+        blocked = tools.list_schedule_items(status="blocked")
+        assert isinstance(blocked, list)
+        assert any(item["id"] == "constraint_rfi_012" for item in blocked)
+
+    def test_close_schedule_item(self, tools):
+        tools.upsert_schedule_item(
+            "activity_a1100",
+            title="Podium prep",
+            item_type="activity",
+            status="in_progress",
+        )
+        closed = tools.close_schedule_item("activity_a1100", reason="Completed in field", status="done")
+        assert closed["status"] == "closed"
+        assert closed["item"]["status"] == "done"
+        assert closed["item"]["close_reason"] == "Completed in field"
+        assert closed["item"]["closed_at"]
+
+    def test_close_schedule_item_missing(self, tools):
+        missing = tools.close_schedule_item("does_not_exist")
+        assert isinstance(missing, str)
+        assert "not found" in missing.lower()

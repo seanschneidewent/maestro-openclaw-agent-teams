@@ -16,12 +16,20 @@ from pathlib import Path
 from typing import Any
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls
+from .profile import PROFILE_FLEET, PROFILE_SOLO, resolve_profile
 from .utils import load_json, save_json
 from .install_state import resolve_fleet_store_root, save_install_state
-from .workspace_templates import provider_env_key_for_model, render_company_agents_md, render_tools_md
+from .workspace_templates import (
+    provider_env_key_for_model,
+    render_company_agents_md,
+    render_personal_agents_md,
+    render_personal_tools_md,
+    render_tools_md,
+)
 
 
 PROVIDER_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY")
+_ENV_TRUE = {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -41,6 +49,13 @@ def _is_placeholder(value: str | None) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in _ENV_TRUE
+
+
 def _load_openclaw_config(home_dir: Path) -> tuple[dict[str, Any], Path]:
     config_path = home_dir / ".openclaw" / "openclaw.json"
     payload = load_json(config_path)
@@ -58,6 +73,22 @@ def _resolve_company_agent(config: dict[str, Any]) -> dict[str, Any]:
     )
     if isinstance(company, dict):
         return company
+    default_agent = next(
+        (a for a in agent_list if isinstance(a, dict) and a.get("default")),
+        None,
+    )
+    return default_agent if isinstance(default_agent, dict) else {}
+
+
+def _resolve_personal_agent(config: dict[str, Any]) -> dict[str, Any]:
+    agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
+    personal = next(
+        (a for a in agent_list if isinstance(a, dict) and a.get("id") == "maestro-personal"),
+        None,
+    )
+    if isinstance(personal, dict):
+        return personal
     default_agent = next(
         (a for a in agent_list if isinstance(a, dict) and a.get("default")),
         None,
@@ -134,6 +165,7 @@ def _sync_workspace_tools_md(
     workspace_root: Path | None,
     company_name: str,
     active_provider_env_key: str | None,
+    profile: str,
     fix: bool,
 ) -> DoctorCheck:
     if not workspace_root:
@@ -144,7 +176,11 @@ def _sync_workspace_tools_md(
             warning=True,
         )
     tools_path = workspace_root / "TOOLS.md"
-    desired = render_tools_md(company_name=company_name, active_provider_env_key=active_provider_env_key)
+    desired = (
+        render_tools_md(company_name=company_name, active_provider_env_key=active_provider_env_key)
+        if profile == PROFILE_FLEET
+        else render_personal_tools_md(active_provider_env_key=active_provider_env_key)
+    )
 
     if tools_path.exists():
         current = tools_path.read_text(encoding="utf-8")
@@ -184,6 +220,7 @@ def _sync_workspace_tools_md(
 
 def _sync_workspace_agents_md(
     workspace_root: Path | None,
+    profile: str,
     fix: bool,
 ) -> DoctorCheck:
     if not workspace_root:
@@ -195,7 +232,7 @@ def _sync_workspace_agents_md(
         )
 
     agents_path = workspace_root / "AGENTS.md"
-    desired = render_company_agents_md()
+    desired = render_company_agents_md() if profile == PROFILE_FLEET else render_personal_agents_md()
     if not agents_path.exists():
         if fix:
             agents_path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,27 +251,28 @@ def _sync_workspace_agents_md(
         )
 
     current = agents_path.read_text(encoding="utf-8")
-    if "Check `knowledge_store/` — this is what you know" in current:
+    if current.strip() != desired.strip():
         if fix:
             agents_path.write_text(desired, encoding="utf-8")
             return DoctorCheck(
                 name="workspace_agents_md",
                 ok=True,
-                detail="Updated company AGENTS.md to control-plane policy",
+                detail="Updated AGENTS.md to match active profile policy",
                 fixed=True,
             )
         return DoctorCheck(
             name="workspace_agents_md",
             ok=False,
-            detail="Company AGENTS.md is legacy project-style policy",
+            detail="AGENTS.md policy differs from active profile template",
             warning=True,
         )
 
-    return DoctorCheck(name="workspace_agents_md", ok=True, detail="Company AGENTS.md policy is current")
+    return DoctorCheck(name="workspace_agents_md", ok=True, detail="AGENTS.md policy is current")
 
 
 def _sync_workspace_env_role(
     workspace_root: Path | None,
+    expected_role: str,
     fix: bool,
 ) -> DoctorCheck:
     if not workspace_root:
@@ -259,37 +297,37 @@ def _sync_workspace_env_role(
         line = raw_line.strip()
         if line.startswith("MAESTRO_AGENT_ROLE="):
             value = line.split("=", 1)[1].strip().lower()
-            if value == "company":
-                return DoctorCheck(name="workspace_env_role", ok=True, detail="MAESTRO_AGENT_ROLE=company")
+            if value == expected_role:
+                return DoctorCheck(name="workspace_env_role", ok=True, detail=f"MAESTRO_AGENT_ROLE={expected_role}")
             if fix:
                 lines = current.splitlines()
                 out = []
                 for item in lines:
                     if item.strip().startswith("MAESTRO_AGENT_ROLE="):
-                        out.append("MAESTRO_AGENT_ROLE=company")
+                        out.append(f"MAESTRO_AGENT_ROLE={expected_role}")
                     else:
                         out.append(item)
                 env_path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
                 return DoctorCheck(
                     name="workspace_env_role",
                     ok=True,
-                    detail="Normalized MAESTRO_AGENT_ROLE=company in .env",
+                    detail=f"Normalized MAESTRO_AGENT_ROLE={expected_role} in .env",
                     fixed=True,
                 )
             return DoctorCheck(
                 name="workspace_env_role",
                 ok=False,
-                detail=f"MAESTRO_AGENT_ROLE is '{value}', expected 'company'",
+                detail=f"MAESTRO_AGENT_ROLE is '{value}', expected '{expected_role}'",
                 warning=True,
             )
 
     if fix:
         with env_path.open("a", encoding="utf-8") as handle:
-            handle.write("MAESTRO_AGENT_ROLE=company\n")
+            handle.write(f"MAESTRO_AGENT_ROLE={expected_role}\n")
         return DoctorCheck(
             name="workspace_env_role",
             ok=True,
-            detail="Added MAESTRO_AGENT_ROLE=company to .env",
+            detail=f"Added MAESTRO_AGENT_ROLE={expected_role} to .env",
             fixed=True,
         )
     return DoctorCheck(
@@ -654,13 +692,21 @@ def build_doctor_report(
     fix: bool = False,
     store_override: str | None = None,
     restart_gateway: bool = True,
+    field_access_required: bool | None = None,
     home_dir: Path | None = None,
 ) -> dict[str, Any]:
     home = (home_dir or Path.home()).resolve()
     config, config_path = _load_openclaw_config(home)
     checks: list[DoctorCheck] = []
     store_root = _infer_store_root(store_override, None)
-    network = resolve_network_urls(web_port=3000)
+    profile = resolve_profile(home_dir=home)
+    route_path = "/command-center" if profile == PROFILE_FLEET else "/workspace"
+    network = resolve_network_urls(web_port=3000, route_path=route_path)
+    require_field_access = (
+        _env_flag("MAESTRO_FIELD_ACCESS_REQUIRED", default=False)
+        if field_access_required is None
+        else bool(field_access_required)
+    )
 
     if not config_path.exists():
         checks.append(DoctorCheck(name="openclaw_config", ok=False, detail=f"Missing {config_path}"))
@@ -669,22 +715,25 @@ def build_doctor_report(
             "fix_mode": fix,
             "store_root": str(store_root),
             "recommended_url": network["recommended_url"],
+            "field_access_required": require_field_access,
             "checks": [asdict(c) for c in checks],
         }
 
     checks.append(DoctorCheck(name="openclaw_config", ok=True, detail=f"Config loaded: {config_path}"))
 
-    company = _resolve_company_agent(config)
-    workspace_raw = str(company.get("workspace", "")).strip()
+    primary = _resolve_company_agent(config) if profile == PROFILE_FLEET else _resolve_personal_agent(config)
+    workspace_raw = str(primary.get("workspace", "")).strip()
     workspace = Path(workspace_raw).expanduser().resolve() if workspace_raw else None
-    model = str(company.get("model", "")).strip()
+    model = str(primary.get("model", "")).strip()
     provider_env_key = provider_env_key_for_model(model) if model else None
-    company_name = str(company.get("name", "Company")).strip().replace("Maestro (", "").replace(")", "")
+    company_name = str(primary.get("name", "Company")).strip().replace("Maestro (", "").replace(")", "")
+    expected_role = "company" if profile == PROFILE_FLEET else "project"
 
-    if not company:
-        checks.append(DoctorCheck(name="company_agent", ok=False, detail="maestro-company agent missing"))
+    if not primary:
+        expected_agent = "maestro-company" if profile == PROFILE_FLEET else "maestro-personal"
+        checks.append(DoctorCheck(name="primary_agent", ok=False, detail=f"{expected_agent} agent missing"))
     else:
-        checks.append(DoctorCheck(name="company_agent", ok=True, detail=f"{company.get('id')} model={model or 'unknown'}"))
+        checks.append(DoctorCheck(name="primary_agent", ok=True, detail=f"{primary.get('id')} model={model or 'unknown'}"))
 
     config_env = config.get("env", {}) if isinstance(config.get("env"), dict) else {}
     if provider_env_key:
@@ -709,10 +758,11 @@ def build_doctor_report(
         workspace,
         company_name=company_name,
         active_provider_env_key=provider_env_key,
+        profile=profile,
         fix=fix,
     ))
-    checks.append(_sync_workspace_agents_md(workspace, fix=fix))
-    checks.append(_sync_workspace_env_role(workspace, fix=fix))
+    checks.append(_sync_workspace_agents_md(workspace, profile=profile, fix=fix))
+    checks.append(_sync_workspace_env_role(workspace, expected_role=expected_role, fix=fix))
     checks.append(_sync_launchagent_env(home, config_env=config_env, fix=fix))
     checks.append(_rotate_stale_sessions(home, fix=fix))
     checks.append(_sync_telegram_bindings(config, config_path=config_path, fix=fix))
@@ -734,13 +784,39 @@ def build_doctor_report(
         warning=not gateway_ok,
     ))
 
-    network = resolve_network_urls(web_port=3000)
-    checks.append(DoctorCheck(name="command_center_url", ok=True, detail=network["recommended_url"]))
+    if profile == PROFILE_FLEET:
+        checks.append(DoctorCheck(name="command_center_url", ok=True, detail=network["recommended_url"]))
+    else:
+        local_workspace = str(network.get("localhost_url", "http://localhost:3000/workspace"))
+        tailnet_workspace = str(network.get("tailnet_url") or "")
+        preferred = tailnet_workspace or local_workspace
+        checks.append(DoctorCheck(name="workspace_url", ok=True, detail=preferred))
+        if tailnet_workspace:
+            checks.append(DoctorCheck(
+                name="tailscale_workspace_access",
+                ok=True,
+                detail=f"Field access ready: {tailnet_workspace}",
+            ))
+        else:
+            detail = (
+                "No Tailscale IPv4 detected. Field access unavailable; "
+                "connect this machine to Tailscale (`tailscale up`)."
+            )
+            checks.append(DoctorCheck(
+                name="tailscale_workspace_access",
+                ok=not require_field_access,
+                detail=detail,
+                warning=not require_field_access,
+            ))
 
     if fix:
         save_install_state(
             {
+                "version": 2,
+                "profile": profile,
+                "fleet_enabled": profile == PROFILE_FLEET,
                 "workspace_root": str(workspace) if workspace else "",
+                "store_root": str(store_root),
                 "fleet_store_root": str(store_root),
                 "company_name": company_name or "Company",
                 "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -752,8 +828,10 @@ def build_doctor_report(
     return {
         "ok": ok,
         "fix_mode": fix,
+        "profile": profile,
         "store_root": str(store_root),
         "recommended_url": network["recommended_url"],
+        "field_access_required": require_field_access,
         "checks": [asdict(c) for c in checks],
     }
 
@@ -763,21 +841,26 @@ def run_doctor(
     store_override: str | None = None,
     restart_gateway: bool = True,
     json_output: bool = False,
+    field_access_required: bool | None = None,
     home_dir: Path | None = None,
 ) -> int:
     report = build_doctor_report(
         fix=fix,
         store_override=store_override,
         restart_gateway=restart_gateway,
+        field_access_required=field_access_required,
         home_dir=home_dir,
     )
     if json_output:
         print(json.dumps(report, indent=2))
     else:
         print("Maestro doctor summary")
+        print(f"- Profile: {report.get('profile', 'solo')}")
         print(f"- Fix mode: {'on' if report.get('fix_mode') else 'off'}")
         print(f"- Store root: {report.get('store_root', '')}")
-        print(f"- Command Center: {report.get('recommended_url', '')}")
+        print(f"- Recommended URL: {report.get('recommended_url', '')}")
+        if report.get("profile") == PROFILE_SOLO:
+            print(f"- Field access required: {'yes' if report.get('field_access_required') else 'no'}")
         for check in report.get("checks", []):
             if not isinstance(check, dict):
                 continue

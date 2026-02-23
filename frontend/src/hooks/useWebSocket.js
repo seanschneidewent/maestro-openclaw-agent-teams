@@ -1,14 +1,35 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 
-export function useWebSocket({ onPageAdded, onPageUpdated, onRegionComplete, onInit, onWorkspaceUpdated } = {}) {
+export function useWebSocket({
+  onPageAdded,
+  onPageUpdated,
+  onRegionComplete,
+  onInit,
+  onWorkspaceUpdated,
+  onScheduleUpdated,
+} = {}) {
   const wsRef = useRef(null)
   const [connected, setConnected] = useState(false)
-  const handlersRef = useRef({ onPageAdded, onPageUpdated, onRegionComplete, onInit, onWorkspaceUpdated })
+  const handlersRef = useRef({
+    onPageAdded,
+    onPageUpdated,
+    onRegionComplete,
+    onInit,
+    onWorkspaceUpdated,
+    onScheduleUpdated,
+  })
 
   useEffect(() => {
-    handlersRef.current = { onPageAdded, onPageUpdated, onRegionComplete, onInit, onWorkspaceUpdated }
-  }, [onPageAdded, onPageUpdated, onRegionComplete, onInit, onWorkspaceUpdated])
+    handlersRef.current = {
+      onPageAdded,
+      onPageUpdated,
+      onRegionComplete,
+      onInit,
+      onWorkspaceUpdated,
+      onScheduleUpdated,
+    }
+  }, [onPageAdded, onPageUpdated, onRegionComplete, onInit, onWorkspaceUpdated, onScheduleUpdated])
 
   useEffect(() => {
     const url = api.getWsUrl()
@@ -31,6 +52,7 @@ export function useWebSocket({ onPageAdded, onPageUpdated, onRegionComplete, onI
           if (data.type === 'page_image_ready' && h.onPageUpdated) h.onPageUpdated(data)
           if (data.type === 'region_complete' && h.onRegionComplete) h.onRegionComplete(data)
           if (data.type === 'workspace_updated' && h.onWorkspaceUpdated) h.onWorkspaceUpdated(data)
+          if (data.type === 'schedule_updated' && h.onScheduleUpdated) h.onScheduleUpdated(data)
         } catch (error) {
           console.error('Invalid WebSocket event', error)
         }

@@ -70,9 +70,15 @@ export default function useNodeModalData(project, control, awareness) {
     let cancelled = false
     if (!project?.slug) return () => {}
 
-    async function loadConversationAndStatus() {
-      setConversationLoading(true)
-      setConversationError('')
+    setConversationLoading(true)
+    setConversationError('')
+    setConversation({ messages: [] })
+    setStatusPayload(null)
+
+    async function loadConversationAndStatus(background = false) {
+      if (!background) {
+        setConversationLoading(true)
+      }
       try {
         const [conversationPayload, status] = await Promise.all([
           api.getNodeConversation(project.slug, { limit: 100 }),
@@ -81,21 +87,28 @@ export default function useNodeModalData(project, control, awareness) {
         if (cancelled) return
         setConversation(conversationPayload || { messages: [] })
         setStatusPayload(status || null)
+        setConversationError('')
       } catch (error) {
         if (!cancelled) {
-          setConversation({ messages: [] })
-          setStatusPayload(null)
+          if (!background) {
+            setConversation({ messages: [] })
+            setStatusPayload(null)
+          }
           setConversationError(error?.message || 'Failed to load node conversation')
         }
       } finally {
         if (!cancelled) {
-          setConversationLoading(false)
+          if (!background) {
+            setConversationLoading(false)
+          }
         }
       }
     }
 
-    loadConversationAndStatus()
-    const timer = window.setInterval(loadConversationAndStatus, 5000)
+    loadConversationAndStatus(false)
+    const timer = window.setInterval(() => {
+      loadConversationAndStatus(true)
+    }, 5000)
     return () => {
       cancelled = true
       window.clearInterval(timer)

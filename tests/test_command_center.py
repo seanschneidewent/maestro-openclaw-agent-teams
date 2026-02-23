@@ -506,3 +506,54 @@ class TestCommandCenterAPI:
         missing = asyncio.run(server.api_agent_project("maestro-project-missing"))
         assert isinstance(missing, JSONResponse)
         assert missing.status_code == 404
+
+    def test_workspace_schedule_status_endpoints(self, single_project_store: Path):
+        server.store_path = single_project_store
+        server.load_all_projects()
+        server._refresh_command_center_state()
+        server._refresh_control_plane_state()
+        state = asyncio.run(server.api_command_center_state())
+        slug = state["projects"][0]["slug"]
+        agent_id = f"maestro-project-{slug}"
+
+        schedule_status = asyncio.run(server.api_schedule_status(slug))
+        assert schedule_status["files"]["current_update"] is True
+        assert schedule_status["current"]["percent_complete"] == 22
+
+        agent_status = asyncio.run(server.api_agent_schedule_status(agent_id))
+        assert agent_status["current"]["percent_complete"] == 22
+
+    def test_workspace_schedule_item_crud_endpoints(self, single_project_store: Path):
+        server.store_path = single_project_store
+        server.load_all_projects()
+        server._refresh_command_center_state()
+        server._refresh_control_plane_state()
+        state = asyncio.run(server.api_command_center_state())
+        slug = state["projects"][0]["slug"]
+        agent_id = f"maestro-project-{slug}"
+
+        created = asyncio.run(server.api_schedule_upsert_item(
+            slug,
+            {
+                "item_id": "milestone_podium_pour",
+                "title": "Podium pour",
+                "type": "milestone",
+                "status": "pending",
+                "due_date": "2026-03-01",
+                "owner": "andy",
+            },
+        ))
+        assert created["status"] == "created"
+        assert created["item"]["id"] == "milestone_podium_pour"
+
+        listed = asyncio.run(server.api_schedule_items(slug))
+        assert listed["count"] >= 1
+        assert any(item["id"] == "milestone_podium_pour" for item in listed["items"])
+
+        closed = asyncio.run(server.api_agent_schedule_close_item(
+            agent_id,
+            "milestone_podium_pour",
+            {"status": "done", "reason": "Closed by test"},
+        ))
+        assert closed["status"] == "closed"
+        assert closed["item"]["status"] == "done"

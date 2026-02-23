@@ -42,6 +42,7 @@ class CommandCenterRouterContext:
     read_node_conversation: ConversationReader
     send_node_message: ConversationSender
     run_action: ActionRunner
+    fleet_enabled_fn: Callable[[], bool]
 
 
 def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
@@ -51,14 +52,21 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
     def _command_center_index_path() -> Path:
         return ctx.command_center_dir / "index.html"
 
+    def _fleet_disabled_payload() -> dict[str, Any]:
+        return {"error": "Fleet mode not enabled", "next_step": "Run maestro fleet enable"}
+
     @router.get("/api/command-center/state")
     async def api_command_center_state():
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         ctx.ensure_command_center_state()
         ctx.ensure_awareness_state()
         return ctx.get_command_center_state()
 
     @router.get("/api/command-center/projects/{slug}")
     async def api_command_center_project_detail(slug: str):
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         try:
             return ctx.load_project_detail(slug)
         except KeyError:
@@ -68,6 +76,8 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
 
     @router.get("/api/command-center/nodes/{slug}/status")
     async def api_command_center_node_status(slug: str):
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         try:
             return ctx.load_project_status(slug)
         except KeyError:
@@ -77,6 +87,8 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
 
     @router.get("/api/command-center/nodes/{slug}/conversation")
     async def api_command_center_node_conversation(slug: str, limit: int = 100, before: str | None = None):
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         try:
             return ctx.read_node_conversation(slug, int(limit), before)
         except KeyError:
@@ -86,6 +98,8 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
 
     @router.post("/api/command-center/nodes/{slug}/conversation/send")
     async def api_command_center_node_send(slug: str, payload: dict[str, Any]):
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         message = str(payload.get("message", "")).strip()
         source = str(payload.get("source", "")).strip() or "unknown"
         try:
@@ -99,16 +113,22 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
 
     @router.get("/api/system/awareness")
     async def api_system_awareness():
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         ctx.ensure_awareness_state()
         return ctx.get_awareness_state()
 
     @router.get("/api/command-center/fleet-registry")
     async def api_fleet_registry():
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         ctx.ensure_fleet_registry()
         return ctx.get_fleet_registry()
 
     @router.post("/api/command-center/actions")
     async def api_command_center_actions(payload: dict[str, Any]):
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         try:
             return await ctx.run_action(payload)
         except ActionError as exc:
@@ -116,6 +136,11 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
 
     @router.websocket("/ws/command-center")
     async def websocket_command_center(websocket: WebSocket):
+        if not ctx.fleet_enabled_fn():
+            await websocket.accept()
+            await websocket.send_text(json.dumps(_fleet_disabled_payload()))
+            await websocket.close(code=4004)
+            return
         await websocket.accept()
         ctx.command_center_ws_clients.add(websocket)
         try:
@@ -135,6 +160,8 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
 
     @router.get("/command-center")
     async def command_center():
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         index_path = _command_center_index_path()
         if index_path.exists():
             return FileResponse(index_path)
@@ -148,6 +175,8 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
 
     @router.get("/command-center/assets/{rest:path}")
     async def command_center_assets(rest: str):
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         asset_path = ctx.command_center_dir / "assets" / rest
         if asset_path.exists() and asset_path.is_file():
             return FileResponse(asset_path)
@@ -155,6 +184,8 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
 
     @router.get("/command-center/{rest:path}")
     async def command_center_spa(rest: str):
+        if not ctx.fleet_enabled_fn():
+            return JSONResponse(_fleet_disabled_payload(), status_code=404)
         if rest.startswith("api/") or rest.startswith("ws/"):
             return JSONResponse({"error": "Not found"}, status_code=404)
 

@@ -715,6 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None):
+    console.print("[yellow][deprecated][/yellow] `maestro-purchase` is an alias. Use `maestro fleet purchase`.")
     args = build_parser().parse_args(argv)
     code = run_purchase(
         project_name=args.project_name,

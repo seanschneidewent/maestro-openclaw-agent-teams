@@ -1,8 +1,14 @@
-import { Layers, CheckCircle2, PanelRightClose, BookOpen } from 'lucide-react'
+import { Layers, PanelRightClose, BookOpen } from 'lucide-react'
 
-export default function WorkspaceSwitcher({ workspaces = [], activeSlug, onSelect, onCollapse }) {
+export default function WorkspaceSwitcher({
+  workspaces = [],
+  activeSlug,
+  onSelect,
+  onCollapse,
+  className = '',
+}) {
   return (
-    <div className="w-80 border-l border-slate-200 bg-gradient-to-b from-slate-50 to-white flex flex-col h-full">
+    <div className={`w-full bg-gradient-to-b from-slate-50 to-white flex flex-col h-full ${className}`}>
       <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between bg-white/85 backdrop-blur-sm">
         <div className="flex items-center gap-2">
           {onCollapse && (

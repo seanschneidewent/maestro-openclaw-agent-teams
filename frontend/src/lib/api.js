@@ -1,7 +1,8 @@
 // api.js — Maestro API client
 // Supports workspace URL shapes:
-// 1) /<project-slug>/...
+// 1) /workspace/...
 // 2) /agents/<agent-id>/workspace/...
+// 3) /<project-slug>/... (legacy compatibility)
 
 function encodePathSegment(value) {
   return encodeURIComponent(value || '')
@@ -9,6 +10,14 @@ function encodePathSegment(value) {
 
 function getRouteContext() {
   const parts = window.location.pathname.split('/').filter(Boolean)
+  if (parts[0] === 'workspace') {
+    return {
+      kind: 'workspace',
+      agentId: '',
+      projectSlug: '',
+      prefix: '/workspace',
+    }
+  }
   if (parts[0] === 'agents' && parts[1] && parts[2] === 'workspace') {
     return {
       kind: 'agent',
@@ -44,6 +53,19 @@ async function request(path) {
   return res.json()
 }
 
+async function requestPost(path, payload) {
+  const res = await fetch(`${API_BASE}${routePrefix()}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload || {}),
+  })
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(error.error || `API error: ${res.status}`)
+  }
+  return res.json()
+}
+
 // Convenience exports
 export const fetchPageRegions = (name) => request(`/api/pages/${encodeURIComponent(name)}/regions`)
 
@@ -69,6 +91,17 @@ export const api = {
   // Workspaces
   getWorkspaces: () => request('/api/workspaces'),
   getWorkspace: (slug) => request(`/api/workspaces/${encodeURIComponent(slug)}`),
+
+  // Schedule
+  getScheduleStatus: () => request('/api/schedule/status'),
+  getScheduleItems: (status) => {
+    const qs = status ? `?status=${encodeURIComponent(status)}` : ''
+    return request(`/api/schedule/items${qs}`)
+  },
+  upsertScheduleItem: (payload) => requestPost('/api/schedule/items/upsert', payload),
+  setScheduleConstraint: (payload) => requestPost('/api/schedule/constraints', payload),
+  closeScheduleItem: (itemId, payload = {}) =>
+    requestPost(`/api/schedule/items/${encodeURIComponent(itemId)}/close`, payload),
 
   // Generated images
   getGeneratedImageUrl: (wsSlug, filename) =>

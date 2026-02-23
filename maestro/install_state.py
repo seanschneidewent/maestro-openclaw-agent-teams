@@ -6,8 +6,14 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+from datetime import datetime, timezone
 
 from .utils import load_json, save_json
+
+
+INSTALL_STATE_VERSION = 2
+PROFILE_SOLO = "solo"
+PROFILE_FLEET = "fleet"
 
 
 def install_state_path(home_dir: Path | None = None) -> Path:
@@ -21,9 +27,83 @@ def load_install_state(home_dir: Path | None = None) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def normalize_install_state(state: dict[str, Any] | None) -> dict[str, Any]:
+    payload = state if isinstance(state, dict) else {}
+    profile = str(payload.get("profile", "")).strip().lower()
+    if profile not in (PROFILE_SOLO, PROFILE_FLEET):
+        profile = PROFILE_SOLO
+
+    fleet_enabled = payload.get("fleet_enabled")
+    if isinstance(fleet_enabled, bool):
+        enabled = fleet_enabled
+    else:
+        enabled = profile == PROFILE_FLEET
+
+    out: dict[str, Any] = {
+        "version": int(payload.get("version", INSTALL_STATE_VERSION)),
+        "profile": profile,
+        "fleet_enabled": enabled,
+        "workspace_root": str(payload.get("workspace_root", "")).strip(),
+        "store_root": str(payload.get("store_root", "")).strip(),
+        "active_project_slug": str(payload.get("active_project_slug", "")).strip(),
+        "active_project_name": str(payload.get("active_project_name", "")).strip(),
+        "updated_at": str(payload.get("updated_at", "")).strip() or _now_iso(),
+    }
+
+    # Backward compatibility keys.
+    if not out["store_root"]:
+        legacy = str(payload.get("fleet_store_root", "")).strip()
+        if legacy:
+            out["store_root"] = legacy
+    if out["store_root"] and "fleet_store_root" not in payload:
+        out["fleet_store_root"] = out["store_root"]
+    elif str(payload.get("fleet_store_root", "")).strip():
+        out["fleet_store_root"] = str(payload.get("fleet_store_root", "")).strip()
+
+    # Preserve legacy metadata fields if present.
+    for key in ("install_id", "company_name"):
+        raw = str(payload.get(key, "")).strip()
+        if raw:
+            out[key] = raw
+
+    return out
+
+
 def save_install_state(state: dict[str, Any], home_dir: Path | None = None):
     path = install_state_path(home_dir)
-    save_json(path, state)
+    normalized = normalize_install_state(state)
+    normalized["updated_at"] = _now_iso()
+    save_json(path, normalized)
+
+
+def update_install_state(
+    updates: dict[str, Any],
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    current = load_install_state(home_dir=home_dir)
+    merged = dict(current)
+    merged.update(updates or {})
+    save_install_state(merged, home_dir=home_dir)
+    return normalize_install_state(merged)
+
+
+def record_active_project(
+    *,
+    project_slug: str,
+    project_name: str,
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    return update_install_state(
+        {
+            "active_project_slug": str(project_slug).strip(),
+            "active_project_name": str(project_name).strip(),
+        },
+        home_dir=home_dir,
+    )
 
 
 def resolve_company_workspace(home_dir: Path | None = None) -> Path | None:
@@ -85,7 +165,7 @@ def resolve_fleet_store_root(
         return Path(store_override).expanduser().resolve()
 
     state = load_install_state(home_dir=home_dir)
-    state_root = state.get("fleet_store_root")
+    state_root = state.get("store_root") or state.get("fleet_store_root")
     if isinstance(state_root, str) and state_root.strip():
         return Path(state_root).expanduser().resolve()
 
@@ -101,4 +181,3 @@ def resolve_fleet_store_root(
     if workspace:
         return (workspace / "knowledge_store").resolve()
     return Path("knowledge_store").resolve()
-

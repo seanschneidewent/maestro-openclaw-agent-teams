@@ -14,7 +14,7 @@ export default function ConversationSection({
   const messages = Array.isArray(conversation?.messages) ? conversation.messages : []
   return (
     <DrawerCard title="Live Conversation" className="xl:col-span-2">
-      {loading && <div className="text-xs text-slate-500 mb-2">Loading conversation...</div>}
+      {loading && messages.length === 0 && <div className="text-xs text-slate-500 mb-2">Loading conversation...</div>}
       {error && <div className="text-xs text-rose-300 mb-2">{error}</div>}
       <div className="max-h-72 overflow-auto space-y-2 pr-1">
         {messages.length === 0 ? (
@@ -69,4 +69,3 @@ export default function ConversationSection({
     </DrawerCard>
   )
 }
-

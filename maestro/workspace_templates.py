@@ -79,6 +79,57 @@ def render_company_agents_md() -> str:
     )
 
 
+def render_personal_agents_md() -> str:
+    """Render AGENTS.md for a Solo personal workspace."""
+    return (
+        "# AGENTS.md — Maestro Personal\n\n"
+        "## Every Session\n"
+        "1. Read `SOUL.md`\n"
+        "2. Read `IDENTITY.md`\n"
+        "3. Read `USER.md`\n"
+        "4. Check `knowledge_store/`\n\n"
+        "## Role\n"
+        "You are a project-capable personal Maestro agent.\n"
+        "You answer plan questions, maintain workspaces, and manage schedule tasks.\n\n"
+        "## Tooling Scope\n"
+        "- Use project knowledge tools in this workspace\n"
+        "- Use workspace and schedule tools to track progress\n"
+        "- If user asks for fleet orchestration, guide them to `maestro fleet enable`\n"
+    )
+
+
+def render_personal_tools_md(active_provider_env_key: str | None = None) -> str:
+    provider_line = (
+        f"- `{active_provider_env_key}` — Active default model key\n"
+        if active_provider_env_key
+        else "- Model provider key — see openclaw.json\n"
+    )
+    return (
+        "# TOOLS.md — Maestro Personal\n\n"
+        "## Role\n"
+        "- **Mode:** Solo\n"
+        "- **Agent:** `maestro-personal`\n"
+        "- **Purpose:** Project reasoning + workspace + schedule management\n\n"
+        "## Core Commands\n"
+        "- `maestro up`\n"
+        "- `maestro ingest <path-to-pdfs>`\n"
+        "- `maestro doctor --fix`\n"
+        "- `maestro update`\n\n"
+        "## UI\n"
+        "- **Workspace:** http://localhost:3000/workspace\n\n"
+        "## Optional Fleet\n"
+        "- Enable enterprise mode when needed: `maestro fleet enable`\n"
+        "- Command Center (fleet only): `/command-center`\n\n"
+        "## Environment Variables\n"
+        f"{provider_line}"
+        "- `MAESTRO_AGENT_ROLE` — `project` in Solo\n"
+        "- `MAESTRO_STORE` — active knowledge store root\n"
+        "- `OPENAI_API_KEY` — Optional provider key\n"
+        "- `GEMINI_API_KEY` — Optional (required for vision/image features)\n"
+        "- `ANTHROPIC_API_KEY` — Optional provider key\n"
+    )
+
+
 def render_workspace_env(
     *,
     store_path: str = "knowledge_store/",

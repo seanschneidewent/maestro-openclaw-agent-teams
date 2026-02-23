@@ -18,5 +18,10 @@ for _name in dir(_setup):
 __all__ = [name for name in dir(_setup) if not name.startswith("__")]
 
 
+def main():
+    print("[deprecated] `maestro-setup` is an alias. Use `maestro setup`.")
+    return _setup.main()
+
+
 if __name__ == "__main__":
     main()
