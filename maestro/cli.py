@@ -54,7 +54,7 @@ def _add_start_parser(subparsers: argparse._SubParsersAction):
 
 
 def _add_serve_parser(subparsers: argparse._SubParsersAction):
-    parser = subparsers.add_parser("serve", help="Start the frontend server")
+    parser = subparsers.add_parser("serve", help="Start the workspace frontend server")
     parser.add_argument("--port", type=int, default=3000)
     parser.add_argument("--store", type=str, default=None, help="Override fleet store root")
     parser.add_argument("--host", type=str, default="0.0.0.0")

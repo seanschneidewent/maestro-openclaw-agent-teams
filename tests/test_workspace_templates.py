@@ -12,6 +12,7 @@ from maestro.workspace_templates import (
 
 def test_provider_env_key_for_model_mapping():
     assert provider_env_key_for_model("openai/gpt-5.2") == "OPENAI_API_KEY"
+    assert provider_env_key_for_model("openai-codex/gpt-5.2") == "OPENAI_API_KEY"
     assert provider_env_key_for_model("google/gemini-3-pro-preview") == "GEMINI_API_KEY"
     assert provider_env_key_for_model("anthropic/claude-opus-4-6") == "ANTHROPIC_API_KEY"
     assert provider_env_key_for_model("unknown/model") is None
@@ -56,6 +57,17 @@ def test_render_workspace_env_includes_agent_role_when_set():
         agent_role="company",
     )
     assert "MAESTRO_AGENT_ROLE=company" in content
+
+
+def test_render_workspace_env_includes_model_auth_method_when_set():
+    content = render_workspace_env(
+        store_path="knowledge_store/",
+        provider_env_key="OPENAI_API_KEY",
+        provider_key="",
+        model_auth_method="openclaw_oauth",
+    )
+    assert "MAESTRO_MODEL_AUTH_METHOD=openclaw_oauth" in content
+    assert "OPENAI_API_KEY=" not in content
 
 
 def test_render_company_agents_md_has_control_plane_boundary():

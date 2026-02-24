@@ -1,11 +1,12 @@
 # Fleet Enable
 
 Fleet features are explicit and opt-in.
+Fleet is a distinct product surface from Solo.
 
 ## Command
 
 ```bash
-maestro fleet enable
+maestro-fleet enable
 ```
 
 This command:
@@ -17,5 +18,5 @@ This command:
 ## Verify
 
 ```bash
-maestro fleet status
+maestro-fleet status
 ```

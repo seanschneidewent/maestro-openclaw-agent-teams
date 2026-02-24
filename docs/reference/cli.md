@@ -2,34 +2,40 @@
 
 ## Solo Commands (Primary)
 
-- `maestro setup`
-- `maestro up [--tui] [--skip-doctor] [--no-fix] [--no-restart] [--field-access-required] [--port 3000] [--store ...]`
-- `maestro ingest <folder> [--dpi N] [--new-project-name "..."] [--project-name "..."] [--store ...]`
-- `maestro doctor [--fix] [--json] [--store ...] [--no-restart] [--field-access-required]`
-- `maestro update [--dry-run] [--no-restart] [--workspace ...]`
-- `maestro serve [--port 3000] [--host 0.0.0.0] [--store ...]`
+- `maestro-solo setup`
+- `maestro-solo purchase`
+- `maestro-solo status [--remote-verify]`
+- `maestro-solo up --tui`
+- `maestro-solo ingest <folder> [--dpi N] [--project-name "..."] [--store ...]`
+- `maestro-solo doctor [--fix] [--json] [--store ...] [--no-restart] [--field-access-required]`
+- `maestro-solo migrate-legacy [--dry-run]`
 
 ## Fleet Commands (Advanced Namespace)
 
-- `maestro fleet enable [--dry-run] [--no-restart]`
-- `maestro fleet status`
-- `maestro fleet purchase [flags...]`
-- `maestro fleet command-center [--open]`
+- `maestro-fleet enable [--dry-run] [--no-restart]`
+- `maestro-fleet status`
+- `maestro-fleet purchase [flags...]`
+- `maestro-fleet command-center [--open]`
+- `maestro-fleet ingest <folder> [--project-name "..."] [--dpi N] [--store ...]`
+- `maestro-fleet doctor [--fix] [--json] [--store ...] [--no-restart]`
+- `maestro-fleet up --tui`
+- `maestro-fleet serve [--port 3000] [--host 0.0.0.0] [--store ...]`
+- `maestro-fleet update [--workspace ...] [--dry-run] [--no-restart]`
 
 ## Compatibility Aliases (Deprecated)
 
-- `maestro-setup` -> `maestro setup`
-- `maestro-purchase` -> `maestro fleet purchase`
-- `maestro start` is legacy; use `maestro up`
+- `maestro-setup` forwards to `maestro-solo setup`
+- `maestro-purchase` forwards to `maestro-fleet purchase`
+- `maestro fleet ...` forwards to `maestro-fleet ...` during transition
+- `maestro start` is deprecated; use `maestro-solo up --tui`
 
 ## Ingest Behavior in Solo
 
-1. If no active project is set, ingest creates/uses the folder-name project and marks it active.
-2. If an active project exists, ingest updates that project by default.
-3. Use `--new-project-name` to intentionally create/switch project target.
-4. `--project-name` is accepted for compatibility and treated as explicit new-project intent in Solo.
+1. If `--project-name` is omitted, ingest uses the input folder name.
+2. Solo records that target as active project metadata in install state.
+3. Use `--project-name` to force a specific target name.
 
 ## Notes
 
-- `maestro --help` is Solo-first.
-- Fleet actions are grouped under `maestro fleet --help`.
+- `maestro-fleet` is the dedicated Fleet product CLI.
+- Fleet internals are being split into package-native modules in a later phase; current CLI behavior is stable now.

@@ -338,6 +338,25 @@ def _sync_workspace_env_role(
     )
 
 
+def _read_workspace_env_value(
+    workspace_root: Path | None,
+    key: str,
+) -> str:
+    if not workspace_root:
+        return ""
+    env_path = workspace_root / ".env"
+    if not env_path.exists():
+        return ""
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        left, right = line.split("=", 1)
+        if left.strip() == key:
+            return right.strip()
+    return ""
+
+
 def _tail_text(path: Path, max_bytes: int = 180_000) -> str:
     if not path.exists():
         return ""
@@ -724,6 +743,7 @@ def build_doctor_report(
     primary = _resolve_company_agent(config) if profile == PROFILE_FLEET else _resolve_personal_agent(config)
     workspace_raw = str(primary.get("workspace", "")).strip()
     workspace = Path(workspace_raw).expanduser().resolve() if workspace_raw else None
+    workspace_auth_method = _read_workspace_env_value(workspace, "MAESTRO_MODEL_AUTH_METHOD").lower()
     model = str(primary.get("model", "")).strip()
     provider_env_key = provider_env_key_for_model(model) if model else None
     company_name = str(primary.get("name", "Company")).strip().replace("Maestro (", "").replace(")", "")
@@ -741,6 +761,13 @@ def build_doctor_report(
         key_value = str(raw_key).strip() if isinstance(raw_key, str) else ""
         if key_value and not _is_placeholder(key_value):
             checks.append(DoctorCheck(name="provider_key", ok=True, detail=f"{provider_env_key} present"))
+        elif workspace_auth_method == "openclaw_oauth":
+            checks.append(DoctorCheck(
+                name="provider_key",
+                ok=True,
+                detail="OpenClaw OAuth configured; provider API key not required",
+                warning=True,
+            ))
         else:
             checks.append(DoctorCheck(name="provider_key", ok=False, detail=f"{provider_env_key} missing/placeholder"))
     else:

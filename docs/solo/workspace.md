@@ -15,7 +15,7 @@
 Doctor enforcement:
 
 ```bash
-maestro doctor --fix --field-access-required
+maestro-solo doctor --fix --field-access-required
 ```
 
 ## Capability Focus
@@ -24,9 +24,9 @@ maestro doctor --fix --field-access-required
 2. Build/manage workspaces.
 3. Manage schedule items and constraints.
 
-## Legacy Compatibility
+## Compatibility Routes
 
-Legacy routes remain active during transition:
+Compatibility routes remain active during transition:
 
 - `/{slug}/...`
 - `/agents/{agent_id}/workspace/...`

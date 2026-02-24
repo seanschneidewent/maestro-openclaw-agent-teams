@@ -1,5 +1,5 @@
 """
-Maestro Frontend Server — serves knowledge_store data + live WebSocket updates.
+Maestro Workspace Frontend Server — serves knowledge_store data + live WebSocket updates.
 
 Multi-project: each project dir becomes a route prefix (slug).
 No database. No auth. Reads from filesystem, watches for changes.
@@ -69,10 +69,19 @@ from .utils import slugify, slugify_underscore
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_STORE = Path("knowledge_store")
-# Check bundled location first (pip install), then repo layout
-_bundled_frontend = SCRIPT_DIR / "frontend"
-_repo_frontend = SCRIPT_DIR.parent / "frontend" / "dist"
-FRONTEND_DIR = _bundled_frontend if _bundled_frontend.exists() else _repo_frontend
+# Workspace frontend: check bundled locations first (pip install), then repo layout.
+_bundled_workspace_frontend = SCRIPT_DIR / "workspace_frontend"
+_bundled_legacy_frontend = SCRIPT_DIR / "frontend"
+_repo_workspace_frontend = SCRIPT_DIR.parent / "workspace_frontend" / "dist"
+_repo_legacy_frontend = SCRIPT_DIR.parent / "frontend" / "dist"
+if _bundled_workspace_frontend.exists():
+    FRONTEND_DIR = _bundled_workspace_frontend
+elif _bundled_legacy_frontend.exists():
+    FRONTEND_DIR = _bundled_legacy_frontend
+elif _repo_workspace_frontend.exists():
+    FRONTEND_DIR = _repo_workspace_frontend
+else:
+    FRONTEND_DIR = _repo_legacy_frontend
 _bundled_command_center = SCRIPT_DIR / "command_center_frontend"
 _repo_command_center_dist = SCRIPT_DIR.parent / "command_center_frontend" / "dist"
 _repo_command_center_root = SCRIPT_DIR.parent / "command_center_frontend"

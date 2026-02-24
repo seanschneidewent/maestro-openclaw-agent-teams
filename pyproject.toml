@@ -35,12 +35,16 @@ dev = [
 maestro = "maestro.cli:main"
 maestro-setup = "maestro.setup:main"
 maestro-purchase = "maestro.purchase:main"
+maestro-solo = "maestro.solo_cli:main"
+maestro-billing-service = "maestro.billing_service:main"
+maestro-license-service = "maestro.license_service:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["maestro"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "agent" = "maestro/agent"
+"workspace_frontend/dist" = "maestro/workspace_frontend"
 "command_center_frontend/dist" = "maestro/command_center_frontend"
 
 [tool.pytest.ini_options]

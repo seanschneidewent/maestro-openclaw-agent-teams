@@ -9,7 +9,7 @@ def provider_env_key_for_model(model: str | None) -> str | None:
         return None
 
     lowered = model.strip().lower()
-    if lowered.startswith("openai/"):
+    if lowered.startswith("openai/") or lowered.startswith("openai-codex/"):
         return "OPENAI_API_KEY"
     if lowered.startswith("google/") or lowered.startswith("gemini/"):
         return "GEMINI_API_KEY"
@@ -111,7 +111,7 @@ def render_personal_tools_md(active_provider_env_key: str | None = None) -> str:
         "- **Agent:** `maestro-personal`\n"
         "- **Purpose:** Project reasoning + workspace + schedule management\n\n"
         "## Core Commands\n"
-        "- `maestro up`\n"
+        "- `maestro-solo up --tui`\n"
         "- `maestro ingest <path-to-pdfs>`\n"
         "- `maestro doctor --fix`\n"
         "- `maestro update`\n\n"
@@ -137,6 +137,7 @@ def render_workspace_env(
     provider_key: str | None = None,
     gemini_key: str | None = None,
     agent_role: str | None = None,
+    model_auth_method: str | None = None,
 ) -> str:
     """Render the workspace .env file from setup/update state."""
     lines = ["# Maestro Environment"]
@@ -153,6 +154,14 @@ def render_workspace_env(
     role = agent_role.strip().lower() if isinstance(agent_role, str) and agent_role.strip() else ""
     if role:
         lines.append(f"MAESTRO_AGENT_ROLE={role}")
+
+    auth_method = (
+        model_auth_method.strip().lower()
+        if isinstance(model_auth_method, str) and model_auth_method.strip()
+        else ""
+    )
+    if auth_method:
+        lines.append(f"MAESTRO_MODEL_AUTH_METHOD={auth_method}")
 
     clean_store = store_path.strip() if isinstance(store_path, str) and store_path.strip() else "knowledge_store/"
     lines.append(f"MAESTRO_STORE={clean_store}")

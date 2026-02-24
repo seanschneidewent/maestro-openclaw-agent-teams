@@ -114,6 +114,66 @@ class SetupWizard:
                 raise
             return e
 
+    def run_interactive_command(self, cmd: str) -> int:
+        """Run a command attached to the terminal (required for OAuth/device flows)."""
+        try:
+            result = subprocess.run(cmd, shell=True, check=False)
+            return int(result.returncode)
+        except Exception:
+            return 1
+
+    def _openclaw_oauth_profile_exists(self, provider_id: str) -> bool:
+        """Return True when a provider OAuth profile already exists in OpenClaw agent auth files."""
+        provider = str(provider_id or "").strip().lower()
+        if not provider:
+            return False
+
+        def _entry_has_oauth_token(entry: object, expected_provider: str) -> bool:
+            if not isinstance(entry, dict):
+                return False
+            provider_value = str(entry.get("provider", expected_provider)).strip().lower()
+            entry_type = str(entry.get("type", "oauth")).strip().lower()
+            if provider_value != expected_provider or entry_type != "oauth":
+                return False
+            for key in ("access", "refresh", "token"):
+                value = entry.get(key)
+                if isinstance(value, str) and value.strip():
+                    return True
+            return False
+
+        agents_root = Path.home() / ".openclaw" / "agents"
+        if not agents_root.exists():
+            return False
+
+        candidate_files: list[Path] = []
+        candidate_files.extend(sorted(agents_root.glob("*/agent/auth-profiles.json")))
+        candidate_files.extend(sorted(agents_root.glob("*/agent/auth.json")))
+
+        for path in candidate_files:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+
+            if not isinstance(payload, dict):
+                continue
+
+            profiles = payload.get("profiles")
+            if isinstance(profiles, dict):
+                for entry in profiles.values():
+                    if _entry_has_oauth_token(entry, provider):
+                        return True
+
+            direct = payload.get(provider)
+            if _entry_has_oauth_token(direct, provider):
+                return True
+
+            for entry in payload.values():
+                if _entry_has_oauth_token(entry, provider):
+                    return True
+
+        return False
+
     # ── Steps ─────────────────────────────────────────────────────
 
     def step_welcome(self) -> bool:
@@ -374,12 +434,17 @@ class SetupWizard:
         """Step 3: Choose AI provider and get API key"""
         step_header(3, "Choose Your AI Provider")
 
-        if self.progress.get('provider') and self.progress.get('provider_key'):
+        has_saved_provider = bool(self.progress.get('provider'))
+        has_saved_auth = bool(self.progress.get('provider_key')) or (
+            str(self.progress.get('provider_auth_method', '')).strip().lower() == 'openclaw_oauth'
+        )
+        if has_saved_provider and has_saved_auth:
             provider = self.progress['provider']
             info(f"Using saved provider: {provider}")
             if not Confirm.ask(f"  [{CYAN}]Keep this provider?[/]", default=True, console=console):
                 self.progress.pop('provider', None)
                 self.progress.pop('provider_key', None)
+                self.progress.pop('provider_auth_method', None)
 
         if not self.progress.get('provider'):
             # Stacked provider cards
@@ -449,22 +514,112 @@ class SetupWizard:
                 console=console,
             )
 
+            openai_api_model = "openai/gpt-5.2"
             providers = {
                 '1': ('google', 'google/gemini-3-pro-preview', 'GEMINI_API_KEY'),
                 '2': ('anthropic', 'anthropic/claude-opus-4-6', 'ANTHROPIC_API_KEY'),
-                '3': ('openai', 'openai/gpt-5.2', 'OPENAI_API_KEY'),
+                '3': ('openai', openai_api_model, 'OPENAI_API_KEY'),
             }
 
             provider, model, env_key = providers[choice]
             self.progress['provider'] = provider
             self.progress['model'] = model
             self.progress['provider_env_key'] = env_key
+            self.progress.pop('provider_key', None)
+            self.progress.pop('provider_auth_method', None)
             self.save_progress()
 
         provider = self.progress['provider']
 
+        if provider == 'openai':
+            openai_api_model = "openai/gpt-5.2"
+            openai_oauth_model = "openai-codex/gpt-5.2"
+            oauth_provider_id = "openai-codex"
+            auth_method = str(self.progress.get('provider_auth_method', '')).strip().lower()
+            if auth_method == 'openclaw_oauth':
+                if not self._openclaw_oauth_profile_exists(oauth_provider_id):
+                    warning("Saved OpenClaw OAuth marker found, but no active OpenAI OAuth profile was detected.")
+                    self.progress.pop('provider_auth_method', None)
+                    self.progress['model'] = openai_api_model
+                    self.save_progress()
+                    auth_method = ""
+                else:
+                    if self.progress.get('model') != openai_oauth_model:
+                        self.progress['model'] = openai_oauth_model
+                        self.save_progress()
+                    info("Using saved OpenClaw OAuth sign-in for OpenAI")
+                    if not Confirm.ask(f"  [{CYAN}]Keep OpenClaw OAuth sign-in?[/]", default=True, console=console):
+                        self.progress.pop('provider_auth_method', None)
+                        self.progress['model'] = openai_api_model
+                        self.save_progress()
+                        auth_method = ""
+
+            if not self.progress.get('provider_key') and auth_method != 'openclaw_oauth':
+                if self._openclaw_oauth_profile_exists(oauth_provider_id):
+                    info("Detected existing OpenClaw OAuth sign-in for OpenAI")
+                    if Confirm.ask(f"  [{CYAN}]Use existing OpenClaw OAuth sign-in?[/]", default=True, console=console):
+                        self.progress['provider_auth_method'] = 'openclaw_oauth'
+                        self.progress['model'] = openai_oauth_model
+                        self.progress.pop('provider_key', None)
+                        self.save_progress()
+                        auth_method = "openclaw_oauth"
+
+            if not self.progress.get('provider_key') and auth_method != 'openclaw_oauth':
+                console.print()
+                console.print(Panel(
+                    "Choose OpenAI auth method:\n\n"
+                    "[bold white]1)[/] API key (classic)\n"
+                    "[bold white]2)[/] ChatGPT/OpenAI account sign-in (OAuth via OpenClaw)",
+                    border_style=CYAN,
+                    width=72,
+                ))
+                auth_choice = Prompt.ask(
+                    f"  [{CYAN}]Enter 1 or 2[/]",
+                    choices=["1", "2"],
+                    default="1",
+                    console=console,
+                )
+                if auth_choice == "2":
+                    console.print()
+                    console.print(Panel(
+                        "Starting OpenClaw OAuth login for OpenAI.\n"
+                        "This opens an interactive sign-in flow in your terminal.\n\n"
+                        "Command:\n"
+                        "  [bold white]openclaw models auth login --provider openai-codex[/]",
+                        border_style=CYAN,
+                        width=72,
+                    ))
+                    rc = self.run_interactive_command("openclaw models auth login --provider openai-codex")
+                    if rc == 0:
+                        self.progress['provider_auth_method'] = 'openclaw_oauth'
+                        self.progress['model'] = openai_oauth_model
+                        self.progress.pop('provider_key', None)
+                        self.save_progress()
+                    else:
+                        if self._openclaw_oauth_profile_exists(oauth_provider_id):
+                            warning("OAuth command did not complete, but an existing OpenClaw OAuth login is available.")
+                            self.progress['provider_auth_method'] = 'openclaw_oauth'
+                            self.progress['model'] = openai_oauth_model
+                            self.progress.pop('provider_key', None)
+                            self.save_progress()
+                        else:
+                            warning("OpenClaw OAuth sign-in did not complete.")
+                            console.print(f"  [{DIM}]If you saw 'No provider plugins found', run:[/]")
+                            console.print("  [bold white]openclaw onboard --auth-choice openai-codex[/]")
+                            console.print(f"  [{DIM}]Then rerun setup and choose OAuth again.[/]")
+                            fallback = Confirm.ask(
+                                f"  [{CYAN}]Use OpenAI API key instead?[/]",
+                                default=True,
+                                console=console,
+                            )
+                            if not fallback:
+                                return False
+                else:
+                    self.progress['model'] = openai_api_model
+                    self.save_progress()
+
         # Get API key
-        if not self.progress.get('provider_key'):
+        if not self.progress.get('provider_key') and str(self.progress.get('provider_auth_method', '')).strip().lower() != 'openclaw_oauth':
             key_instructions = {
                 'google': (
                     "Get your Google Gemini API key:\n"
@@ -542,7 +697,10 @@ class SetupWizard:
                 self.progress['gemini_key'] = api_key
             self.save_progress()
 
-        success(f"{provider.title()} API key configured")
+        if provider == 'openai' and str(self.progress.get('provider_auth_method', '')).strip().lower() == 'openclaw_oauth':
+            success("OpenAI configured via OpenClaw OAuth")
+        else:
+            success(f"{provider.title()} API key configured")
         return True
 
     def step_gemini_key(self) -> bool:
@@ -777,7 +935,12 @@ class SetupWizard:
             config['env'] = {}
 
         env_key = self.progress['provider_env_key']
-        config['env'][env_key] = self.progress['provider_key']
+        provider_key = str(self.progress.get('provider_key', '')).strip()
+        auth_method = str(self.progress.get('provider_auth_method', '')).strip().lower()
+        if provider_key:
+            config['env'][env_key] = provider_key
+        elif auth_method == 'openclaw_oauth':
+            config['env'].pop(env_key, None)
         if self.progress.get('gemini_key'):
             config['env']['GEMINI_API_KEY'] = self.progress['gemini_key']
 
@@ -909,16 +1072,24 @@ class SetupWizard:
             provider_key=self.progress.get('provider_key', ''),
             gemini_key=self.progress.get('gemini_key', ''),
             agent_role="project",
+            model_auth_method=self.progress.get('provider_auth_method', ''),
         )
         with open(env_file, 'w') as f:
             f.write(env_content)
         success("Created .env")
 
-        # Build frontend if it exists
-        frontend_dir = repo_root / "frontend"
-        if frontend_dir.exists() and (frontend_dir / "package.json").exists():
+        # Build workspace frontend if it exists (with legacy fallback).
+        workspace_frontend_dir = repo_root / "workspace_frontend"
+        legacy_frontend_dir = repo_root / "frontend"
+        frontend_dir: Path | None = None
+        if workspace_frontend_dir.exists() and (workspace_frontend_dir / "package.json").exists():
+            frontend_dir = workspace_frontend_dir
+        elif legacy_frontend_dir.exists() and (legacy_frontend_dir / "package.json").exists():
+            frontend_dir = legacy_frontend_dir
+
+        if frontend_dir is not None:
             console.print()
-            info("Building plan viewer...")
+            info("Building workspace frontend...")
 
             npm_check = self.run_command("npm --version", check=False)
             if npm_check.returncode == 0:
@@ -930,9 +1101,9 @@ class SetupWizard:
                         f'npm run build --prefix "{frontend_dir}"', check=False
                     )
                     if build_result.returncode == 0:
-                        success("Plan viewer built")
+                        success("Workspace frontend built")
                     else:
-                        warning("Frontend build failed — you can try later:")
+                        warning("Workspace frontend build failed — you can try later:")
                         console.print(f"  [{DIM}]cd {frontend_dir}[/]")
                         console.print(f"  [{DIM}]npm run build[/]")
                 else:
@@ -941,7 +1112,7 @@ class SetupWizard:
                     console.print(f"  [{DIM}]npm install[/]")
                     console.print(f"  [{DIM}]npm run build[/]")
             else:
-                warning("npm not found — plan viewer needs Node.js to build")
+                warning("npm not found — workspace frontend needs Node.js to build")
                 console.print(f"  [{DIM}]Install Node.js from https://nodejs.org[/]")
                 console.print(f"  [{DIM}]Then: cd {frontend_dir}[/]")
                 console.print(f"  [{DIM}]npm install[/]")
@@ -979,7 +1150,7 @@ class SetupWizard:
 
         if self.progress.get('openclaw_skip'):
             warning("OpenClaw not installed — skipping Telegram connection")
-            info("After installing OpenClaw, run: maestro up")
+            info("After installing OpenClaw, run: maestro-solo up --tui")
             return True
 
         if not self.progress.get('telegram_token'):
@@ -1099,7 +1270,7 @@ class SetupWizard:
 
         # Next steps
         next_lines = []
-        next_lines.append(f"  1. Start Maestro:           [bold white]maestro up[/]")
+        next_lines.append(f"  1. Start Maestro:           [bold white]maestro-solo up --tui[/]")
         next_lines.append(f"  2. Open workspace:          [bold white]{workspace_url}[/]")
         next_lines.append(f"  3. Ingest your plans:       [bold white]maestro ingest <path-to-pdfs>[/]")
         next_lines.append("")
@@ -1109,7 +1280,7 @@ class SetupWizard:
             next_lines.append(f"  Optional: connect Telegram later for mobile chat.")
         next_lines.append(f"  Optional Fleet mode:        [bold white]maestro fleet enable[/]")
         next_lines.append("")
-        next_lines.append(f"  [{DIM}]Use maestro up anytime to run doctor checks + launch workspace server.[/]")
+        next_lines.append(f"  [{DIM}]Use maestro-solo up --tui anytime to run doctor checks + launch the Solo workspace monitor.[/]")
 
         console.print()
         console.print(Panel(

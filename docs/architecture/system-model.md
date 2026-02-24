@@ -1,10 +1,24 @@
 # System Model
 
-Maestro is a two-tier multi-agent system.
+Maestro is a split-product system with shared engine primitives.
+
+1. **Maestro Solo**
+- Product for individual superintendent workflows
+- Primary CLI: `maestro-solo`
+- Primary UI: `/workspace`
+- Uses one active workspace/store context at a time
+
+2. **Maestro Fleet**
+- Product for enterprise control-plane workflows
+- Primary CLI: `maestro-fleet`
+- Primary UI: `/command-center`
+- Coordinates Commander + project maestros across projects
+
+## Fleet Agent Roles
 
 1. **The Commander** (`maestro-company`)
 - Control-plane agent
-- Owns Command Center orchestration
+- Owns command-center orchestration
 - Coordinates project maestros
 - Maintains system awareness and repair actions
 
@@ -15,15 +29,18 @@ Maestro is a two-tier multi-agent system.
 
 ## Frontends
 
-1. Command Center (`/command-center`)
+1. Workspace frontend (`/workspace`)
+- Solo-first default interface
+- Project search, pointers, notes, and schedule operations
+
+2. Command Center (`/command-center`)
 - Fleet topology
 - Commander node + project nodes
 - Node modal with conversation and intelligence
 
-2. Workspace frontend (`/{project-slug}` and `/agents/{agent-id}/workspace`)
-- Page/pointer/workspace interaction for a single project context
+Compatibility routes remain for transition (`/{project-slug}`, `/agents/{agent-id}/workspace`).
 
 ## Core Principle
 
-Command Center is orchestration and communication.
-Project workspaces are project execution and detail retrieval.
+Solo and Fleet are distinct product surfaces.
+Shared engine modules remain product-agnostic.

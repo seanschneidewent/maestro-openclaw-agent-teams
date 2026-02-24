@@ -25,8 +25,14 @@ jobs:
       - name: Install package
         run: pip install -e ".[dev]"
 
-      - name: Run tests
-        run: pytest -v --tb=short
+      - name: Install split packages
+        run: pip install -e packages/maestro-engine -e packages/maestro-solo -e packages/maestro-fleet
+
+      - name: Run legacy fleet smoke tests
+        run: pytest -v --tb=short tests/test_cli.py tests/test_purchase.py tests/test_server_workspace_routes.py
+
+      - name: Run split package tests
+        run: pytest -v --tb=short packages/maestro-engine/tests packages/maestro-solo/tests packages/maestro-fleet/tests
 
   lint:
     runs-on: ubuntu-latest
@@ -41,7 +47,13 @@ jobs:
       - name: Check import structure
         run: python -c "from maestro import __version__; print(f'maestro {__version__}')"
 
+      - name: Check product boundaries
+        run: python scripts/check_product_boundaries.py
+
       - name: Check CLI entry point
         run: |
           pip install -e .
           maestro --help
+          pip install -e packages/maestro-engine -e packages/maestro-solo -e packages/maestro-fleet
+          maestro-solo --help
+          maestro-fleet --help

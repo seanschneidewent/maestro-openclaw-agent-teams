@@ -11,5 +11,5 @@ Command Center routes are mounted only when Fleet is enabled.
 In Solo profile, these endpoints return:
 
 ```json
-{"error":"Fleet mode not enabled","next_step":"Run maestro fleet enable"}
+{"error":"Fleet mode not enabled","next_step":"Run maestro-fleet enable"}
 ```

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "maestro-engine"
+version = "0.1.0"
+description = "Shared engine primitives for Maestro products"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Maestro Construction Agents" }]
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/maestro_engine"]

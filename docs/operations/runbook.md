@@ -3,7 +3,7 @@
 ## Solo Daily Path (Default)
 
 ```bash
-maestro up
+maestro-solo up --tui
 ```
 
 Then open:
@@ -14,33 +14,39 @@ Then open:
 ## Setup and Upgrade
 
 ```bash
-maestro setup
-maestro update
+maestro-solo setup
+```
+
+If you need to migrate from the old mixed install:
+
+```bash
+maestro-solo migrate-legacy
 ```
 
 ## Repair
 
 ```bash
-maestro doctor --fix
+maestro-solo doctor --fix
 ```
 
 Require field URL readiness in Solo:
 
 ```bash
-maestro doctor --fix --field-access-required
+maestro-solo doctor --fix --field-access-required
 ```
 
-## Server Only
+## Solo Fast Restart (Advanced)
 
 ```bash
-maestro serve --port 3000
+maestro-solo up --skip-doctor
 ```
 
 ## Fleet Enablement (Advanced)
 
 ```bash
-maestro fleet enable
-maestro fleet status
+maestro-fleet enable
+maestro-fleet status
+maestro-fleet up --tui
 ```
 
 Then open:

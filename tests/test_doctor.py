@@ -325,3 +325,60 @@ def test_doctor_solo_field_access_required_fails_without_tailscale(tmp_path: Pat
         home_dir=home,
     )
     assert code == 1
+
+
+def test_doctor_allows_openclaw_oauth_without_provider_key(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    workspace = home / ".openclaw" / "workspace-maestro"
+    store = tmp_path / "knowledge_store"
+    workspace.mkdir(parents=True, exist_ok=True)
+    store.mkdir(parents=True, exist_ok=True)
+
+    _write_json(
+        home / ".openclaw" / "openclaw.json",
+        {
+            "env": {},
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-personal",
+                        "name": "Maestro Personal",
+                        "default": True,
+                        "model": "openai-codex/gpt-5.2",
+                        "workspace": str(workspace),
+                    }
+                ]
+            },
+            "gateway": {
+                "mode": "local",
+                "auth": {"token": "abc123"},
+                "remote": {"token": "abc123"},
+            },
+        },
+    )
+    (workspace / ".env").write_text(
+        f"MAESTRO_STORE={store}\nMAESTRO_AGENT_ROLE=project\nMAESTRO_MODEL_AUTH_METHOD=openclaw_oauth\n",
+        encoding="utf-8",
+    )
+
+    def _fake_run_cmd(args: list[str], timeout: int = 25):
+        if args[:3] == ["openclaw", "gateway", "install"]:
+            return True, "installed"
+        if args[:2] == ["openclaw", "status"]:
+            return True, "gateway service running"
+        if args[:3] == ["openclaw", "devices", "list"]:
+            return True, '{"pending":[],"paired":[]}'
+        if args[:3] == ["openclaw", "devices", "approve"]:
+            return True, '{"ok":true}'
+        return True, ""
+
+    monkeypatch.setattr(doctor, "_run_cmd", _fake_run_cmd)
+
+    code = run_doctor(
+        fix=True,
+        store_override=str(store),
+        restart_gateway=False,
+        json_output=False,
+        home_dir=home,
+    )
+    assert code == 0
