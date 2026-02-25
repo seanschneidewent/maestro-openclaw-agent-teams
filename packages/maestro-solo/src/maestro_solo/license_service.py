@@ -11,6 +11,7 @@ import uvicorn
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from .entitlements import issue_entitlement_token, plan_tier
 from .solo_license import issue_solo_license, verify_solo_license_key
 from maestro_engine.utils import load_json, save_json
 
@@ -88,6 +89,14 @@ def issue_solo(
         plan_id=request.plan_id,
         email=request.email,
     )
+    entitlement = issue_entitlement_token(
+        subject=purchase_id,
+        tier=plan_tier(request.plan_id),
+        plan_id=request.plan_id,
+        email=request.email,
+    )
+    if bool(entitlement.get("ok")):
+        issued["entitlement_token"] = str(entitlement.get("entitlement_token", ""))
     by_purchase[purchase_id] = issued
     _save_state(state)
     return issued
@@ -111,9 +120,16 @@ def verify_solo(request: VerifySoloRequest):
 
 
 def main(argv: list[str] | None = None):
+    default_port_raw = str(os.environ.get("PORT", "")).strip() or str(os.environ.get("MAESTRO_LICENSE_PORT", "")).strip() or "8082"
+    try:
+        default_port = int(default_port_raw)
+    except ValueError:
+        default_port = 8082
+    default_host = str(os.environ.get("MAESTRO_LICENSE_HOST", "")).strip() or ("0.0.0.0" if str(os.environ.get("PORT", "")).strip() else "127.0.0.1")
+
     parser = argparse.ArgumentParser(prog="maestro-license-service")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8082)
+    parser.add_argument("--host", default=default_host)
+    parser.add_argument("--port", type=int, default=default_port)
     args = parser.parse_args(argv)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

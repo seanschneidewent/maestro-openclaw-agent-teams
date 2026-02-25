@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
+import json
 import os
+import re
 import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,8 +23,27 @@ from pydantic import BaseModel, Field
 from maestro_engine.utils import load_json, save_json
 
 
+PURCHASE_PENDING = "pending"
+PURCHASE_PAID = "paid"
+PURCHASE_LICENSED = "licensed"
+PURCHASE_FAILED = "failed"
+PURCHASE_CANCELED = "canceled"
+
+STRIPE_ENDPOINT = "https://api.stripe.com/v1/checkout/sessions"
+STRIPE_WEBHOOK_TOLERANCE_SECONDS_DEFAULT = 300
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _clean_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _clean_optional_text(value: Any) -> str | None:
+    clean = _clean_text(value)
+    return clean or None
 
 
 def _state_path() -> Path:
@@ -35,7 +59,10 @@ def _load_state() -> dict[str, Any]:
     purchases = payload.get("purchases")
     if not isinstance(purchases, dict):
         purchases = {}
-    return {"purchases": purchases}
+    processed_events = payload.get("processed_events")
+    if not isinstance(processed_events, dict):
+        processed_events = {}
+    return {"purchases": purchases, "processed_events": processed_events}
 
 
 def _save_state(state: dict[str, Any]):
@@ -50,10 +77,13 @@ def _purchase_id() -> str:
 def _purchase_response(purchase: dict[str, Any]) -> dict[str, Any]:
     return {
         "purchase_id": str(purchase.get("purchase_id", "")),
-        "status": str(purchase.get("status", "pending")),
+        "status": str(purchase.get("status", PURCHASE_PENDING)),
         "plan_id": str(purchase.get("plan_id", "")),
         "email": str(purchase.get("email", "")),
+        "provider": str(purchase.get("provider", "local_dev")),
+        "checkout_url": str(purchase.get("checkout_url", "")),
         "license_key": purchase.get("license_key"),
+        "entitlement_token": purchase.get("entitlement_token"),
         "error": purchase.get("error"),
     }
 
@@ -91,10 +121,476 @@ def _issue_license_for_purchase(purchase: dict[str, Any], timeout_seconds: int =
     if response.status_code >= 300:
         return False, {"error": f"license_service_status_{response.status_code}", "detail": data}
 
-    license_key = str(data.get("license_key", "")).strip() if isinstance(data, dict) else ""
+    license_key = _clean_text(data.get("license_key")) if isinstance(data, dict) else ""
     if not license_key:
         return False, {"error": "license_service_missing_key", "detail": data}
     return True, data if isinstance(data, dict) else {"license_key": license_key}
+
+
+def _stripe_secret_key() -> str:
+    return _clean_text(os.environ.get("MAESTRO_STRIPE_SECRET_KEY"))
+
+
+def _stripe_webhook_secret() -> str:
+    return _clean_text(os.environ.get("MAESTRO_STRIPE_WEBHOOK_SECRET"))
+
+
+def _stripe_webhook_tolerance_seconds() -> int:
+    raw = _clean_text(os.environ.get("MAESTRO_STRIPE_WEBHOOK_TOLERANCE_SECONDS"))
+    if not raw:
+        return STRIPE_WEBHOOK_TOLERANCE_SECONDS_DEFAULT
+    try:
+        return max(10, int(raw))
+    except ValueError:
+        return STRIPE_WEBHOOK_TOLERANCE_SECONDS_DEFAULT
+
+
+def _plan_checkout_mode(plan_id: str) -> str:
+    clean = _clean_text(plan_id).lower()
+    if "monthly" in clean or "yearly" in clean:
+        return "subscription"
+    return "payment"
+
+
+def _plan_price_env_keys(plan_id: str, mode: str) -> list[str]:
+    normalized_plan = re.sub(r"[^A-Z0-9]+", "_", _clean_text(plan_id).upper()).strip("_")
+    normalized_mode = re.sub(r"[^A-Z0-9]+", "_", _clean_text(mode).upper()).strip("_")
+    keys: list[str] = []
+    if normalized_mode and normalized_plan:
+        keys.append(f"MAESTRO_STRIPE_PRICE_ID_{normalized_mode}_{normalized_plan}")
+    if normalized_plan:
+        keys.append(f"MAESTRO_STRIPE_PRICE_ID_{normalized_plan}")
+    keys.append("MAESTRO_STRIPE_PRICE_ID")
+    return keys
+
+
+def _stripe_price_id(plan_id: str, mode: str) -> str:
+    for key in _plan_price_env_keys(plan_id, mode):
+        value = _clean_text(os.environ.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _create_stripe_checkout_session(
+    purchase: dict[str, Any],
+    *,
+    base_url: str,
+    timeout_seconds: int = 20,
+) -> tuple[bool, dict[str, Any]]:
+    secret = _stripe_secret_key()
+    if not secret:
+        return False, {"error": "stripe_secret_key_missing"}
+
+    purchase_id = _clean_text(purchase.get("purchase_id"))
+    plan_id = _clean_text(purchase.get("plan_id"))
+    mode = _clean_text(purchase.get("mode")) or "test"
+    email = _clean_text(purchase.get("email"))
+
+    price_id = _stripe_price_id(plan_id, mode)
+    if not price_id:
+        return False, {"error": f"stripe_price_id_missing_for_plan:{plan_id}"}
+
+    success_url = _clean_text(purchase.get("success_url")) or f"{base_url}/checkout/success?purchase_id={purchase_id}"
+    cancel_url = _clean_text(purchase.get("cancel_url")) or f"{base_url}/checkout/cancel?purchase_id={purchase_id}"
+
+    payload = {
+        "mode": _plan_checkout_mode(plan_id),
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "client_reference_id": purchase_id,
+        "customer_email": email,
+        "metadata[purchase_id]": purchase_id,
+        "metadata[plan_id]": plan_id,
+        "metadata[email]": email,
+        "line_items[0][price]": price_id,
+        "line_items[0][quantity]": "1",
+    }
+    headers = {
+        "Authorization": f"Bearer {secret}",
+        "Idempotency-Key": purchase_id,
+    }
+
+    try:
+        response = httpx.post(STRIPE_ENDPOINT, data=payload, headers=headers, timeout=timeout_seconds)
+    except Exception as exc:
+        return False, {"error": f"stripe_unreachable: {exc}"}
+
+    try:
+        data = response.json()
+    except Exception:
+        data = {"error": response.text}
+
+    if response.status_code >= 300:
+        return False, {"error": f"stripe_status_{response.status_code}", "detail": data}
+    if not isinstance(data, dict):
+        return False, {"error": "stripe_invalid_response"}
+
+    checkout_url = _clean_text(data.get("url"))
+    checkout_session_id = _clean_text(data.get("id"))
+    if not checkout_url or not checkout_session_id:
+        return False, {"error": "stripe_missing_checkout_url", "detail": data}
+    return True, data
+
+
+def _verify_stripe_signature(payload: bytes, signature_header: str) -> tuple[bool, dict[str, Any] | str]:
+    secret = _stripe_webhook_secret()
+    if not secret:
+        return False, "stripe_webhook_secret_missing"
+
+    header = _clean_text(signature_header)
+    if not header:
+        return False, "stripe_signature_missing"
+
+    timestamp_raw = ""
+    signatures: list[str] = []
+    for part in header.split(","):
+        key, sep, value = part.partition("=")
+        if not sep:
+            continue
+        clean_key = _clean_text(key)
+        clean_value = _clean_text(value)
+        if clean_key == "t":
+            timestamp_raw = clean_value
+        elif clean_key == "v1" and clean_value:
+            signatures.append(clean_value)
+
+    if not timestamp_raw or not signatures:
+        return False, "stripe_signature_invalid_format"
+
+    try:
+        timestamp = int(timestamp_raw)
+    except ValueError:
+        return False, "stripe_signature_invalid_timestamp"
+
+    if abs(int(time.time()) - timestamp) > _stripe_webhook_tolerance_seconds():
+        return False, "stripe_signature_timestamp_out_of_tolerance"
+
+    signed_payload = f"{timestamp}.{payload.decode('utf-8')}".encode("utf-8")
+    expected = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    if not any(hmac.compare_digest(expected, candidate) for candidate in signatures):
+        return False, "stripe_signature_mismatch"
+
+    try:
+        event = json.loads(payload.decode("utf-8"))
+    except Exception:
+        return False, "stripe_payload_invalid_json"
+    if not isinstance(event, dict):
+        return False, "stripe_payload_invalid_type"
+    return True, event
+
+
+def _transition_purchase_status(purchase: dict[str, Any], new_status: str, *, reason: str = "") -> tuple[bool, str]:
+    target = _clean_text(new_status).lower()
+    current = _clean_text(purchase.get("status")).lower() or PURCHASE_PENDING
+
+    allowed = {
+        PURCHASE_PENDING: {PURCHASE_PENDING, PURCHASE_PAID, PURCHASE_FAILED, PURCHASE_CANCELED},
+        PURCHASE_PAID: {PURCHASE_PAID, PURCHASE_LICENSED, PURCHASE_FAILED, PURCHASE_CANCELED},
+        PURCHASE_FAILED: {PURCHASE_FAILED, PURCHASE_PAID, PURCHASE_CANCELED},
+        PURCHASE_LICENSED: {PURCHASE_LICENSED, PURCHASE_CANCELED},
+        PURCHASE_CANCELED: {PURCHASE_CANCELED},
+    }
+
+    if current not in allowed:
+        current = PURCHASE_PENDING
+
+    if target not in allowed[current]:
+        return False, f"invalid_transition:{current}->{target}"
+
+    purchase["status"] = target
+    purchase["updated_at"] = _now_iso()
+    if target in {PURCHASE_PENDING, PURCHASE_PAID, PURCHASE_LICENSED}:
+        purchase["error"] = None
+    elif reason:
+        purchase["error"] = reason
+    return True, target
+
+
+def _set_purchase_stripe_refs(
+    purchase: dict[str, Any],
+    *,
+    checkout_session_id: str | None = None,
+    customer_id: str | None = None,
+    subscription_id: str | None = None,
+    payment_intent_id: str | None = None,
+):
+    if _clean_text(checkout_session_id):
+        purchase["stripe_checkout_session_id"] = _clean_text(checkout_session_id)
+    if _clean_text(customer_id):
+        purchase["stripe_customer_id"] = _clean_text(customer_id)
+    if _clean_text(subscription_id):
+        purchase["stripe_subscription_id"] = _clean_text(subscription_id)
+    if _clean_text(payment_intent_id):
+        purchase["stripe_payment_intent_id"] = _clean_text(payment_intent_id)
+    purchase["updated_at"] = _now_iso()
+
+
+def _provision_purchase_license(purchase: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    status = _clean_text(purchase.get("status")).lower() or PURCHASE_PENDING
+    if status == PURCHASE_LICENSED:
+        return True, {"status": PURCHASE_LICENSED, "already_licensed": True}
+    if status == PURCHASE_CANCELED:
+        return False, {"error": "purchase_canceled"}
+
+    transitioned, reason = _transition_purchase_status(purchase, PURCHASE_PAID)
+    if not transitioned:
+        return False, {"error": reason}
+
+    ok, issued = _issue_license_for_purchase(purchase)
+    if not ok:
+        error_text = _clean_text(issued.get("error")) or "license_issue_failed"
+        _transition_purchase_status(purchase, PURCHASE_FAILED, reason=error_text)
+        return False, {"error": error_text}
+
+    transitioned, reason = _transition_purchase_status(purchase, PURCHASE_LICENSED)
+    if not transitioned:
+        return False, {"error": reason}
+
+    purchase["license_key"] = _clean_optional_text(issued.get("license_key"))
+    purchase["entitlement_token"] = _clean_optional_text(issued.get("entitlement_token"))
+    purchase["licensed_at"] = _now_iso()
+    purchase["error"] = None
+    return True, {"status": PURCHASE_LICENSED}
+
+
+def _event_already_processed(state: dict[str, Any], event_id: str) -> bool:
+    processed = state.get("processed_events")
+    if not isinstance(processed, dict):
+        return False
+    return event_id in processed
+
+
+def _record_event_processed(state: dict[str, Any], event_id: str, event_type: str):
+    processed = state.get("processed_events")
+    if not isinstance(processed, dict):
+        processed = {}
+        state["processed_events"] = processed
+    processed[event_id] = {
+        "type": _clean_text(event_type),
+        "processed_at": _now_iso(),
+    }
+
+
+def _extract_purchase_id_from_metadata(metadata: Any) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    return _clean_text(metadata.get("purchase_id"))
+
+
+def _find_purchase_by_subscription_id(state: dict[str, Any], subscription_id: str) -> tuple[str, dict[str, Any]] | None:
+    target = _clean_text(subscription_id)
+    if not target:
+        return None
+    purchases = state.get("purchases")
+    if not isinstance(purchases, dict):
+        return None
+    for purchase_id, purchase in purchases.items():
+        if not isinstance(purchase, dict):
+            continue
+        if _clean_text(purchase.get("stripe_subscription_id")) == target:
+            return str(purchase_id), purchase
+    return None
+
+
+def _find_purchase_by_customer_id(state: dict[str, Any], customer_id: str) -> tuple[str, dict[str, Any]] | None:
+    target = _clean_text(customer_id)
+    if not target:
+        return None
+    purchases = state.get("purchases")
+    if not isinstance(purchases, dict):
+        return None
+    for purchase_id, purchase in purchases.items():
+        if not isinstance(purchase, dict):
+            continue
+        if _clean_text(purchase.get("stripe_customer_id")) == target:
+            return str(purchase_id), purchase
+    return None
+
+
+def _handle_checkout_session_completed(state: dict[str, Any], event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    payload = event.get("data", {}).get("object", {}) if isinstance(event.get("data"), dict) else {}
+    if not isinstance(payload, dict):
+        return True, {"ignored": "missing_session_payload"}
+
+    purchase_id = _extract_purchase_id_from_metadata(payload.get("metadata"))
+    if not purchase_id:
+        purchase_id = _clean_text(payload.get("client_reference_id"))
+    if not purchase_id:
+        return True, {"ignored": "missing_purchase_id"}
+
+    purchases = state["purchases"]
+    purchase = purchases.get(purchase_id)
+    if not isinstance(purchase, dict):
+        return True, {"ignored": "purchase_not_found", "purchase_id": purchase_id}
+
+    _set_purchase_stripe_refs(
+        purchase,
+        checkout_session_id=_clean_text(payload.get("id")),
+        customer_id=_clean_text(payload.get("customer")),
+        subscription_id=_clean_text(payload.get("subscription")),
+        payment_intent_id=_clean_text(payload.get("payment_intent")),
+    )
+    payment_status = _clean_text(payload.get("payment_status")).lower()
+    if payment_status not in {"paid", "no_payment_required"}:
+        return True, {"status": purchase.get("status"), "purchase_id": purchase_id, "ignored": "payment_not_settled"}
+
+    ok, info = _provision_purchase_license(purchase)
+    if not ok:
+        return False, {"purchase_id": purchase_id, **info}
+    purchases[purchase_id] = purchase
+    return True, {"purchase_id": purchase_id, **info}
+
+
+def _handle_invoice_paid(state: dict[str, Any], event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    payload = event.get("data", {}).get("object", {}) if isinstance(event.get("data"), dict) else {}
+    if not isinstance(payload, dict):
+        return True, {"ignored": "missing_invoice_payload"}
+
+    purchase_id = _extract_purchase_id_from_metadata(payload.get("metadata"))
+    purchase: dict[str, Any] | None = None
+    if purchase_id:
+        candidate = state["purchases"].get(purchase_id)
+        if isinstance(candidate, dict):
+            purchase = candidate
+
+    if purchase is None:
+        match = _find_purchase_by_subscription_id(state, _clean_text(payload.get("subscription")))
+        if match is not None:
+            purchase_id, purchase = match
+
+    if purchase is None:
+        match = _find_purchase_by_customer_id(state, _clean_text(payload.get("customer")))
+        if match is not None:
+            purchase_id, purchase = match
+
+    if purchase is None or not purchase_id:
+        return True, {"ignored": "invoice_purchase_not_found"}
+
+    _set_purchase_stripe_refs(
+        purchase,
+        customer_id=_clean_text(payload.get("customer")),
+        subscription_id=_clean_text(payload.get("subscription")),
+        payment_intent_id=_clean_text(payload.get("payment_intent")),
+    )
+
+    ok, info = _provision_purchase_license(purchase)
+    if not ok:
+        return False, {"purchase_id": purchase_id, **info}
+    state["purchases"][purchase_id] = purchase
+    return True, {"purchase_id": purchase_id, **info}
+
+
+def _handle_subscription_deleted(state: dict[str, Any], event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    payload = event.get("data", {}).get("object", {}) if isinstance(event.get("data"), dict) else {}
+    if not isinstance(payload, dict):
+        return True, {"ignored": "missing_subscription_payload"}
+
+    purchase_id = _extract_purchase_id_from_metadata(payload.get("metadata"))
+    purchase: dict[str, Any] | None = None
+
+    if purchase_id:
+        candidate = state["purchases"].get(purchase_id)
+        if isinstance(candidate, dict):
+            purchase = candidate
+
+    if purchase is None:
+        subscription_id = _clean_text(payload.get("id"))
+        match = _find_purchase_by_subscription_id(state, subscription_id)
+        if match is not None:
+            purchase_id, purchase = match
+
+    if purchase is None or not purchase_id:
+        return True, {"ignored": "subscription_purchase_not_found"}
+
+    _set_purchase_stripe_refs(
+        purchase,
+        customer_id=_clean_text(payload.get("customer")),
+        subscription_id=_clean_text(payload.get("id")),
+    )
+    transitioned, reason = _transition_purchase_status(
+        purchase,
+        PURCHASE_CANCELED,
+        reason="stripe_subscription_deleted",
+    )
+    if not transitioned:
+        return False, {"purchase_id": purchase_id, "error": reason}
+    state["purchases"][purchase_id] = purchase
+    return True, {"purchase_id": purchase_id, "status": purchase.get("status")}
+
+
+def _handle_checkout_session_expired(state: dict[str, Any], event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    payload = event.get("data", {}).get("object", {}) if isinstance(event.get("data"), dict) else {}
+    if not isinstance(payload, dict):
+        return True, {"ignored": "missing_session_payload"}
+
+    purchase_id = _extract_purchase_id_from_metadata(payload.get("metadata"))
+    if not purchase_id:
+        purchase_id = _clean_text(payload.get("client_reference_id"))
+    if not purchase_id:
+        return True, {"ignored": "missing_purchase_id"}
+
+    purchase = state["purchases"].get(purchase_id)
+    if not isinstance(purchase, dict):
+        return True, {"ignored": "purchase_not_found", "purchase_id": purchase_id}
+
+    transitioned, reason = _transition_purchase_status(
+        purchase,
+        PURCHASE_CANCELED,
+        reason="stripe_checkout_expired",
+    )
+    if not transitioned:
+        return False, {"purchase_id": purchase_id, "error": reason}
+    state["purchases"][purchase_id] = purchase
+    return True, {"purchase_id": purchase_id, "status": purchase.get("status")}
+
+
+def _handle_invoice_payment_failed(state: dict[str, Any], event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    payload = event.get("data", {}).get("object", {}) if isinstance(event.get("data"), dict) else {}
+    if not isinstance(payload, dict):
+        return True, {"ignored": "missing_invoice_payload"}
+
+    match = _find_purchase_by_subscription_id(state, _clean_text(payload.get("subscription")))
+    if match is None:
+        return True, {"ignored": "invoice_purchase_not_found"}
+
+    purchase_id, purchase = match
+    transitioned, reason = _transition_purchase_status(
+        purchase,
+        PURCHASE_FAILED,
+        reason="stripe_invoice_payment_failed",
+    )
+    if not transitioned:
+        return False, {"purchase_id": purchase_id, "error": reason}
+    state["purchases"][purchase_id] = purchase
+    return True, {"purchase_id": purchase_id, "status": purchase.get("status")}
+
+
+def _process_stripe_event(state: dict[str, Any], event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    event_id = _clean_text(event.get("id"))
+    event_type = _clean_text(event.get("type"))
+    if not event_id or not event_type:
+        return False, {"error": "stripe_event_missing_fields"}
+
+    if _event_already_processed(state, event_id):
+        return True, {"duplicate": True, "event_id": event_id, "event_type": event_type}
+
+    handlers = {
+        "checkout.session.completed": _handle_checkout_session_completed,
+        "invoice.paid": _handle_invoice_paid,
+        "customer.subscription.deleted": _handle_subscription_deleted,
+        "checkout.session.expired": _handle_checkout_session_expired,
+        "invoice.payment_failed": _handle_invoice_payment_failed,
+    }
+    handler = handlers.get(event_type)
+    if handler is None:
+        _record_event_processed(state, event_id, event_type)
+        return True, {"ignored": "event_not_handled", "event_id": event_id, "event_type": event_type}
+
+    ok, result = handler(state, event)
+    if ok:
+        _record_event_processed(state, event_id, event_type)
+    return ok, {"event_id": event_id, "event_type": event_type, **result}
 
 
 class CreatePurchaseRequest(BaseModel):
@@ -120,29 +616,54 @@ def healthz():
 @app.post("/v1/solo/purchases")
 def create_purchase(request: CreatePurchaseRequest, raw_request: Request):
     purchase_id = _purchase_id()
-    base = str(raw_request.base_url).rstrip("/")
-    checkout_url = f"{base}/checkout/{purchase_id}"
+    base_url = str(raw_request.base_url).rstrip("/")
+    mode = _clean_text(request.mode) or "test"
     purchase = {
         "purchase_id": purchase_id,
-        "status": "pending",
+        "status": PURCHASE_PENDING,
         "plan_id": request.plan_id.strip(),
         "email": request.email.strip(),
-        "mode": request.mode.strip() or "test",
-        "success_url": request.success_url or "",
-        "cancel_url": request.cancel_url or "",
-        "checkout_url": checkout_url,
+        "mode": mode,
+        "success_url": _clean_text(request.success_url),
+        "cancel_url": _clean_text(request.cancel_url),
+        "provider": "local_dev",
+        "checkout_url": f"{base_url}/checkout/{purchase_id}",
+        "stripe_checkout_session_id": None,
+        "stripe_customer_id": None,
+        "stripe_subscription_id": None,
+        "stripe_payment_intent_id": None,
         "license_key": None,
+        "entitlement_token": None,
         "error": None,
         "created_at": _now_iso(),
         "updated_at": _now_iso(),
     }
+
+    if _stripe_secret_key():
+        ok, stripe_session = _create_stripe_checkout_session(purchase, base_url=base_url)
+        if not ok:
+            raise HTTPException(status_code=502, detail=str(stripe_session.get("error", "stripe_checkout_failed")))
+        checkout_url = _clean_text(stripe_session.get("url"))
+        checkout_session_id = _clean_text(stripe_session.get("id"))
+        if not checkout_url or not checkout_session_id:
+            raise HTTPException(status_code=502, detail="stripe_checkout_missing_url")
+        purchase["provider"] = "stripe"
+        purchase["checkout_url"] = checkout_url
+        _set_purchase_stripe_refs(
+            purchase,
+            checkout_session_id=checkout_session_id,
+            customer_id=_clean_text(stripe_session.get("customer")),
+            subscription_id=_clean_text(stripe_session.get("subscription")),
+            payment_intent_id=_clean_text(stripe_session.get("payment_intent")),
+        )
+
     state = _load_state()
     state["purchases"][purchase_id] = purchase
     _save_state(state)
     return {
         "purchase_id": purchase_id,
-        "status": "pending",
-        "checkout_url": checkout_url,
+        "status": PURCHASE_PENDING,
+        "checkout_url": str(purchase.get("checkout_url", "")),
         "poll_after_ms": 3000,
     }
 
@@ -164,29 +685,33 @@ def mark_paid(request: MarkPaidRequest):
     if not isinstance(purchase, dict):
         raise HTTPException(status_code=404, detail="purchase not found")
 
-    status = str(purchase.get("status", "pending")).strip()
-    if status == "licensed":
-        return {"ok": True, "status": "licensed"}
-    if status == "canceled":
-        return {"ok": False, "status": "canceled"}
+    status = _clean_text(purchase.get("status")).lower() or PURCHASE_PENDING
+    if status == PURCHASE_LICENSED:
+        return {"ok": True, "status": PURCHASE_LICENSED}
+    if status == PURCHASE_CANCELED:
+        return {"ok": False, "status": PURCHASE_CANCELED}
 
-    purchase["status"] = "paid"
-    purchase["updated_at"] = _now_iso()
-    purchase["error"] = None
-    _save_state(state)
-
-    ok, issued = _issue_license_for_purchase(purchase)
-    if ok:
-        purchase["status"] = "licensed"
-        purchase["license_key"] = str(issued.get("license_key", ""))
-        purchase["error"] = None
-    else:
-        purchase["status"] = "failed"
-        purchase["error"] = str(issued.get("error", "license_issue_failed"))
-    purchase["updated_at"] = _now_iso()
+    ok, result = _provision_purchase_license(purchase)
     state["purchases"][purchase_id] = purchase
     _save_state(state)
-    return {"ok": purchase["status"] == "licensed", "status": purchase["status"]}
+    return {"ok": ok, "status": purchase.get("status"), "detail": result}
+
+
+@app.post("/v1/stripe/webhook")
+async def stripe_webhook(raw_request: Request):
+    payload = await raw_request.body()
+    signature_header = _clean_text(raw_request.headers.get("Stripe-Signature"))
+    verified, parsed = _verify_stripe_signature(payload, signature_header)
+    if not verified:
+        raise HTTPException(status_code=400, detail=str(parsed))
+    event = parsed if isinstance(parsed, dict) else {}
+
+    state = _load_state()
+    ok, result = _process_stripe_event(state, event)
+    _save_state(state)
+    if not ok:
+        raise HTTPException(status_code=500, detail=result.get("error", "stripe_event_failed"))
+    return {"ok": True, **result}
 
 
 @app.get("/checkout/{purchase_id}")
@@ -230,9 +755,16 @@ def checkout_page(purchase_id: str):
 
 
 def main(argv: list[str] | None = None):
+    default_port_raw = _clean_text(os.environ.get("PORT")) or _clean_text(os.environ.get("MAESTRO_BILLING_PORT")) or "8081"
+    try:
+        default_port = int(default_port_raw)
+    except ValueError:
+        default_port = 8081
+    default_host = _clean_text(os.environ.get("MAESTRO_BILLING_HOST")) or ("0.0.0.0" if _clean_text(os.environ.get("PORT")) else "127.0.0.1")
+
     parser = argparse.ArgumentParser(prog="maestro-billing-service")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8081)
+    parser.add_argument("--host", default=default_host)
+    parser.add_argument("--port", type=int, default=default_port)
     args = parser.parse_args(argv)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

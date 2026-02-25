@@ -23,6 +23,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .doctor import run_doctor
+from .entitlements import entitlement_label, has_capability, normalize_tier, resolve_effective_entitlement
 from .install_state import load_install_state, save_install_state
 from .solo_license import ensure_local_trial_license
 from .workspace_templates import render_personal_agents_md, render_personal_tools_md, render_workspace_env
@@ -164,6 +165,8 @@ class QuickSetup:
         self.workspace = (Path.home() / ".openclaw" / "workspace-maestro-solo").resolve()
         self.store_root = (self.workspace / "knowledge_store").resolve()
         self.trial_info: dict[str, Any] = {}
+        self.entitlement: dict[str, Any] = resolve_effective_entitlement()
+        self.tier = normalize_tier(str(self.entitlement.get("tier", "core")))
 
     def run(self) -> int:
         if not self._intro():
@@ -543,6 +546,10 @@ class QuickSetup:
             title=f"[bold {BRIGHT_CYAN}]Workspace Bootstrap[/]",
             width=72,
         ))
+        self._refresh_entitlement()
+        pro_skill_enabled = has_capability(self.entitlement, "maestro_skill")
+        native_extension_enabled = has_capability(self.entitlement, "maestro_native_tools")
+        frontend_enabled = has_capability(self.entitlement, "workspace_frontend")
 
         config_dir = Path.home() / ".openclaw"
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -592,15 +599,20 @@ class QuickSetup:
         plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
         entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
         plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
-        plugin_entry["enabled"] = True
+        plugin_entry["enabled"] = bool(native_extension_enabled)
         entries[NATIVE_PLUGIN_ID] = plugin_entry
         plugins["entries"] = entries
 
         allow = plugins.get("allow")
         if isinstance(allow, list):
-            if NATIVE_PLUGIN_ID not in [str(item).strip() for item in allow]:
+            allow_clean = [str(item).strip() for item in allow if str(item).strip()]
+            if native_extension_enabled and NATIVE_PLUGIN_ID not in allow_clean:
                 allow.append(NATIVE_PLUGIN_ID)
-                plugins["allow"] = allow
+            if not native_extension_enabled:
+                allow = [item for item in allow if str(item).strip() != NATIVE_PLUGIN_ID]
+            plugins["allow"] = allow
+        elif native_extension_enabled:
+            plugins["allow"] = [NATIVE_PLUGIN_ID]
         config["plugins"] = plugins
 
         channels = config.get("channels") if isinstance(config.get("channels"), dict) else {}
@@ -631,14 +643,43 @@ class QuickSetup:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.store_root.mkdir(parents=True, exist_ok=True)
 
-        self._seed_workspace_files()
-        self._seed_workspace_skill()
-        self._seed_native_extension()
-        self._maybe_build_workspace_frontend()
+        self._seed_workspace_files(pro_enabled=pro_skill_enabled)
+        if pro_skill_enabled:
+            self._seed_workspace_skill()
+        else:
+            self._remove_path_if_exists(self.workspace / "skills" / "maestro")
+            _warning("Core tier active; Maestro skill install skipped.")
+
+        if native_extension_enabled:
+            self._seed_native_extension()
+        else:
+            self._remove_path_if_exists(self.workspace / ".openclaw" / "extensions" / NATIVE_PLUGIN_ID)
+            _warning("Core tier active; native extension install skipped.")
+
+        if frontend_enabled:
+            self._maybe_build_workspace_frontend()
+        else:
+            _info("Core tier active; workspace frontend build skipped.")
 
         return True
 
-    def _seed_workspace_files(self):
+    def _refresh_entitlement(self):
+        self.entitlement = resolve_effective_entitlement()
+        self.tier = normalize_tier(str(self.entitlement.get("tier", "core")))
+        _info(f"Capability tier: {entitlement_label(self.entitlement)}")
+
+    @staticmethod
+    def _remove_path_if_exists(path: Path):
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            return
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
+    def _seed_workspace_files(self, *, pro_enabled: bool):
         module_dir = Path(__file__).resolve().parent
         repo_root = _discover_repo_root()
         candidate_dirs = [
@@ -658,9 +699,15 @@ class QuickSetup:
             if src:
                 shutil.copy2(src, self.workspace / filename)
 
-        (self.workspace / "AGENTS.md").write_text(render_personal_agents_md(), encoding="utf-8")
+        (self.workspace / "AGENTS.md").write_text(
+            render_personal_agents_md(pro_enabled=pro_enabled),
+            encoding="utf-8",
+        )
         (self.workspace / "TOOLS.md").write_text(
-            render_personal_tools_md(active_provider_env_key=self.provider_env_key),
+            render_personal_tools_md(
+                active_provider_env_key=self.provider_env_key,
+                pro_enabled=pro_enabled,
+            ),
             encoding="utf-8",
         )
 
@@ -671,6 +718,7 @@ class QuickSetup:
             gemini_key=self.gemini_key,
             agent_role="project",
             model_auth_method=self.model_auth_method,
+            maestro_tier=self.tier,
         )
         (self.workspace / ".env").write_text(env_content, encoding="utf-8")
 
@@ -797,18 +845,22 @@ class QuickSetup:
 
     def _trial_license_step(self) -> bool:
         console.print()
-        _info("Ensuring local trial license so runtime can start immediately...")
-        trial = ensure_local_trial_license(
-            purchase_id=f"trial-{self.install_id[:12]}",
-            email="trial@maestro.local",
-            plan_id="solo_trial",
-            source="quick_setup_trial",
-        )
+        _info("Checking local trial cache (optional fallback for offline demos)...")
+        try:
+            trial = ensure_local_trial_license(
+                purchase_id=f"trial-{self.install_id[:12]}",
+                email="trial@maestro.local",
+                plan_id="solo_trial",
+                source="quick_setup_trial",
+            )
+        except Exception as exc:
+            _warning(f"Trial license check skipped: {exc}")
+            return True
         self.trial_info = trial if isinstance(trial, dict) else {}
         status = trial.get("status", {}) if isinstance(trial, dict) else {}
         if not isinstance(status, dict) or not bool(status.get("valid")):
-            _error("Could not create or validate trial license.")
-            return False
+            _warning("Trial license unavailable. Continuing in core mode.")
+            return True
         if bool(trial.get("created")):
             _success(f"Trial license active until {status.get('expires_at', '')}")
         else:
@@ -845,6 +897,8 @@ class QuickSetup:
                 "setup_mode": "quick",
                 "setup_completed": True,
                 "pending_optional_setup": list(dict.fromkeys(self.pending_optional_setup)),
+                "tier": self.tier,
+                "entitlement_source": str(self.entitlement.get("source", "")),
             }
         )
 
@@ -859,6 +913,7 @@ class QuickSetup:
 
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_row("Company", self.company_name)
+        table.add_row("Tier", self.tier)
         table.add_row("Agent", "maestro-solo-personal")
         table.add_row("Model", self.model)
         table.add_row("Auth", "OpenAI OAuth via OpenClaw")

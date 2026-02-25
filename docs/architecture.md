@@ -2,7 +2,7 @@
 
 Architecture documentation has been reorganized.
 
-- System model: `docs/architecture/system-model.md`
-- Agent isolation: `docs/architecture/agent-isolation.md`
-- Runtime data flow: `docs/architecture/runtime-dataflow.md`
-- Decisions: `docs/decisions/`
+- [System model](architecture/system-model.md)
+- [Agent isolation](architecture/agent-isolation.md)
+- [Runtime data flow](architecture/runtime-dataflow.md)
+- [Decisions](decisions/)

@@ -168,7 +168,7 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
         return JSONResponse(
             {
                 "error": "Command Center frontend not found",
-                "hint": "Build with: cd command_center_frontend && npm install && npm run build",
+                "hint": "Run `maestro update` (Fleet profile) or build manually: cd command_center_frontend && npm install && npm run build",
             },
             status_code=404,
         )

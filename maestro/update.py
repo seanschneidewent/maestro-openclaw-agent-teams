@@ -60,6 +60,87 @@ def _default_command_runner(cmd: str) -> tuple[bool, str]:
     return result.returncode == 0, output
 
 
+def _frontend_dist_candidates(frontend_dir_name: str) -> list[Path]:
+    package_dir = Path(__file__).resolve().parent
+    candidates: list[Path] = [package_dir / frontend_dir_name]
+    for parent in package_dir.parents:
+        candidates.append(parent / frontend_dir_name / "dist")
+    return candidates
+
+
+def _frontend_dist_available(frontend_dir_name: str) -> bool:
+    for candidate in _frontend_dist_candidates(frontend_dir_name):
+        if (candidate / "index.html").exists():
+            return True
+    return False
+
+
+def _find_frontend_source_dir(frontend_dir_name: str) -> Path | None:
+    package_dir = Path(__file__).resolve().parent
+    for parent in package_dir.parents:
+        candidate = parent / frontend_dir_name
+        if (candidate / "package.json").exists():
+            return candidate
+    return None
+
+
+def _build_frontend_dist(frontend_dir_name: str, *, label: str) -> tuple[bool, str]:
+    source_dir = _find_frontend_source_dir(frontend_dir_name)
+    if source_dir is None:
+        return False, f"{label} source directory not found"
+    if shutil.which("npm") is None:
+        return False, "npm is not available on PATH"
+
+    install = subprocess.run(
+        ["npm", "install", "--prefix", str(source_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if install.returncode != 0:
+        output = (install.stderr or install.stdout or "").strip()
+        return False, output or f"npm install failed for {label}"
+
+    build = subprocess.run(
+        ["npm", "run", "build", "--prefix", str(source_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if build.returncode != 0:
+        output = (build.stderr or build.stdout or "").strip()
+        return False, output or f"npm run build failed for {label}"
+
+    if not _frontend_dist_available(frontend_dir_name):
+        return False, f"{label} build completed but dist/index.html was not found"
+
+    return True, ""
+
+
+def _ensure_frontend_artifacts(profile: str, *, dry_run: bool) -> tuple[list[str], list[str]]:
+    changes: list[str] = []
+    warnings: list[str] = []
+    targets: list[tuple[str, str]] = [("Workspace frontend", "workspace_frontend")]
+    if profile == PROFILE_FLEET:
+        targets.append(("Command Center frontend", "command_center_frontend"))
+
+    for label, frontend_dir_name in targets:
+        if _frontend_dist_available(frontend_dir_name):
+            continue
+
+        if dry_run:
+            changes.append(f"(dry-run) Would build missing {label} dist")
+            continue
+
+        ok, detail = _build_frontend_dist(frontend_dir_name, label=label)
+        if ok:
+            changes.append(f"Built missing {label} dist")
+        else:
+            warnings.append(f"Could not build {label}: {detail}")
+
+    return changes, warnings
+
+
 def _load_json(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -694,10 +775,17 @@ def run_update(
             print(f"[WARN] {warning}")
         return exit_code
 
+    install_state = load_install_state()
+    profile = str(install_state.get("profile", "solo")).strip() or "solo"
+    frontend_changes, frontend_warnings = _ensure_frontend_artifacts(profile, dry_run=dry_run)
+    if frontend_changes:
+        summary.changes.extend(frontend_changes)
+        summary.changed = True
+    if frontend_warnings:
+        summary.warnings.extend(frontend_warnings)
+
     print("Maestro update summary")
     print(f"- Workspace: {summary.workspace}")
-    state = load_install_state()
-    profile = str(state.get("profile", "solo")).strip() or "solo"
     print(f"- Profile: {profile}")
 
     if summary.changed:

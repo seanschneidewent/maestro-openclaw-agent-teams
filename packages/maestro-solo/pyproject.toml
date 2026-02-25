@@ -13,6 +13,7 @@ dependencies = [
   "maestro-engine>=0.1.0",
   "google-genai>=1.0.0",
   "Pillow>=11.0.0",
+  "cryptography>=42.0.0",
   "python-dotenv>=1.0.0",
   "PyMuPDF>=1.25.0",
   "fastapi>=0.115.0",

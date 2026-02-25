@@ -27,6 +27,12 @@ Fleet transition state path: `~/.maestro/install.json`
 - Store root: `<workspace>/knowledge_store` unless overridden
 - Fleet registry: `<store_root>/.command_center/fleet_registry.json`
 
+## Frontend Artifact Paths
+
+- Solo workspace UI build: `workspace_frontend/dist`
+- Fleet command center UI build: `command_center_frontend/dist`
+- Both paths are generated artifacts; `maestro update` rebuilds missing artifacts for the active profile.
+
 ## Canonical UI Routes
 
 - Solo workspace: `/workspace`

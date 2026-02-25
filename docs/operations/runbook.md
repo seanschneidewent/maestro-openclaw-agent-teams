@@ -29,6 +29,12 @@ maestro-solo migrate-legacy
 maestro-solo doctor --fix
 ```
 
+Regenerate frontend artifacts if runtime/UI assets are missing:
+
+```bash
+maestro-solo update
+```
+
 Require field URL readiness in Solo:
 
 ```bash
@@ -46,6 +52,7 @@ maestro-solo up --skip-doctor
 ```bash
 maestro-fleet enable
 maestro-fleet status
+maestro-fleet update
 maestro-fleet up --tui
 ```
 

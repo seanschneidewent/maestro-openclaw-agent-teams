@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL_DEFAULT="https://github.com/seanschneidewent/maestro-openclaw-agent-teams.git"
 INSTALL_ROOT_DEFAULT="$HOME/.maestro"
-REPO_DIR_DEFAULT="$INSTALL_ROOT_DEFAULT/maestro-openclaw-agent-teams"
+SOLO_HOME_DEFAULT="$HOME/.maestro-solo"
 VENV_DIR_DEFAULT="$INSTALL_ROOT_DEFAULT/venv-maestro-solo"
+INSTALL_CHANNEL_DEFAULT="core"
+CORE_PACKAGE_SPEC_DEFAULT=""
+PRO_PACKAGE_SPEC_DEFAULT=""
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-REPO_URL="${MAESTRO_REPO_URL:-$REPO_URL_DEFAULT}"
-REPO_DIR="${MAESTRO_REPO_DIR:-$REPO_DIR_DEFAULT}"
+SOLO_HOME="${MAESTRO_SOLO_HOME:-$SOLO_HOME_DEFAULT}"
 VENV_DIR="${MAESTRO_VENV_DIR:-$VENV_DIR_DEFAULT}"
+INSTALL_CHANNEL_RAW="${MAESTRO_INSTALL_CHANNEL:-$INSTALL_CHANNEL_DEFAULT}"
+CORE_PACKAGE_SPEC="${MAESTRO_CORE_PACKAGE_SPEC:-$CORE_PACKAGE_SPEC_DEFAULT}"
+PRO_PACKAGE_SPEC="${MAESTRO_PRO_PACKAGE_SPEC:-$PRO_PACKAGE_SPEC_DEFAULT}"
+USE_LOCAL_REPO="${MAESTRO_USE_LOCAL_REPO:-0}"
+INSTALL_CHANNEL=""
 PYTHON_BIN=""
 
 log() {
@@ -39,9 +46,23 @@ prompt_yes_no() {
     reply="${reply:-n}"
   fi
 
-  case "${reply,,}" in
+  local reply_lower
+  reply_lower="$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')"
+
+  case "$reply_lower" in
     y|yes) return 0 ;;
     *) return 1 ;;
+  esac
+}
+
+normalize_channel() {
+  local clean
+  clean="$(printf '%s' "$INSTALL_CHANNEL_RAW" | tr '[:upper:]' '[:lower:]')"
+  case "$clean" in
+    core|pro) INSTALL_CHANNEL="$clean" ;;
+    *)
+      fatal "Invalid MAESTRO_INSTALL_CHANNEL='$INSTALL_CHANNEL_RAW' (expected core or pro)."
+      ;;
   esac
 }
 
@@ -143,37 +164,6 @@ ensure_openclaw() {
   log "OpenClaw: $(openclaw --version 2>&1 || echo 'installed')"
 }
 
-clone_or_update_repo() {
-  if [[ -d "$SCRIPT_REPO_ROOT/.git" && "${MAESTRO_USE_LOCAL_REPO:-auto}" != "0" ]]; then
-    REPO_DIR="$SCRIPT_REPO_ROOT"
-    log "Using local checkout: $REPO_DIR"
-    return 0
-  fi
-
-  mkdir -p "$(dirname "$REPO_DIR")"
-
-  if [[ -d "$REPO_DIR/.git" ]]; then
-    log "Updating existing repo: $REPO_DIR"
-    git -C "$REPO_DIR" fetch --all --prune
-    git -C "$REPO_DIR" pull --ff-only || warn "git pull failed. Continuing with existing checkout."
-    return 0
-  fi
-
-  if [[ -d "$REPO_DIR" ]]; then
-    fatal "Target directory exists but is not a git repo: $REPO_DIR"
-  fi
-
-  log "Cloning repo: $REPO_URL"
-  git clone "$REPO_URL" "$REPO_DIR"
-}
-
-install_maestro_packages() {
-  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  log "Installing Maestro packages (editable)..."
-  "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel
-  "$PYTHON_BIN" -m pip install -e "$REPO_DIR/packages/maestro-engine" -e "$REPO_DIR/packages/maestro-solo"
-}
-
 ensure_virtualenv() {
   mkdir -p "$(dirname "$VENV_DIR")"
   if [[ ! -x "$VENV_DIR/bin/python" ]]; then
@@ -185,27 +175,62 @@ ensure_virtualenv() {
   log "Virtualenv: $VENV_DIR"
 }
 
+persist_install_channel() {
+  mkdir -p "$SOLO_HOME"
+  printf '%s\n' "$INSTALL_CHANNEL" >"$SOLO_HOME/install-channel.txt"
+  log "Install channel persisted: $INSTALL_CHANNEL"
+}
+
+install_maestro_packages() {
+  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
+  "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel
+
+  if [[ "$USE_LOCAL_REPO" == "1" ]]; then
+    if [[ ! -d "$SCRIPT_REPO_ROOT/packages/maestro-solo" || ! -d "$SCRIPT_REPO_ROOT/packages/maestro-engine" ]]; then
+      fatal "MAESTRO_USE_LOCAL_REPO=1 requires this script to run from a repo checkout with packages/maestro-solo and packages/maestro-engine."
+    fi
+    log "Installing from local repository checkout (development mode)"
+    "$PYTHON_BIN" -m pip install -e "$SCRIPT_REPO_ROOT/packages/maestro-engine" -e "$SCRIPT_REPO_ROOT/packages/maestro-solo"
+    return 0
+  fi
+
+  local package_spec="$CORE_PACKAGE_SPEC"
+  if [[ "$INSTALL_CHANNEL" == "pro" ]]; then
+    package_spec="$PRO_PACKAGE_SPEC"
+  fi
+  [[ -n "$package_spec" ]] || fatal "Package spec is empty. Set MAESTRO_CORE_PACKAGE_SPEC / MAESTRO_PRO_PACKAGE_SPEC to private wheel spec(s), or set MAESTRO_USE_LOCAL_REPO=1 for local development."
+
+  local spec_normalized="${package_spec//,/ }"
+  local -a pip_args=()
+  read -r -a pip_args <<<"$spec_normalized"
+  [[ "${#pip_args[@]}" -gt 0 ]] || fatal "No install arguments parsed from package spec: '$package_spec'"
+
+  log "Installing package spec for channel '$INSTALL_CHANNEL' (${#pip_args[@]} pip arg(s))"
+  "$PYTHON_BIN" -m pip install "${pip_args[@]}"
+}
+
 run_quick_setup() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   log "Starting quick setup..."
-  "$PYTHON_BIN" -m maestro_solo.cli setup --quick
+  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli setup --quick
 }
 
 start_runtime() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   log "Starting Maestro runtime..."
-  exec "$PYTHON_BIN" -m maestro_solo.cli up --tui
+  exec MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli up --tui
 }
 
 main() {
+  normalize_channel
   ensure_macos
   ensure_homebrew
   ensure_python
   ensure_node_npm
   ensure_openclaw
-  clone_or_update_repo
   ensure_virtualenv
   install_maestro_packages
+  persist_install_channel
   run_quick_setup
   start_runtime
 }

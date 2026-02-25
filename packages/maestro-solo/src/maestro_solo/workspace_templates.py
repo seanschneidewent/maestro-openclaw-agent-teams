@@ -17,7 +17,27 @@ def provider_env_key_for_model(model: str | None) -> str | None:
     return None
 
 
-def render_personal_agents_md() -> str:
+def render_personal_agents_md(*, pro_enabled: bool = True) -> str:
+    if not pro_enabled:
+        return (
+            "# AGENTS.md — Maestro Solo Core\n\n"
+            "## Every Session\n"
+            "1. Read `SOUL.md`\n"
+            "2. Read `IDENTITY.md`\n"
+            "3. Read `USER.md`\n"
+            "4. Read `AWARENESS.md` for current model + access URLs\n"
+            "5. Check `knowledge_store/`\n\n"
+            "## Role\n"
+            "You are a Maestro Solo Core assistant.\n"
+            "Use generic OpenClaw tools and local workspace files to answer user requests.\n\n"
+            "## Core Rules\n"
+            "1. Prefer precise, bounded shell/file commands.\n"
+            "2. Do not run broad recursive scans across `knowledge_store/`.\n"
+            "3. Keep responses grounded in available evidence and cite file/page names.\n\n"
+            "## Upgrade Note\n"
+            "If native `maestro_*` tools are unavailable, continue with generic tools.\n"
+            "Pro entitlements unlock native Maestro skills and extensions.\n"
+        )
     return (
         "# AGENTS.md — Maestro Solo Personal\n\n"
         "## Every Session\n"
@@ -52,17 +72,44 @@ def render_personal_agents_md() -> str:
     )
 
 
-def render_company_agents_md() -> str:
+def render_company_agents_md(*, pro_enabled: bool = True) -> str:
     """Compatibility shim for legacy doctor/update paths."""
-    return render_personal_agents_md()
+    return render_personal_agents_md(pro_enabled=pro_enabled)
 
 
-def render_personal_tools_md(active_provider_env_key: str | None = None) -> str:
+def render_personal_tools_md(
+    active_provider_env_key: str | None = None,
+    *,
+    pro_enabled: bool = True,
+) -> str:
     provider_line = (
         f"- `{active_provider_env_key}` — Active default model key\n"
         if active_provider_env_key
         else "- Model provider key — see openclaw.json\n"
     )
+    if not pro_enabled:
+        return (
+            "# TOOLS.md — Maestro Solo Core\n\n"
+            "## Role\n"
+            "- **Mode:** Solo Core\n"
+            "- **Agent:** `maestro-solo-personal`\n"
+            "- **Purpose:** Core ingestion + generic assistant workflows\n\n"
+            "## Core Commands\n"
+            "- `maestro-solo setup`\n"
+            "- `maestro-solo ingest <path-to-pdfs>`\n"
+            "- `maestro-solo up --tui`\n"
+            "- `maestro-solo status`\n\n"
+            "## Tooling\n"
+            "- Use standard OpenClaw tools and bounded shell/file operations.\n"
+            "- Native `maestro_*` tools require Pro entitlements.\n\n"
+            "## Environment Variables\n"
+            f"{provider_line}"
+            "- `MAESTRO_TIER` — active tier (`core` or `pro`)\n"
+            "- `MAESTRO_STORE` — active knowledge store root\n"
+            "- `OPENAI_API_KEY` — Optional provider key\n"
+            "- `GEMINI_API_KEY` — Optional (required for vision/image features)\n"
+            "- `ANTHROPIC_API_KEY` — Optional provider key\n"
+        )
     return (
         "# TOOLS.md — Maestro Solo Personal\n\n"
         "## Role\n"
@@ -128,10 +175,18 @@ def render_personal_tools_md(active_provider_env_key: str | None = None) -> str:
     )
 
 
-def render_tools_md(company_name: str, active_provider_env_key: str | None = None) -> str:
+def render_tools_md(
+    company_name: str,
+    active_provider_env_key: str | None = None,
+    *,
+    pro_enabled: bool = True,
+) -> str:
     """Compatibility shim for legacy doctor/update paths."""
     _ = company_name
-    return render_personal_tools_md(active_provider_env_key=active_provider_env_key)
+    return render_personal_tools_md(
+        active_provider_env_key=active_provider_env_key,
+        pro_enabled=pro_enabled,
+    )
 
 
 def render_workspace_env(
@@ -142,6 +197,7 @@ def render_workspace_env(
     gemini_key: str | None = None,
     agent_role: str | None = None,
     model_auth_method: str | None = None,
+    maestro_tier: str | None = None,
 ) -> str:
     lines = ["# Maestro Solo Environment"]
 
@@ -165,6 +221,10 @@ def render_workspace_env(
     )
     if auth_method:
         lines.append(f"MAESTRO_MODEL_AUTH_METHOD={auth_method}")
+
+    tier = maestro_tier.strip().lower() if isinstance(maestro_tier, str) and maestro_tier.strip() else ""
+    if tier:
+        lines.append(f"MAESTRO_TIER={tier}")
 
     clean_store = store_path.strip() if isinstance(store_path, str) and store_path.strip() else "knowledge_store/"
     lines.append(f"MAESTRO_STORE={clean_store}")

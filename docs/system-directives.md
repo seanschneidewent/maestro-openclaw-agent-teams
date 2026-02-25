@@ -2,5 +2,5 @@
 
 Directive behavior is now documented in:
 
-- `docs/command-center/doctor-and-directives.md`
-- `docs/api/storage-contracts.md`
+- [Doctor and Directives](command-center/doctor-and-directives.md)
+- [Storage Contracts](api/storage-contracts.md)

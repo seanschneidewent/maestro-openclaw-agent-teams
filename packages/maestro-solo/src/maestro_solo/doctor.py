@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls
+from .entitlements import has_capability, resolve_effective_entitlement
 from .profile import PROFILE_FLEET, PROFILE_SOLO, resolve_profile
 from maestro_engine.utils import load_json, save_json
 from .install_state import load_install_state, resolve_fleet_store_root, update_install_state
@@ -167,6 +168,7 @@ def _sync_workspace_tools_md(
     company_name: str,
     active_provider_env_key: str | None,
     profile: str,
+    pro_enabled: bool,
     fix: bool,
 ) -> DoctorCheck:
     if not workspace_root:
@@ -178,9 +180,16 @@ def _sync_workspace_tools_md(
         )
     tools_path = workspace_root / "TOOLS.md"
     desired = (
-        render_tools_md(company_name=company_name, active_provider_env_key=active_provider_env_key)
+        render_tools_md(
+            company_name=company_name,
+            active_provider_env_key=active_provider_env_key,
+            pro_enabled=pro_enabled,
+        )
         if profile == PROFILE_FLEET
-        else render_personal_tools_md(active_provider_env_key=active_provider_env_key)
+        else render_personal_tools_md(
+            active_provider_env_key=active_provider_env_key,
+            pro_enabled=pro_enabled,
+        )
     )
 
     if tools_path.exists():
@@ -222,6 +231,7 @@ def _sync_workspace_tools_md(
 def _sync_workspace_agents_md(
     workspace_root: Path | None,
     profile: str,
+    pro_enabled: bool,
     fix: bool,
 ) -> DoctorCheck:
     if not workspace_root:
@@ -233,7 +243,11 @@ def _sync_workspace_agents_md(
         )
 
     agents_path = workspace_root / "AGENTS.md"
-    desired = render_company_agents_md() if profile == PROFILE_FLEET else render_personal_agents_md()
+    desired = (
+        render_company_agents_md(pro_enabled=pro_enabled)
+        if profile == PROFILE_FLEET
+        else render_personal_agents_md(pro_enabled=pro_enabled)
+    )
     if not agents_path.exists():
         if fix:
             agents_path.parent.mkdir(parents=True, exist_ok=True)
@@ -881,6 +895,8 @@ def build_doctor_report(
     provider_env_key = provider_env_key_for_model(model) if model else None
     company_name = str(primary.get("name", "Company")).strip().replace("Maestro (", "").replace(")", "")
     expected_role = "company" if profile == PROFILE_FLEET else "project"
+    entitlement = resolve_effective_entitlement()
+    pro_enabled = has_capability(entitlement, "maestro_skill")
 
     if not primary:
         expected_agent = "maestro-company" if profile == PROFILE_FLEET else "maestro-solo-personal"
@@ -919,6 +935,7 @@ def build_doctor_report(
         company_name=company_name,
         active_provider_env_key=provider_env_key,
         profile=profile,
+        pro_enabled=pro_enabled,
         fix=fix,
     ))
     checks.append(_sync_workspace_awareness_md(
@@ -932,7 +949,7 @@ def build_doctor_report(
         field_access_required=require_field_access,
         fix=fix,
     ))
-    checks.append(_sync_workspace_agents_md(workspace, profile=profile, fix=fix))
+    checks.append(_sync_workspace_agents_md(workspace, profile=profile, pro_enabled=pro_enabled, fix=fix))
     checks.append(_sync_workspace_env_role(workspace, expected_role=expected_role, fix=fix))
     checks.append(_sync_launchagent_env(home, config_env=config_env, fix=fix))
     checks.append(_rotate_stale_sessions(home, fix=fix))

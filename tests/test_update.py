@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from maestro.update import perform_update
+from maestro.profile import PROFILE_FLEET
+from maestro.update import _ensure_frontend_artifacts, perform_update
 
 
 def _write_json(path: Path, data: dict):
@@ -208,3 +209,22 @@ def test_update_dry_run_does_not_write_files(tmp_path: Path):
     assert summary.backup_dir is None
     assert config_path.read_text(encoding="utf-8") == before
     assert any("dry-run" in c for c in summary.changes)
+
+
+def test_ensure_frontend_artifacts_dry_run(monkeypatch):
+    monkeypatch.setattr("maestro.update._frontend_dist_available", lambda *_args, **_kwargs: False)
+    changes, warnings = _ensure_frontend_artifacts("solo", dry_run=True)
+    assert "Would build missing Workspace frontend dist" in changes[0]
+    assert warnings == []
+
+
+def test_ensure_frontend_artifacts_fleet_build_failure(monkeypatch):
+    monkeypatch.setattr("maestro.update._frontend_dist_available", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        "maestro.update._build_frontend_dist",
+        lambda *_args, **_kwargs: (False, "build failed"),
+    )
+    changes, warnings = _ensure_frontend_artifacts(PROFILE_FLEET, dry_run=False)
+    assert changes == []
+    assert len(warnings) == 2
+    assert all("Could not build" in warning for warning in warnings)

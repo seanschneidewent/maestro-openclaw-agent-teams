@@ -2,8 +2,8 @@
 
 Command Center docs moved under:
 
-- `docs/command-center/overview.md`
-- `docs/command-center/modal-ux.md`
-- `docs/command-center/doctor-and-directives.md`
+- [Overview](command-center/overview.md)
+- [Node Modal UX](command-center/modal-ux.md)
+- [Doctor and Directives](command-center/doctor-and-directives.md)
 
-API details are in `docs/api/command-center.md`.
+API details are in [docs/api/command-center.md](api/command-center.md).

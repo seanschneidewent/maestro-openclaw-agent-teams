@@ -24,3 +24,18 @@ def test_parser_setup_quick_command():
     assert args.command == "setup"
     assert args.quick is True
     assert args.company_name == "ACME"
+
+
+def test_parser_entitlements_activate_command():
+    parser = build_parser()
+    args = parser.parse_args(["entitlements", "activate", "--token", "abc.def.ghi"])
+    assert args.command == "entitlements"
+    assert args.entitlement_action == "activate"
+    assert args.token == "abc.def.ghi"
+
+
+def test_parser_up_require_pro_flag():
+    parser = build_parser()
+    args = parser.parse_args(["up", "--require-pro"])
+    assert args.command == "up"
+    assert args.require_pro is True

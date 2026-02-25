@@ -1,61 +1,71 @@
-# Maestro Docs
+# Maestro Documentation
+
+This is the canonical documentation entrypoint for the repository.
 
 ## Start Here
 
-1. Solo setup: `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/setup.md`
-2. Solo ingest: `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/ingest.md`
-3. Solo workspace UX: `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/workspace.md`
-4. Solo payment/license flow: `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/payment-license.md`
-5. Solo clean-machine test: `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/clean-machine-test.md`
-6. Fleet enablement (advanced): `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/fleet/enable.md`
-7. CLI reference: `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/reference/cli.md`
-8. Paths/env reference: `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/reference/paths-env.md`
+1. [Solo Setup](solo/setup.md)
+2. [Solo Workspace UX](solo/workspace.md)
+3. [Solo Ingest](solo/ingest.md)
+4. [Solo Payment + License](solo/payment-license.md)
+5. [CLI Reference](reference/cli.md)
+6. [Paths and Environment](reference/paths-env.md)
 
-## Product Split Status
+## Product Surfaces
 
-- Solo is the primary delivery focus.
-- Fleet is a separate product surface and is being completed in later-phase package migration work.
+- Solo (default): `maestro-solo ...`
+- Fleet (advanced): `maestro-fleet ...`
 
 ## Solo Docs
 
-- `docs/solo/setup.md`
-- `docs/solo/ingest.md`
-- `docs/solo/workspace.md`
-- `docs/solo/payment-license.md`
-- `docs/solo/migrate-legacy.md`
-- `docs/solo/clean-machine-test.md`
+- [Setup](solo/setup.md)
+- [Ingest](solo/ingest.md)
+- [Workspace](solo/workspace.md)
+- [Payment and License](solo/payment-license.md)
+- [Migration from Legacy](solo/migrate-legacy.md)
+- [Clean-Machine Validation](solo/clean-machine-test.md)
 
 ## Fleet Docs
 
-- `docs/fleet/enable.md`
-- `docs/fleet/command-center.md`
-- `docs/fleet/purchase.md`
-- `packages/maestro-fleet/README.md` (product package and current staging details)
+- [Enable Fleet](fleet/enable.md)
+- [Fleet Command Center](fleet/command-center.md)
+- [Fleet Purchase Workflow](fleet/purchase.md)
 
-## Existing Deep Dives
+## API and Storage Contracts
 
-- `docs/architecture/system-model.md`
-- `docs/architecture/runtime-dataflow.md`
-- `docs/architecture/agent-isolation.md`
-- `docs/api/command-center.md`
-- `docs/api/awareness.md`
-- `docs/operations/runbook.md`
-- `docs/operations/troubleshooting.md`
-- `docs/decisions/*`
+- [Workspace APIs](api/workspace.md)
+- [Command Center APIs](api/command-center.md)
+- [Awareness API](api/awareness.md)
+- [Storage Contracts](api/storage-contracts.md)
 
-## Backend Reference Anchors
+## Architecture and Decisions
 
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-solo/src/maestro_solo/server.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-solo/src/maestro_solo/cli.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-solo/src/maestro_solo/setup_wizard.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-engine/src/maestro_engine/server_project_store.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-engine/src/maestro_engine/server_workspace_data.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-engine/src/maestro_engine/server_schedule.py`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-fleet/src/maestro_fleet/cli.py`
+- [System Model](architecture/system-model.md)
+- [Runtime Data Flow](architecture/runtime-dataflow.md)
+- [Agent Isolation](architecture/agent-isolation.md)
+- [Architecture Decisions](decisions/)
 
-## Compatibility Pages
+## Operations
 
-Top-level compatibility pages remain for transition and redirect context:
+- [Runtime Runbook](operations/runbook.md)
+- [Maintenance](operations/maintenance.md)
+- [Troubleshooting](operations/troubleshooting.md)
+- [Railway Billing + License Deploy](operations/railway-billing-license.md)
+
+## Reference
+
+- [CLI](reference/cli.md)
+- [Paths and Environment](reference/paths-env.md)
+- [Glossary](reference/glossary.md)
+
+## Archived Docs
+
+- [Maestro Product Spec (Feb 2026)](archive/maestro-product-spec-2026-02.md)
+- [Command Center Legacy Reference](archive/command-center-reference-legacy.md)
+
+## Compatibility Redirect Pages
+
+These files remain to preserve old links and point to the reorganized docs:
 
 - `docs/architecture.md`
 - `docs/command-center.md`

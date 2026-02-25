@@ -31,6 +31,7 @@ from .workspace_templates import (
     render_personal_tools_md,
     render_workspace_env,
 )
+from .entitlements import entitlement_label, has_capability, normalize_tier, resolve_effective_entitlement
 from .install_state import save_install_state
 
 # Theme colors
@@ -93,6 +94,8 @@ class SetupWizard:
         self.progress_file.parent.mkdir(parents=True, exist_ok=True)
         self.progress = self.load_progress()
         self.is_windows = platform.system() == "Windows"
+        self.entitlement = resolve_effective_entitlement()
+        self.tier = normalize_tier(str(self.entitlement.get("tier", "core")))
 
     def load_progress(self) -> Dict[str, Any]:
         if self.progress_file.exists():
@@ -125,6 +128,22 @@ class SetupWizard:
             return int(result.returncode)
         except Exception:
             return 1
+
+    def _refresh_entitlement(self):
+        self.entitlement = resolve_effective_entitlement()
+        self.tier = normalize_tier(str(self.entitlement.get("tier", "core")))
+        info(f"Capability tier: {entitlement_label(self.entitlement)}")
+
+    @staticmethod
+    def _remove_path_if_exists(path: Path):
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            return
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception:
+                pass
 
     def _openclaw_oauth_profile_exists(self, provider_id: str) -> bool:
         """Return True when a provider OAuth profile already exists in OpenClaw agent auth files."""
@@ -1052,6 +1071,10 @@ class SetupWizard:
         workspace.mkdir(parents=True, exist_ok=True)
 
         info(f"Using workspace: {workspace}")
+        self._refresh_entitlement()
+        pro_skill_enabled = has_capability(self.entitlement, "maestro_skill")
+        native_extension_enabled = has_capability(self.entitlement, "maestro_native_tools")
+        frontend_enabled = has_capability(self.entitlement, "workspace_frontend")
 
         # Keep OpenClaw agent workspace aligned with the selected Solo workspace.
         config_file = Path.home() / ".openclaw" / "openclaw.json"
@@ -1070,6 +1093,24 @@ class SetupWizard:
                 continue
             if str(agent.get("id", "")).strip() == "maestro-solo-personal":
                 agent["workspace"] = str(workspace.resolve())
+
+        plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+        entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
+        plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
+        plugin_entry["enabled"] = bool(native_extension_enabled)
+        entries[NATIVE_PLUGIN_ID] = plugin_entry
+        plugins["entries"] = entries
+        allow = plugins.get("allow")
+        if isinstance(allow, list):
+            cleaned = [str(item).strip() for item in allow if str(item).strip()]
+            if native_extension_enabled and NATIVE_PLUGIN_ID not in cleaned:
+                allow.append(NATIVE_PLUGIN_ID)
+            if not native_extension_enabled:
+                allow = [item for item in allow if str(item).strip() != NATIVE_PLUGIN_ID]
+            plugins["allow"] = allow
+        elif native_extension_enabled:
+            plugins["allow"] = [NATIVE_PLUGIN_ID]
+        config["plugins"] = plugins
         if config_file.exists():
             config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
@@ -1091,16 +1132,19 @@ class SetupWizard:
             else:
                 warning(f"Couldn't find {filename} — you can add it later")
 
-        # Solo workspace uses project-capable AGENTS policy.
+        # Render workspace policy based on active entitlement tier.
         with open(workspace / "AGENTS.md", "w") as f:
-            f.write(render_personal_agents_md())
-        success("Generated Personal AGENTS.md")
+            f.write(render_personal_agents_md(pro_enabled=pro_skill_enabled))
+        success(f"Generated AGENTS.md ({self.tier})")
 
         provider_env_key = self.progress.get('provider_env_key', 'GEMINI_API_KEY')
-        tools_md = render_personal_tools_md(active_provider_env_key=provider_env_key)
+        tools_md = render_personal_tools_md(
+            active_provider_env_key=provider_env_key,
+            pro_enabled=pro_skill_enabled,
+        )
         with open(workspace / "TOOLS.md", 'w') as f:
             f.write(tools_md)
-        success("Generated TOOLS.md")
+        success(f"Generated TOOLS.md ({self.tier})")
 
         knowledge_store = workspace / "knowledge_store"
         knowledge_store.mkdir(exist_ok=True)
@@ -1108,27 +1152,33 @@ class SetupWizard:
         self.progress['store_root'] = str(knowledge_store.resolve())
 
         skills_dir = workspace / "skills" / "maestro"
-        skills_dir.mkdir(parents=True, exist_ok=True)
-
         skill_src = agent_dir / "skills" / "maestro"
-        if skill_src.exists():
-            if skills_dir.exists():
-                shutil.rmtree(skills_dir)
-            shutil.copytree(skill_src, skills_dir)
-            success("Copied Maestro skill")
+        if pro_skill_enabled:
+            if skill_src.exists():
+                if skills_dir.exists():
+                    shutil.rmtree(skills_dir)
+                shutil.copytree(skill_src, skills_dir)
+                success("Copied Maestro skill")
+            else:
+                warning("Couldn't find skill files — tools will still work via CLI")
         else:
-            warning("Couldn't find skill files — tools will still work via CLI")
+            self._remove_path_if_exists(skills_dir)
+            warning("Core tier active — skipping Maestro skill install")
 
         extension_src = agent_dir / "extensions" / NATIVE_PLUGIN_ID
         extension_dst = workspace / ".openclaw" / "extensions" / NATIVE_PLUGIN_ID
-        if extension_src.exists():
-            if extension_dst.exists():
-                shutil.rmtree(extension_dst)
-            extension_dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(extension_src, extension_dst)
-            success("Installed Maestro native tools extension")
+        if native_extension_enabled:
+            if extension_src.exists():
+                if extension_dst.exists():
+                    shutil.rmtree(extension_dst)
+                extension_dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(extension_src, extension_dst)
+                success("Installed Maestro native tools extension")
+            else:
+                warning("Couldn't find native tools extension files")
         else:
-            warning("Couldn't find native tools extension files")
+            self._remove_path_if_exists(extension_dst)
+            warning("Core tier active — skipping native tools extension")
 
         env_file = workspace / ".env"
         env_content = render_workspace_env(
@@ -1138,6 +1188,7 @@ class SetupWizard:
             gemini_key=self.progress.get('gemini_key', ''),
             agent_role="project",
             model_auth_method=self.progress.get('provider_auth_method', ''),
+            maestro_tier=self.tier,
         )
         with open(env_file, 'w') as f:
             f.write(env_content)
@@ -1152,7 +1203,7 @@ class SetupWizard:
         elif legacy_frontend_dir.exists() and (legacy_frontend_dir / "package.json").exists():
             frontend_dir = legacy_frontend_dir
 
-        if frontend_dir is not None:
+        if frontend_enabled and frontend_dir is not None:
             console.print()
             info("Building workspace frontend...")
 
@@ -1182,6 +1233,8 @@ class SetupWizard:
                 console.print(f"  [{DIM}]Then: cd {frontend_dir}[/]")
                 console.print(f"  [{DIM}]npm install[/]")
                 console.print(f"  [{DIM}]npm run build[/]")
+        elif not frontend_enabled:
+            info("Core tier active — skipping workspace frontend build")
 
         self.progress['workspace'] = str(workspace)
         self.save_progress()
@@ -1195,6 +1248,8 @@ class SetupWizard:
             "store_root": str(knowledge_store.resolve()),
             "active_project_slug": "",
             "active_project_name": "",
+            "tier": self.tier,
+            "entitlement_source": str(self.entitlement.get("source", "")),
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         save_install_state(install_state)
@@ -1309,6 +1364,7 @@ class SetupWizard:
         # Build summary rows
         rows = []
         rows.append(f"[bold white]Company:[/]     {company_name}")
+        rows.append(f"[bold white]Tier:[/]        {self.tier}")
         rows.append(f"[bold white]Agent:[/]       maestro-solo-personal (default)")
         rows.append(f"[bold white]Provider:[/]    {self.progress.get('provider', 'N/A').title()}")
         rows.append(f"[bold white]Model:[/]       {self.progress.get('model', 'N/A')}")

@@ -2,6 +2,6 @@
 
 Operations documentation moved under:
 
-- Runtime runbook: `docs/operations/runbook.md`
-- Maintenance: `docs/operations/maintenance.md`
-- Troubleshooting: `docs/operations/troubleshooting.md`
+- [Runtime runbook](operations/runbook.md)
+- [Maintenance](operations/maintenance.md)
+- [Troubleshooting](operations/troubleshooting.md)

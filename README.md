@@ -1,207 +1,83 @@
 # Maestro
 
-Maestro is now **Solo-first** by default, with Fleet/enterprise features available behind explicit activation.
+Maestro is a **Solo-first** construction agent runtime with optional Fleet/enterprise mode.
 
-## Product Profiles
-
-1. **Solo (default)**
-- Default agent: `maestro-personal`
-- Primary UI: `/workspace`
-- Focus: one personal Maestro engine for plan search, workspace management, and schedule management
-
-2. **Fleet (advanced / enterprise)**
-- Commander + project maestros
-- Command Center UI: `/command-center`
-- Enabled explicitly with `maestro-fleet enable`
-
-## Solo Quickstart (Primary Path)
-
-macOS one-command bootstrap (quick setup + live runtime):
+## Quickstart (Solo, macOS)
 
 ```bash
+MAESTRO_INSTALL_CHANNEL=core \
+MAESTRO_CORE_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
 curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
 ```
 
-What this does:
+This bootstrap installs prerequisites, installs the selected Solo package channel, runs quick setup, and starts `maestro-solo up --tui`.
 
-1. Checks/install prerequisites (`brew`, Python 3.11+, Node/npm, OpenClaw).
-2. Installs `maestro-engine` and `maestro-solo`.
-3. Runs `maestro-solo setup --quick` (OpenAI OAuth + Gemini key + Telegram required, Tailscale optional).
-4. Auto-creates a local Solo trial license if no valid local license exists.
-5. Starts `maestro-solo up --tui`.
-
-Manual path:
+Channel examples (private wheels):
 
 ```bash
-# Install extracted packages (local editable)
+MAESTRO_INSTALL_CHANNEL=core \
+MAESTRO_CORE_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
+
+MAESTRO_INSTALL_CHANNEL=pro \
+MAESTRO_PRO_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
+```
+
+Notes:
+
+- `MAESTRO_*_PACKAGE_SPEC` supports whitespace or comma-separated pip args.
+- Pass both `maestro-engine` and `maestro-solo` wheel URLs unless your private index resolves dependencies.
+- Local repo dev mode is still available via `MAESTRO_USE_LOCAL_REPO=1`.
+
+Open:
+
+- `http://localhost:3000/workspace`
+
+## Manual Setup (Development)
+
+```bash
 pip install -e /absolute/path/to/repo/packages/maestro-engine -e /absolute/path/to/repo/packages/maestro-solo
-
-# 1) Setup (primary command)
 maestro-solo setup
-
-# 2) Start runtime (doctor + serve + Solo TUI monitor)
+maestro-solo update
 maestro-solo up --tui
-
-# 3) Ingest plans
 maestro-solo ingest /abs/path/to/plans
 ```
 
-Open: `http://localhost:3000/workspace`
-
-Field access (same tailnet/VPN):
-
-- Connect host + mobile/laptop to Tailscale.
-- Use `http://<tailscale-ip>:3000/workspace`.
-
-## Solo Payment + License Test (Dev)
-
-Run two local services in separate terminals:
+## Fleet (Advanced)
 
 ```bash
-maestro-solo-license-service --port 8082
-maestro-solo-billing-service --port 8081
-```
-
-Then in another terminal:
-
-```bash
-# Purchase + poll until licensed (test mode)
-maestro-solo purchase --email you@example.com --plan solo_test_monthly
-
-# Check local license
-maestro-solo status
-
-# Start runtime (license-gated + Solo TUI monitor)
-maestro-solo up --tui
-```
-
-Test mode supports a manual trigger if needed:
-
-```bash
-curl -sS -X POST http://127.0.0.1:8081/v1/solo/dev/mark-paid \
-  -H 'content-type: application/json' \
-  -d '{"purchase_id":"<PURCHASE_ID>"}'
-```
-
-## Fleet Enablement (Advanced)
-
-Install Fleet product package:
-
-```bash
-pip install -e /absolute/path/to/repo -e /absolute/path/to/repo/packages/maestro-fleet
-```
-
-```bash
-# Turn on fleet profile + migrations + health checks
+pip install -e /absolute/path/to/repo/packages/maestro-fleet
 maestro-fleet enable
-
-# Optional: provision project maestros
-maestro-fleet purchase
-
-# Fleet status / URL helpers
+maestro-fleet update
 maestro-fleet status
-maestro-fleet command-center
 ```
 
-Open: `http://localhost:3000/command-center`
+Fleet UI:
 
-In Solo profile, command-center APIs/routes return:
+- `http://localhost:3000/command-center`
 
-```json
-{"error":"Fleet mode not enabled","next_step":"Run maestro-fleet enable"}
-```
+## Documentation
 
-## CLI Surface
+Primary documentation index:
 
-Primary commands:
+- [docs/README.md](docs/README.md)
 
-- `maestro-solo setup`
-- `maestro-solo setup --quick`
-- `maestro-solo up --tui`
-- `maestro-solo ingest`
-- `maestro-solo doctor`
-- `maestro-solo doctor --field-access-required`
-- `maestro-solo status`
-- `maestro-solo purchase`
-- `maestro-solo migrate-legacy`
+Core sections:
 
-Fleet namespace:
+- [Solo Setup](docs/solo/setup.md)
+- [Solo Workspace](docs/solo/workspace.md)
+- [Solo Ingest](docs/solo/ingest.md)
+- [Solo Payment and License](docs/solo/payment-license.md)
+- [Fleet Enablement](docs/fleet/enable.md)
+- [CLI Reference](docs/reference/cli.md)
+- [Paths and Environment](docs/reference/paths-env.md)
 
-- `maestro-fleet enable`
-- `maestro-fleet status`
-- `maestro-fleet purchase`
-- `maestro-fleet command-center [--open]`
-- `maestro-fleet up --tui`
+## Repository Layout
 
-Compatibility aliases retained (with deprecation warnings):
-
-- `maestro-setup` -> `maestro-solo setup`
-- `maestro-purchase` -> `maestro-fleet purchase`
-- `maestro fleet ...` -> `maestro-fleet ...` (transition alias path)
-- `maestro start` is deprecated; prefer `maestro-solo up --tui`
-
-## Canonical Routes
-
-### Solo workspace routes
-
-- `/workspace`
-- `/workspace/ws`
-- `/workspace/api/*`
-
-Compatibility routes remain active:
-
-- `/{slug}` and `/{slug}/api/*`
-- `/agents/{agent_id}/workspace` and `/agents/{agent_id}/workspace/api/*`
-
-### Fleet routes (enabled only in Fleet profile)
-
-- `/command-center`
-- `/ws/command-center`
-- `/api/command-center/*`
-- `/api/system/awareness`
-
-## Ingest Semantics in Solo
-
-Solo defaults to a single active project target:
-
-1. Ingest uses folder name when `--project-name` is omitted.
-2. The resolved target is recorded as active project metadata.
-3. Use `--project-name` to force a specific project target.
-
-## Documentation Map
-
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/README.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/setup.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/ingest.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/workspace.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/payment-license.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/migrate-legacy.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/solo/clean-machine-test.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/fleet/enable.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/fleet/command-center.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/fleet/purchase.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/reference/cli.md`
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/reference/paths-env.md`
-
-## Development
-
-```bash
-pip install -e "[dev]"
-pytest
-```
-
-Workspace + Command Center frontend builds:
-
-```bash
-cd workspace_frontend && npm install && npm run build
-cd command_center_frontend && npm install && npm run build
-```
-
-## Backend Module Boundaries
-
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-solo/src/maestro_solo/server.py`: Solo FastAPI composition and workspace route wiring.
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-solo/src/maestro_solo/cli.py`: Solo product CLI surface.
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-engine/src/maestro_engine/server_project_store.py`: project/page loading from knowledge-store layout.
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-engine/src/maestro_engine/server_workspace_data.py`: workspace JSON and pointer bbox helpers.
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-engine/src/maestro_engine/server_schedule.py`: managed schedule load/upsert/close/status payload logic.
-- `/Users/seanschneidewent/maestro-openclaw-agent-teams/packages/maestro-fleet/src/maestro_fleet/cli.py`: Fleet product CLI surface.
+- `packages/maestro-engine`: shared engine/server modules
+- `packages/maestro-solo`: solo CLI/runtime package
+- `packages/maestro-fleet`: fleet CLI/runtime package
+- `workspace_frontend`: workspace UI
+- `command_center_frontend`: command-center UI
+- `agent`: Maestro agent skills/extensions

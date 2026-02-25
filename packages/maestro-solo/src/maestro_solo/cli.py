@@ -19,6 +19,14 @@ from rich.table import Table
 
 from maestro_engine.utils import slugify
 
+from .entitlements import (
+    clear_local_entitlement,
+    entitlement_label,
+    load_local_entitlement,
+    normalize_tier,
+    resolve_effective_entitlement,
+    save_local_entitlement,
+)
 from .install_state import (
     load_install_state,
     record_active_project,
@@ -37,6 +45,10 @@ BRIGHT_CYAN = "bright_cyan"
 DIM = "dim"
 
 console = Console()
+
+
+def _clean_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _open_url(url: str):
@@ -220,12 +232,22 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
                 _print_json(verify)
                 return 1
             saved = save_local_license(license_key, source="billing_service")
+            entitlement_token = _clean_text(polled.get("entitlement_token"))
+            entitlement_saved = {}
+            if entitlement_token:
+                entitlement_saved = save_local_entitlement(entitlement_token, source="billing_service")
+                if bool(entitlement_saved.get("valid")):
+                    console.print(f"[{DIM}]Saved Pro entitlement token.[/]")
+                else:
+                    console.print(f"[yellow]Received entitlement token but validation failed: {entitlement_saved.get('error', 'unknown')}[/]")
+            effective = resolve_effective_entitlement()
             console.print(Panel(
                 "\n".join([
                     "License provisioned and saved locally.",
                     f"sku: {saved.get('sku', '')}",
                     f"plan_id: {saved.get('plan_id', '')}",
                     f"expires_at: {saved.get('expires_at', '')}",
+                    f"effective_tier: {normalize_tier(str(effective.get('tier', 'core')))}",
                 ]),
                 border_style="green",
                 title="[bold green]Solo License Active[/]",
@@ -253,19 +275,12 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     local = load_local_license()
-    if not local:
-        console.print(Panel(
-            "No local Solo license found.\n"
-            "Run: [bold white]maestro-solo purchase[/]",
-            border_style="yellow",
-            title="[bold yellow]License Missing[/]",
-        ))
-        return 1
-
     key = str(local.get("license_key", "")).strip()
-    verify = verify_solo_license_key(key)
+    verify = verify_solo_license_key(key) if key else {"valid": False, "error": "missing_license_key"}
+    local_entitlement = load_local_entitlement()
+    effective = resolve_effective_entitlement()
     payload: dict[str, Any] = {
-        "local_license_present": True,
+        "local_license_present": bool(key),
         "local_valid": bool(verify.get("valid")),
         "sku": str(verify.get("sku", "")),
         "plan_id": str(verify.get("plan_id", "")),
@@ -274,9 +289,16 @@ def _cmd_status(args: argparse.Namespace) -> int:
         "issued_at": str(verify.get("issued_at", "")),
         "expires_at": str(verify.get("expires_at", "")),
         "error": str(verify.get("error", "")),
+        "entitlement_cached": bool(_clean_text(local_entitlement.get("entitlement_token"))),
+        "entitlement_valid": bool(local_entitlement.get("valid")),
+        "entitlement_error": str(local_entitlement.get("error", "")),
+        "entitlement_expires_at": str(local_entitlement.get("expires_at", "")),
+        "tier": normalize_tier(str(effective.get("tier", "core"))),
+        "capabilities": list(effective.get("capabilities", [])) if isinstance(effective.get("capabilities"), list) else [],
+        "tier_source": str(effective.get("source", "")),
     }
 
-    if args.remote_verify:
+    if args.remote_verify and key:
         url = f"{_license_url(args.license_url)}/v1/licenses/solo/verify"
         ok, remote = _http_post_json(url, {"license_key": key}, timeout=20)
         payload["remote_verify_ok"] = ok
@@ -291,16 +313,92 @@ def _cmd_status(args: argparse.Namespace) -> int:
         table.add_row("purchase_id", str(payload["purchase_id"]))
         table.add_row("email", str(payload["email"]))
         table.add_row("expires_at", str(payload["expires_at"]))
+        table.add_row("tier", f"{payload['tier']} ({payload['tier_source']})")
+        table.add_row("capabilities", ", ".join(payload["capabilities"]) if payload["capabilities"] else "none")
         if payload["error"]:
             table.add_row("error", str(payload["error"]))
+        if payload["entitlement_cached"]:
+            table.add_row("entitlement_cached", "true")
+            table.add_row("entitlement_valid", str(payload["entitlement_valid"]))
+            if payload["entitlement_expires_at"]:
+                table.add_row("entitlement_expires", str(payload["entitlement_expires_at"]))
+            if payload["entitlement_error"]:
+                table.add_row("entitlement_error", str(payload["entitlement_error"]))
         if "remote_verify_ok" in payload:
             table.add_row("remote_verify_ok", str(payload["remote_verify_ok"]))
         console.print(Panel(
             table,
-            border_style="green" if bool(payload["local_valid"]) else "yellow",
-            title="[bold bright_cyan]Maestro Solo License Status[/]",
+            border_style="green" if str(payload["tier"]) == "pro" else "yellow",
+            title="[bold bright_cyan]Maestro Solo Runtime Status[/]",
         ))
-    return 0 if bool(payload.get("local_valid")) else 1
+    return 0
+
+
+def _cmd_entitlements(args: argparse.Namespace) -> int:
+    action = str(getattr(args, "entitlement_action", "")).strip().lower()
+    if action == "clear":
+        clear_local_entitlement()
+        console.print("[green]Local entitlement cache cleared.[/]")
+        return 0
+
+    if action == "activate":
+        token = str(getattr(args, "token", "")).strip()
+        if not token:
+            token = Prompt.ask("Entitlement token").strip()
+        if not token:
+            console.print("[red]Entitlement token is required.[/]")
+            return 1
+        saved = save_local_entitlement(token, source="cli_activate")
+        if not bool(saved.get("valid")):
+            console.print("[red]Entitlement token is invalid.[/]")
+            _print_json(saved)
+            return 1
+        effective = resolve_effective_entitlement()
+        console.print(Panel(
+            "\n".join([
+                "Entitlement token activated.",
+                f"tier: {normalize_tier(str(saved.get('tier', 'core')))}",
+                f"expires_at: {saved.get('expires_at', '')}",
+                f"effective: {entitlement_label(effective)}",
+            ]),
+            border_style="green",
+            title="[bold green]Entitlement Active[/]",
+        ))
+        return 0
+
+    local_entitlement = load_local_entitlement()
+    effective = resolve_effective_entitlement()
+    payload = {
+        "effective": entitlement_label(effective),
+        "tier": normalize_tier(str(effective.get("tier", "core"))),
+        "source": str(effective.get("source", "")),
+        "capabilities": list(effective.get("capabilities", [])) if isinstance(effective.get("capabilities"), list) else [],
+        "cached_token_present": bool(_clean_text(local_entitlement.get("entitlement_token"))),
+        "cached_valid": bool(local_entitlement.get("valid")),
+        "cached_error": str(local_entitlement.get("error", "")),
+        "cached_expires_at": str(local_entitlement.get("expires_at", "")),
+    }
+    if bool(getattr(args, "json", False)):
+        _print_json(payload)
+        return 0
+
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    table.add_row("effective", str(payload["effective"]))
+    table.add_row("source", str(payload["source"]))
+    table.add_row("capabilities", ", ".join(payload["capabilities"]) if payload["capabilities"] else "none")
+    table.add_row("cached_token", "present" if payload["cached_token_present"] else "missing")
+    if payload["cached_token_present"]:
+        table.add_row("cached_valid", str(payload["cached_valid"]))
+        if payload["cached_expires_at"]:
+            table.add_row("cached_expires_at", str(payload["cached_expires_at"]))
+        if payload["cached_error"]:
+            table.add_row("cached_error", str(payload["cached_error"]))
+    console.print(Panel(
+        table,
+        border_style="green" if payload["tier"] == "pro" else "yellow",
+        title="[bold bright_cyan]Entitlement Status[/]",
+    ))
+    return 0
 
 
 def _cmd_ingest(args: argparse.Namespace) -> int:
@@ -345,17 +443,28 @@ def _cmd_up(args: argparse.Namespace) -> int:
     from .monitor import run_up_tui
     from .server import run_server
 
-    local = load_local_license()
-    key = str(local.get("license_key", "")).strip()
-    verify = verify_solo_license_key(key)
-    if not bool(verify.get("valid")):
+    entitlement = resolve_effective_entitlement()
+    tier = normalize_tier(str(entitlement.get("tier", "core")))
+    os.environ["MAESTRO_TIER"] = tier
+    if bool(args.require_pro) and tier != "pro":
         console.print(Panel(
-            "No valid Solo license found.\n"
-            "Run: [bold white]maestro-solo purchase[/]",
+            "\n".join([
+                "Pro runtime required but no active Pro entitlement found.",
+                "Run: [bold white]maestro-solo purchase[/] or activate an entitlement token.",
+            ]),
             border_style="red",
             title="[bold red]Cannot Start[/]",
         ))
         return 1
+    if tier != "pro":
+        console.print(Panel(
+            "\n".join([
+                "Starting in Core mode (generic tools only).",
+                "Pro-native Maestro tools remain disabled until entitlement is active.",
+            ]),
+            border_style="yellow",
+            title="[bold yellow]Core Mode[/]",
+        ))
 
     resolved_store = str(resolve_solo_store_root(args.store))
     if not args.skip_doctor:
@@ -422,10 +531,21 @@ def build_parser() -> argparse.ArgumentParser:
     purchase.add_argument("--no-open", action="store_true", help=argparse.SUPPRESS)
     purchase.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
 
-    status = sub.add_parser("status", help="Show local Solo license status")
+    status = sub.add_parser("status", help="Show runtime tier, capabilities, and license details")
     status.add_argument("--json", action="store_true")
     status.add_argument("--remote-verify", action="store_true")
     status.add_argument("--license-url", default=None)
+
+    entitlements = sub.add_parser("entitlements", help="Manage local entitlement token cache")
+    entitlements_sub = entitlements.add_subparsers(dest="entitlement_action", required=False)
+
+    ent_status = entitlements_sub.add_parser("status", help="Show entitlement cache and effective tier")
+    ent_status.add_argument("--json", action="store_true")
+
+    ent_activate = entitlements_sub.add_parser("activate", help="Save local entitlement token")
+    ent_activate.add_argument("--token", default="")
+
+    entitlements_sub.add_parser("clear", help="Remove cached entitlement token")
 
     ingest = sub.add_parser("ingest", help="Ingest PDFs into Solo knowledge store")
     ingest.add_argument("folder", help="Path to folder containing PDFs")
@@ -440,7 +560,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--field-access-required", action="store_true")
     doctor.add_argument("--json", action="store_true")
 
-    up = sub.add_parser("up", help="Start Solo runtime (requires valid local license)")
+    up = sub.add_parser("up", help="Start Solo runtime (core by default, pro when entitled)")
     up.add_argument("--port", type=int, default=3000)
     up.add_argument("--host", type=str, default="0.0.0.0")
     up.add_argument("--store", type=str, default=None)
@@ -449,6 +569,7 @@ def build_parser() -> argparse.ArgumentParser:
     up.add_argument("--no-fix", action="store_true")
     up.add_argument("--no-restart", action="store_true")
     up.add_argument("--field-access-required", action="store_true")
+    up.add_argument("--require-pro", action="store_true")
 
     serve = sub.add_parser("serve", help=argparse.SUPPRESS)
     serve.add_argument("--port", type=int, default=3000)
@@ -471,6 +592,7 @@ def main(argv: list[str] | None = None):
         "setup": _cmd_setup,
         "purchase": _cmd_purchase,
         "status": _cmd_status,
+        "entitlements": _cmd_entitlements,
         "ingest": _cmd_ingest,
         "doctor": _cmd_doctor,
         "up": _cmd_up,

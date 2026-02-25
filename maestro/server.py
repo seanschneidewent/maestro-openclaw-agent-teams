@@ -11,7 +11,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import sys
 from contextlib import asynccontextmanager, suppress
@@ -20,7 +19,34 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
-from PIL import Image
+
+try:
+    from maestro_engine.server_runtime_shared import (
+        THUMB_MAX_QUALITY,
+        THUMB_MAX_WIDTH,
+        get_generated_image_thumbnail,
+        get_page_thumbnail,
+        page_event_from_change,
+        remap_ws_clients,
+        resolve_active_project_slug,
+        resolve_project_change_context,
+    )
+except ImportError:  # pragma: no cover - local dev fallback when maestro-engine isn't installed
+    _engine_src = Path(__file__).resolve().parents[1] / "packages" / "maestro-engine" / "src"
+    if _engine_src.exists():
+        sys.path.insert(0, str(_engine_src))
+        from maestro_engine.server_runtime_shared import (
+            THUMB_MAX_QUALITY,
+            THUMB_MAX_WIDTH,
+            get_generated_image_thumbnail,
+            get_page_thumbnail,
+            page_event_from_change,
+            remap_ws_clients,
+            resolve_active_project_slug,
+            resolve_project_change_context,
+        )
+    else:
+        raise
 
 from .command_center import (
     build_command_center_state,
@@ -34,7 +60,6 @@ from .commander_chat import (
     read_agent_conversation,
     send_agent_message,
 )
-from .config import THUMBNAIL_CACHE_DIR
 from .control_plane import (
     build_awareness_state,
     resolve_node_identity,
@@ -124,23 +149,7 @@ def _workspace_missing_project_response() -> JSONResponse:
 
 
 def _active_workspace_slug() -> str | None:
-    state = load_install_state()
-    active_slug = str(state.get("active_project_slug", "")).strip()
-    if active_slug and active_slug in projects:
-        return active_slug
-
-    active_name = str(state.get("active_project_name", "")).strip()
-    if active_name:
-        by_name = slugify(active_name)
-        if by_name in projects:
-            return by_name
-        for slug, proj in projects.items():
-            if str(proj.get("name", "")).strip().lower() == active_name.lower():
-                return slug
-
-    if projects:
-        return next(iter(sorted(projects.keys())))
-    return None
+    return resolve_active_project_slug(projects, load_install_state(), slugify)
 
 
 def load_all_projects():
@@ -152,7 +161,7 @@ def load_all_projects():
         discover_project_dirs_fn=discover_project_dirs,
         build_project_snapshot_fn=build_project_snapshot,
     )
-    ws_clients = {slug: existing_clients.get(slug, set()) for slug in projects.keys()}
+    ws_clients = remap_ws_clients(existing_clients, projects)
 
     for slug, proj in projects.items():
         page_count = len(proj.get("pages", {}))
@@ -308,32 +317,13 @@ def _is_command_center_relevant(path: Path) -> bool:
 
 
 def _project_change_context(path: Path) -> tuple[str | None, tuple[str, ...]]:
-    """Resolve changed filesystem path to (project slug, project-relative parts)."""
-    for slug, proj in projects.items():
-        proj_root_raw = proj.get("path")
-        proj_root = Path(str(proj_root_raw)) if isinstance(proj_root_raw, str) and proj_root_raw else None
-        if not proj_root:
-            continue
-        try:
-            rel_parts = path.relative_to(proj_root).parts
-            if rel_parts:
-                return slug, rel_parts
-        except ValueError:
-            continue
-
-    try:
-        rel_parts = path.relative_to(store_path).parts
-    except ValueError:
-        return None, ()
-
-    if len(rel_parts) < 2:
-        return None, ()
-
-    project_dir_name = rel_parts[0]
-    slug = project_dir_slug_index.get(project_dir_name, slugify(project_dir_name))
-    if slug in projects:
-        return slug, tuple(rel_parts[1:])
-    return None, ()
+    return resolve_project_change_context(
+        path=path,
+        projects=projects,
+        store_path=store_path,
+        project_dir_slug_index=project_dir_slug_index,
+        slugify_fn=slugify,
+    )
 
 
 # ── Filesystem watcher ──────────────────────────────────────────
@@ -393,16 +383,7 @@ async def watch_knowledge_store():
 
             load_project_page(proj, pg_dir)
 
-            if path.name == "pass1.json":
-                event = {"type": "page_added", "page": pg_name}
-            elif path.name == "pass2.json" and len(project_rel_parts) >= 4:
-                event = {"type": "region_complete", "page": pg_name, "region": project_rel_parts[3]}
-            elif path.name == "page.png":
-                event = {"type": "page_image_ready", "page": pg_name}
-            else:
-                event = {"type": "page_updated", "page": pg_name}
-
-            await broadcast(slug, event)
+            await broadcast(slug, page_event_from_change(path.name, project_rel_parts, pg_name))
 
 
 async def broadcast(slug: str, event: dict):
@@ -442,52 +423,6 @@ async def _broadcast_command_center_update():
 
 
 # ── Thumbnails ──────────────────────────────────────────────────
-
-THUMB_MAX_WIDTH = 2800
-THUMB_MAX_QUALITY = 95
-THUMB_CACHE_VERSION = "v2"
-
-
-def get_thumbnail(page_dir: Path, width: int = 800, quality: int = 80) -> bytes | None:
-    png_path = page_dir / "page.png"
-    if not png_path.exists():
-        return None
-
-    target_width = max(200, min(int(width), THUMB_MAX_WIDTH))
-    target_quality = max(40, min(int(quality), THUMB_MAX_QUALITY))
-    cache_dir = page_dir / THUMBNAIL_CACHE_DIR
-    cache_key = f"thumb_{THUMB_CACHE_VERSION}_{target_width}q{target_quality}.jpg"
-    cache_path = cache_dir / cache_key
-
-    if cache_path.exists() and cache_path.stat().st_mtime >= png_path.stat().st_mtime:
-        return cache_path.read_bytes()
-
-    try:
-        img = Image.open(png_path)
-        render_width = min(target_width, img.width)
-        w_ratio = render_width / img.width
-        new_height = int(img.height * w_ratio)
-        img = img.resize((render_width, new_height), Image.LANCZOS)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(
-            buf,
-            format="JPEG",
-            quality=target_quality,
-            optimize=True,
-            progressive=True,
-            subsampling=0,
-        )
-        data = buf.getvalue()
-        cache_dir.mkdir(exist_ok=True)
-        cache_path.write_bytes(data)
-        return data
-    except Exception as e:
-        print(f"Thumbnail error for {png_path}: {e}", file=sys.stderr)
-        return None
-
-
 # ── Workspace helpers ───────────────────────────────────────────
 
 # Workspace data helpers moved to `maestro.server_workspace_data`.
@@ -979,7 +914,7 @@ async def api_page_thumb(slug: str, page_name: str, w: int = 800, q: int = 80):
     page = proj.get("pages", {}).get(page_name)
     if not page or not page.get("path"):
         return JSONResponse({"error": "Not found"}, status_code=404)
-    data = get_thumbnail(Path(page["path"]), width=min(w, THUMB_MAX_WIDTH), quality=min(q, THUMB_MAX_QUALITY))
+    data = get_page_thumbnail(Path(page["path"]), width=min(w, THUMB_MAX_WIDTH), quality=min(q, THUMB_MAX_QUALITY))
     if not data:
         return JSONResponse({"error": "Image not available"}, status_code=404)
     return Response(content=data, media_type="image/jpeg")
@@ -1097,39 +1032,15 @@ async def api_workspace_image_thumb(slug: str, ws_slug: str, filename: str, w: i
     if not img_path.exists():
         return JSONResponse({"error": "Image not found"}, status_code=404)
 
-    target_width = max(200, min(int(w), THUMB_MAX_WIDTH))
-    target_quality = max(40, min(int(q), THUMB_MAX_QUALITY))
-    cache_dir = img_dir / ".cache"
-    cache_key = f"{img_path.stem}_thumb_{THUMB_CACHE_VERSION}_{target_width}q{target_quality}.jpg"
-    cache_path = cache_dir / cache_key
-
-    if cache_path.exists() and cache_path.stat().st_mtime >= img_path.stat().st_mtime:
-        return Response(content=cache_path.read_bytes(), media_type="image/jpeg")
-
-    try:
-        img = Image.open(img_path)
-        render_width = min(target_width, img.width)
-        w_ratio = render_width / img.width
-        new_height = int(img.height * w_ratio)
-        img = img.resize((render_width, new_height), Image.LANCZOS)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(
-            buf,
-            format="JPEG",
-            quality=target_quality,
-            optimize=True,
-            progressive=True,
-            subsampling=0,
-        )
-        data = buf.getvalue()
-        cache_dir.mkdir(exist_ok=True)
-        cache_path.write_bytes(data)
-        return Response(content=data, media_type="image/jpeg")
-    except Exception as e:
-        print(f"Thumbnail error for {img_path}: {e}", file=sys.stderr)
+    data = get_generated_image_thumbnail(
+        image_path=img_path,
+        cache_dir=img_dir / ".cache",
+        width=min(w, THUMB_MAX_WIDTH),
+        quality=min(q, THUMB_MAX_QUALITY),
+    )
+    if data is None:
         return JSONResponse({"error": "Thumbnail generation failed"}, status_code=500)
+    return Response(content=data, media_type="image/jpeg")
 
 
 @app.get("/{slug}/api/workspaces/{ws_slug}")
