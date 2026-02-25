@@ -19,7 +19,12 @@ from rich.table import Table
 
 from maestro_engine.utils import slugify
 
-from .install_state import record_active_project, resolve_solo_store_root, update_install_state
+from .install_state import (
+    load_install_state,
+    record_active_project,
+    resolve_solo_store_root,
+    update_install_state,
+)
 from .migration import migrate_legacy, print_migration_report
 from .solo_license import load_local_license, save_local_license, verify_solo_license_key
 
@@ -105,7 +110,12 @@ def _http_get_json(url: str, timeout: int = 20) -> tuple[bool, dict[str, Any]]:
     return True, data if isinstance(data, dict) else {"result": data}
 
 
-def _cmd_setup(_: argparse.Namespace) -> int:
+def _cmd_setup(args: argparse.Namespace) -> int:
+    if bool(getattr(args, "quick", False)):
+        from .quick_setup import run_quick_setup
+
+        return run_quick_setup(company_name=str(getattr(args, "company_name", "")).strip())
+
     from .setup_wizard import main as setup_main
 
     setup_main()
@@ -306,7 +316,14 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     if final_name:
         active_slug = slugify(final_name)
         record_active_project(project_slug=active_slug, project_name=final_name)
-        update_install_state({"store_root": resolved_store})
+        updates: dict[str, Any] = {"store_root": resolved_store}
+        state = load_install_state()
+        pending = state.get("pending_optional_setup")
+        if isinstance(pending, list):
+            filtered = [str(item).strip() for item in pending if str(item).strip() and str(item).strip() != "ingest_plans"]
+            if filtered != pending:
+                updates["pending_optional_setup"] = filtered
+        update_install_state(updates)
 
     return 0
 
@@ -381,7 +398,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("setup", help="Run Solo setup wizard")
+    setup = sub.add_parser("setup", help="Run Solo setup wizard")
+    setup.add_argument(
+        "--quick",
+        action="store_true",
+        help="Run fast-path setup for one-command bootstrap (macOS)",
+    )
+    setup.add_argument(
+        "--company-name",
+        default="",
+        help="Optional company name used by --quick",
+    )
 
     purchase = sub.add_parser("purchase", help="Create Solo purchase and wait for license provisioning")
     purchase.add_argument("--email", default="")

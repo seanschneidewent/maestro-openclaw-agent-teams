@@ -1,8 +1,6 @@
-import { useMemo, useState } from 'react'
-import { CalendarClock, CheckCircle2, AlertTriangle, Plus, RotateCcw } from 'lucide-react'
-
-const ITEM_TYPES = ['activity', 'milestone', 'constraint', 'inspection', 'delivery', 'task']
-const ACTIVE_STATUSES = ['pending', 'in_progress', 'blocked']
+import { useEffect, useMemo, useRef } from 'react'
+import { CalendarClock, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
+import MarkdownText from './MarkdownText'
 
 function statusPill(status) {
   const clean = String(status || '').toLowerCase()
@@ -13,51 +11,73 @@ function statusPill(status) {
   return 'bg-cyan-50 text-cyan-700 border border-cyan-200'
 }
 
+function ScheduleItemCard({ item }) {
+  const title = String(item?.title || item?.id || 'Untitled item')
+  const description = String(item?.description || '').trim()
+  const owner = String(item?.owner || '').trim()
+  const status = String(item?.status || 'pending')
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-slate-800 break-words">{title}</p>
+          {description ? <MarkdownText content={description} size="tiny" className="mt-1 text-slate-600" /> : null}
+        </div>
+        <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wide whitespace-nowrap ${statusPill(status)}`}>
+          {status.replace(/_/g, ' ')}
+        </span>
+      </div>
+      {owner ? (
+        <p className="text-[11px] text-slate-500 mt-1">Owner: {owner}</p>
+      ) : null}
+    </div>
+  )
+}
+
 export default function SchedulePanel({
-  scheduleStatus,
-  scheduleItems,
+  scheduleTimeline,
+  scheduleMonth,
   loading,
   error,
   onRefresh,
-  onCreateItem,
-  onCloseItem,
+  onPrevMonth,
+  onNextMonth,
+  onToday,
 }) {
-  const [title, setTitle] = useState('')
-  const [itemType, setItemType] = useState('activity')
-  const [dueDate, setDueDate] = useState('')
-  const [owner, setOwner] = useState('')
-  const [saving, setSaving] = useState(false)
+  const listRef = useRef(null)
+  const todayRef = useRef(null)
+  const centeredKeyRef = useRef('')
 
-  const items = Array.isArray(scheduleItems) ? scheduleItems : []
-  const activeItems = useMemo(
-    () => items.filter((item) => ACTIVE_STATUSES.includes(String(item?.status || '').toLowerCase())),
-    [items],
+  const days = useMemo(
+    () => (Array.isArray(scheduleTimeline?.days) ? scheduleTimeline.days : []),
+    [scheduleTimeline],
+  )
+  const unscheduled = useMemo(
+    () => (Array.isArray(scheduleTimeline?.unscheduled) ? scheduleTimeline.unscheduled : []),
+    [scheduleTimeline],
   )
 
-  const current = scheduleStatus?.current || {}
-  const lookahead = scheduleStatus?.lookahead || {}
+  useEffect(() => {
+    if (!days.length || !listRef.current) return
+    const centerKey = `${scheduleTimeline?.month || scheduleTimeline?.today || ''}:${days.length}`
+    if (centeredKeyRef.current === centerKey) return
 
-  const submit = async (event) => {
-    event.preventDefault()
-    const cleanTitle = String(title || '').trim()
-    if (!cleanTitle) return
-    setSaving(true)
-    try {
-      await onCreateItem({
-        title: cleanTitle,
-        type: itemType,
-        status: itemType === 'constraint' ? 'blocked' : 'pending',
-        due_date: dueDate || undefined,
-        owner: owner || undefined,
-      })
-      setTitle('')
-      setDueDate('')
-      setOwner('')
-      setItemType('activity')
-    } finally {
-      setSaving(false)
+    const container = listRef.current
+    const target = todayRef.current
+    if (target) {
+      const nextTop = target.offsetTop - (container.clientHeight / 2) + (target.clientHeight / 2)
+      container.scrollTop = Math.max(0, nextTop)
+    } else {
+      container.scrollTop = 0
     }
-  }
+    centeredKeyRef.current = centerKey
+  }, [days, scheduleTimeline?.today, scheduleTimeline?.month])
+
+  const monthTitle = String(scheduleTimeline?.month_label || scheduleMonth || 'Schedule')
+  const selectedMonth = String(scheduleTimeline?.month || scheduleMonth || '')
+  const currentMonth = String(scheduleTimeline?.today || '').slice(0, 7)
+  const isCurrentMonth = Boolean(selectedMonth && currentMonth && selectedMonth === currentMonth)
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -65,9 +85,37 @@ export default function SchedulePanel({
         <div>
           <div className="flex items-center gap-2">
             <CalendarClock size={14} className="text-cyan-700" />
-            <h3 className="text-sm font-semibold text-slate-800">Schedule</h3>
+            <h3 className="text-sm font-semibold text-slate-800">Project Schedule</h3>
           </div>
-          <p className="text-xs text-slate-500 mt-1">{scheduleStatus?.summary || 'No schedule summary yet.'}</p>
+          <p className="text-xs text-slate-500 mt-1">Today is centered by default when visible. Scroll up for future and down for past.</p>
+          <div className="mt-2 inline-flex items-center rounded-lg border border-slate-300 bg-white overflow-hidden">
+            <button
+              type="button"
+              onClick={onPrevMonth}
+              className="h-7 w-7 inline-flex items-center justify-center text-slate-600 hover:bg-slate-50"
+              title="Previous month"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <div className="px-2 text-xs font-medium text-slate-700 min-w-32 text-center">{monthTitle}</div>
+            <button
+              type="button"
+              onClick={onNextMonth}
+              className="h-7 w-7 inline-flex items-center justify-center text-slate-600 hover:bg-slate-50"
+              title="Next month"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+          {!isCurrentMonth ? (
+            <button
+              type="button"
+              onClick={onToday}
+              className="ml-2 mt-2 inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-cyan-300 bg-cyan-50 text-cyan-700 hover:bg-cyan-100"
+            >
+              Jump To Today
+            </button>
+          ) : null}
         </div>
         <button
           type="button"
@@ -80,119 +128,71 @@ export default function SchedulePanel({
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-        <div className="bg-slate-50 border border-slate-200 rounded px-2 py-1.5">
-          <div className="text-[11px] text-slate-500">Complete</div>
-          <div className="font-semibold text-slate-800">{Number(current.percent_complete || 0)}%</div>
-        </div>
-        <div className="bg-slate-50 border border-slate-200 rounded px-2 py-1.5">
-          <div className="text-[11px] text-slate-500">SPI</div>
-          <div className="font-semibold text-slate-800">{Number(current.schedule_performance_index || 1).toFixed(2)}</div>
-        </div>
-        <div className="bg-slate-50 border border-slate-200 rounded px-2 py-1.5">
-          <div className="text-[11px] text-slate-500">Variance</div>
-          <div className="font-semibold text-slate-800">{Number(current.variance_days || 0)}d</div>
-        </div>
-        <div className="bg-slate-50 border border-slate-200 rounded px-2 py-1.5">
-          <div className="text-[11px] text-slate-500">Constraints</div>
-          <div className="font-semibold text-slate-800">{Number(lookahead.constraint_count || 0)}</div>
-        </div>
-      </div>
-
-      {error && (
+      {error ? (
         <div className="mb-3 text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded px-2 py-1.5">
           {error}
         </div>
-      )}
+      ) : null}
 
-      <div className="mb-3">
-        <div className="text-xs font-medium text-slate-700 mb-2">Active Items</div>
-        <div className="max-h-52 overflow-auto space-y-1.5 pr-1">
-          {loading ? (
-            <div className="text-xs text-slate-400">Loading schedule…</div>
-          ) : activeItems.length === 0 ? (
-            <div className="text-xs text-slate-400">No active schedule items.</div>
-          ) : (
-            activeItems.slice(0, 10).map((item) => (
-              <div key={item.id} className="border border-slate-200 rounded-lg p-2 bg-slate-50">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-xs font-medium text-slate-800 truncate">{item.title || item.id}</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      {item.type || 'activity'}
-                      {item.owner ? ` · owner ${item.owner}` : ''}
-                      {item.due_date ? ` · due ${item.due_date}` : ''}
+      <div ref={listRef} className="max-h-[56vh] overflow-auto pr-1">
+        {loading ? (
+          <div className="text-xs text-slate-400">Loading schedule…</div>
+        ) : days.length === 0 ? (
+          <div className="text-xs text-slate-400">No schedule days found.</div>
+        ) : (
+          <div className="space-y-2">
+            {days.map((day, index) => {
+              const previous = index > 0 ? days[index - 1] : null
+              const weekChanged = !previous || String(previous.week_start || '') !== String(day.week_start || '')
+              const dayItems = Array.isArray(day?.items) ? day.items : []
+              const periodLabel = day.is_today ? 'Today' : day.is_future ? 'Future' : 'Past'
+
+              return (
+                <div key={day.date || `schedule-day-${index}`}>
+                  {weekChanged ? (
+                    <div className="border-t-2 border-slate-300 pt-2 mt-3 first:mt-0">
+                      <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500 font-semibold">
+                        {day.week_label || 'Week'}
+                      </p>
                     </div>
-                  </div>
-                  <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase tracking-wide ${statusPill(item.status)}`}>
-                    {item.status}
-                  </span>
+                  ) : null}
+
+                  <section
+                    ref={day.is_today ? todayRef : undefined}
+                    className={`rounded-xl border p-2.5 ${day.is_today ? 'border-cyan-300 bg-cyan-50/40' : 'border-slate-200 bg-white'}`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-800">{day.label || day.date}</p>
+                      <span className="text-[10px] uppercase tracking-wide text-slate-500">{periodLabel}</span>
+                    </div>
+
+                    <div className="mt-2 space-y-1.5">
+                      {dayItems.length === 0 ? (
+                        <p className="text-xs text-slate-400">No scheduled items.</p>
+                      ) : (
+                        dayItems.map((item) => (
+                          <ScheduleItemCard key={item.id || `${day.date}-${item.title}`} item={item} />
+                        ))
+                      )}
+                    </div>
+                  </section>
                 </div>
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onCloseItem(item.id, { status: 'done', reason: 'Closed from workspace panel' })}
-                    className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                  >
-                    <CheckCircle2 size={11} />
-                    Done
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onCloseItem(item.id, { status: 'cancelled', reason: 'Cancelled from workspace panel' })}
-                    className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded border border-slate-300 bg-white text-slate-600 hover:bg-slate-100"
-                  >
-                    <AlertTriangle size={11} />
-                    Cancel
-                  </button>
+              )
+            })}
+
+            {unscheduled.length > 0 ? (
+              <div className="border-t border-slate-200 pt-3 mt-2">
+                <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500 font-semibold mb-2">Unscheduled</p>
+                <div className="space-y-1.5">
+                  {unscheduled.map((item) => (
+                    <ScheduleItemCard key={item.id || `unscheduled-${item.title}`} item={item} />
+                  ))}
                 </div>
               </div>
-            ))
-          )}
-        </div>
+            ) : null}
+          </div>
+        )}
       </div>
-
-      <form onSubmit={submit} className="border-t border-slate-200 pt-3 space-y-2">
-        <div className="text-xs font-medium text-slate-700">Add Schedule Item</div>
-        <input
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          placeholder="Item title"
-          className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs"
-        />
-        <div className="grid grid-cols-2 gap-2">
-          <select
-            value={itemType}
-            onChange={(event) => setItemType(event.target.value)}
-            className="border border-slate-300 rounded px-2 py-1.5 text-xs"
-          >
-            {ITEM_TYPES.map((type) => (
-              <option key={type} value={type}>{type}</option>
-            ))}
-          </select>
-          <input
-            value={dueDate}
-            onChange={(event) => setDueDate(event.target.value)}
-            placeholder="YYYY-MM-DD"
-            className="border border-slate-300 rounded px-2 py-1.5 text-xs"
-          />
-        </div>
-        <input
-          value={owner}
-          onChange={(event) => setOwner(event.target.value)}
-          placeholder="Owner (optional)"
-          className="w-full border border-slate-300 rounded px-2 py-1.5 text-xs"
-        />
-        <button
-          type="submit"
-          disabled={saving || !String(title || '').trim()}
-          className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded border border-cyan-300 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 disabled:opacity-50"
-        >
-          <Plus size={12} />
-          {saving ? 'Saving...' : 'Add Item'}
-        </button>
-      </form>
     </div>
   )
 }
-

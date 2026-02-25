@@ -1,5 +1,6 @@
 import { CalendarClock, MessageSquare, X } from 'lucide-react'
 import SchedulePanel from './SchedulePanel'
+import MarkdownText from './MarkdownText'
 
 function NoteCard({ note }) {
   return (
@@ -7,7 +8,7 @@ function NoteCard({ note }) {
       <div className="flex items-start gap-2">
         <MessageSquare size={13} className="text-amber-600 mt-0.5 shrink-0" />
         <div>
-          <p className="text-sm text-slate-700 leading-relaxed">{note.text}</p>
+          <MarkdownText content={note.text} size="sm" className="text-slate-700" />
           {note.source_page && (
             <p className="text-xs text-slate-500 mt-1.5">Source: {note.source_page}</p>
           )}
@@ -24,15 +25,19 @@ export default function StatusSheet({
   onClose,
   workspaceTitle,
   notes,
-  scheduleStatus,
-  scheduleItems,
+  scheduleTimeline,
+  scheduleMonth,
   scheduleLoading,
   scheduleError,
   onScheduleRefresh,
-  onScheduleCreate,
-  onScheduleClose,
+  onScheduleMonthPrev,
+  onScheduleMonthNext,
+  onScheduleMonthToday,
 }) {
   const noteItems = Array.isArray(notes) ? notes : []
+  const bodyClasses = activeTab === 'schedule'
+    ? 'max-h-[65vh] overflow-hidden p-4 bg-gradient-to-b from-slate-50 to-white rounded-b-2xl'
+    : 'max-h-[65vh] overflow-auto p-4 bg-gradient-to-b from-slate-50 to-white rounded-b-2xl'
 
   return (
     <section
@@ -46,7 +51,9 @@ export default function StatusSheet({
       <div className="px-4 py-3 border-b border-slate-200 bg-white/95 backdrop-blur-sm rounded-t-2xl flex items-center justify-between">
         <div className="min-w-0">
           <p className="text-[11px] uppercase tracking-widest text-slate-500 font-medium">AI Managed Status</p>
-          <p className="text-sm text-slate-700 truncate">{workspaceTitle || 'No workspace selected'}</p>
+          <p className="text-sm text-slate-700 truncate">
+            {activeTab === 'schedule' ? 'Project-wide schedule' : (workspaceTitle || 'No workspace selected')}
+          </p>
         </div>
         <button
           type="button"
@@ -69,7 +76,7 @@ export default function StatusSheet({
           }`}
         >
           <CalendarClock size={12} />
-          Schedule
+          Schedule (Project)
         </button>
         <button
           type="button"
@@ -81,20 +88,21 @@ export default function StatusSheet({
           }`}
         >
           <MessageSquare size={12} />
-          Notes
+          Notes (Workspace)
         </button>
       </div>
 
-      <div className="max-h-[65vh] overflow-auto p-4 bg-gradient-to-b from-slate-50 to-white rounded-b-2xl">
+      <div className={bodyClasses}>
         {activeTab === 'schedule' ? (
           <SchedulePanel
-            scheduleStatus={scheduleStatus}
-            scheduleItems={scheduleItems}
+            scheduleTimeline={scheduleTimeline}
+            scheduleMonth={scheduleMonth}
             loading={scheduleLoading}
             error={scheduleError}
             onRefresh={onScheduleRefresh || (() => {})}
-            onCreateItem={onScheduleCreate || (async () => {})}
-            onCloseItem={onScheduleClose || (async () => {})}
+            onPrevMonth={onScheduleMonthPrev || (() => {})}
+            onNextMonth={onScheduleMonthNext || (() => {})}
+            onToday={onScheduleMonthToday || (() => {})}
           />
         ) : (
           <div className="bg-white rounded-xl border border-slate-200 p-4">

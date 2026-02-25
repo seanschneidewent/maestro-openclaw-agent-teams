@@ -18,6 +18,7 @@ LICENSE_PREFIX = "MSOLO"
 LICENSE_VERSION = 1
 DEFAULT_PLAN_DAYS = 30
 PLAN_DAYS: dict[str, int] = {
+    "solo_trial": 14,
     "solo_test_monthly": 30,
     "solo_monthly": 30,
     "solo_yearly": 365,
@@ -199,3 +200,41 @@ def save_local_license(
 def load_local_license(home_dir: Path | None = None) -> dict[str, Any]:
     payload = load_json(local_license_path(home_dir=home_dir), default={})
     return payload if isinstance(payload, dict) else {}
+
+
+def ensure_local_trial_license(
+    *,
+    purchase_id: str,
+    email: str,
+    plan_id: str = "solo_trial",
+    source: str = "quick_setup_trial",
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Create and save a local trial license when no valid local license exists."""
+    existing = load_local_license(home_dir=home_dir)
+    existing_key = str(existing.get("license_key", "")).strip()
+    if existing_key:
+        status = verify_solo_license_key(existing_key)
+        if bool(status.get("valid")):
+            return {
+                "created": False,
+                "saved": existing,
+                "status": status,
+            }
+
+    issued = issue_solo_license(
+        purchase_id=purchase_id,
+        plan_id=plan_id,
+        email=email,
+    )
+    saved = save_local_license(
+        str(issued.get("license_key", "")),
+        source=source,
+        home_dir=home_dir,
+    )
+    status = verify_solo_license_key(str(saved.get("license_key", "")))
+    return {
+        "created": True,
+        "saved": saved,
+        "status": status,
+    }

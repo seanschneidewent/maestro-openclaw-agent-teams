@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -523,6 +524,18 @@ class TestCommandCenterAPI:
         agent_status = asyncio.run(server.api_agent_schedule_status(agent_id))
         assert agent_status["current"]["percent_complete"] == 22
 
+        timeline = asyncio.run(server.api_schedule_timeline(slug))
+        expected_days = calendar.monthrange(int(timeline["month"][:4]), int(timeline["month"][5:7]))[1]
+        assert timeline["week_starts_on"] == "monday"
+        assert timeline["month"] == timeline["today"][:7]
+        assert timeline["include_empty_days"] is True
+        assert timeline["day_count"] == expected_days
+        assert isinstance(timeline["days"], list)
+        assert any(day.get("is_today") for day in timeline["days"])
+
+        agent_timeline = asyncio.run(server.api_agent_schedule_timeline(agent_id))
+        assert agent_timeline["today"] == timeline["today"]
+
     def test_workspace_schedule_item_crud_endpoints(self, single_project_store: Path):
         server.store_path = single_project_store
         server.load_all_projects()
@@ -546,9 +559,27 @@ class TestCommandCenterAPI:
         assert created["status"] == "created"
         assert created["item"]["id"] == "milestone_podium_pour"
 
+        updated = asyncio.run(server.api_schedule_upsert_item(
+            slug,
+            {
+                "item_id": "milestone_podium_pour",
+                "description": "Field-ready pour milestone",
+                "date": "2026-03-02",
+            },
+        ))
+        assert updated["status"] == "updated"
+        assert updated["item"]["description"] == "Field-ready pour milestone"
+        assert updated["item"]["due_date"] == "2026-03-02"
+
         listed = asyncio.run(server.api_schedule_items(slug))
         assert listed["count"] >= 1
         assert any(item["id"] == "milestone_podium_pour" for item in listed["items"])
+
+        march_timeline = asyncio.run(server.api_schedule_timeline(slug, month="2026-03", include_empty_days=True))
+        assert march_timeline["month"] == "2026-03"
+        assert march_timeline["day_count"] == 31
+        march_day = next(item for item in march_timeline["days"] if item["date"] == "2026-03-02")
+        assert any(item["id"] == "milestone_podium_pour" for item in march_day["items"])
 
         closed = asyncio.run(server.api_agent_schedule_close_item(
             agent_id,

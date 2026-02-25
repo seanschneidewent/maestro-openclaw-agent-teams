@@ -6,7 +6,13 @@ Run a fresh end-to-end validation from install through licensed runtime.
 
 ## Sequence
 
-1. Install packages:
+1. (macOS fast path) Run one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
+```
+
+Manual path:
 
 ```bash
 pip install -e /absolute/path/to/repo/packages/maestro-engine -e /absolute/path/to/repo/packages/maestro-solo

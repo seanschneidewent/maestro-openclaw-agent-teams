@@ -11,6 +11,7 @@ pip install -e /absolute/path/to/repo/packages/maestro-engine -e /absolute/path/
 ## Commands
 
 - `maestro-solo setup`
+- `maestro-solo setup --quick`
 - `maestro-solo purchase`
 - `maestro-solo status`
 - `maestro-solo up --tui`

@@ -16,6 +16,22 @@ Maestro is now **Solo-first** by default, with Fleet/enterprise features availab
 
 ## Solo Quickstart (Primary Path)
 
+macOS one-command bootstrap (quick setup + live runtime):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
+```
+
+What this does:
+
+1. Checks/install prerequisites (`brew`, Python 3.11+, Node/npm, OpenClaw).
+2. Installs `maestro-engine` and `maestro-solo`.
+3. Runs `maestro-solo setup --quick` (OpenAI OAuth + Gemini key + Telegram required, Tailscale optional).
+4. Auto-creates a local Solo trial license if no valid local license exists.
+5. Starts `maestro-solo up --tui`.
+
+Manual path:
+
 ```bash
 # Install extracted packages (local editable)
 pip install -e /absolute/path/to/repo/packages/maestro-engine -e /absolute/path/to/repo/packages/maestro-solo
@@ -100,6 +116,7 @@ In Solo profile, command-center APIs/routes return:
 Primary commands:
 
 - `maestro-solo setup`
+- `maestro-solo setup --quick`
 - `maestro-solo up --tui`
 - `maestro-solo ingest`
 - `maestro-solo doctor`

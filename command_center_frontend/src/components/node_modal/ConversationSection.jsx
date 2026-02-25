@@ -1,5 +1,6 @@
 import React from 'react'
 import { DrawerCard } from './shared'
+import MarkdownText from '../MarkdownText'
 
 export default function ConversationSection({
   loading,
@@ -29,7 +30,7 @@ export default function ConversationSection({
                 <span className="uppercase tracking-widest text-[10px] text-slate-500">{msg.role}</span>
                 <span className="font-mono text-[10px] text-slate-500">{msg.timestamp || ''}</span>
               </div>
-              <div className="text-slate-200 whitespace-pre-wrap">{msg.text}</div>
+              <MarkdownText content={msg.text} size="xs" className="text-slate-200" />
             </div>
           ))
         )}

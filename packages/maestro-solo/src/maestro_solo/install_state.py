@@ -34,6 +34,13 @@ def install_state_path(home_dir: Path | None = None) -> Path:
 
 def normalize_install_state(state: dict[str, Any] | None) -> dict[str, Any]:
     payload = state if isinstance(state, dict) else {}
+
+    pending_optional = payload.get("pending_optional_setup")
+    if isinstance(pending_optional, list):
+        normalized_pending = [str(item).strip() for item in pending_optional if str(item).strip()]
+    else:
+        normalized_pending = []
+
     out: dict[str, Any] = {
         "version": int(payload.get("version", INSTALL_STATE_VERSION)),
         "product": PRODUCT_ID,
@@ -41,6 +48,9 @@ def normalize_install_state(state: dict[str, Any] | None) -> dict[str, Any]:
         "store_root": str(payload.get("store_root", "")).strip(),
         "active_project_slug": str(payload.get("active_project_slug", "")).strip(),
         "active_project_name": str(payload.get("active_project_name", "")).strip(),
+        "setup_mode": str(payload.get("setup_mode", "")).strip(),
+        "setup_completed": bool(payload.get("setup_completed", False)),
+        "pending_optional_setup": normalized_pending,
         "updated_at": str(payload.get("updated_at", "")).strip() or _now_iso(),
     }
     legacy_store = str(payload.get("fleet_store_root", "")).strip()

@@ -42,6 +42,8 @@ DIM = "dim"
 console = Console(force_terminal=True if platform.system() == "Windows" else None)
 
 TOTAL_STEPS = 10
+NATIVE_PLUGIN_ID = "maestro-native-tools"
+NATIVE_PLUGIN_DENY_TOOLS = ["browser", "web_search", "web_fetch", "canvas", "nodes"]
 
 
 def step_header(step: int, title: str):
@@ -73,6 +75,14 @@ def error(text: str):
 
 def info(text: str):
     console.print(f"  [{CYAN}]ℹ[/] {text}")
+
+
+def _discover_repo_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "workspace_frontend").exists() and (parent / "packages").exists():
+            return parent
+    return current.parent
 
 
 class SetupWizard:
@@ -971,7 +981,23 @@ class SetupWizard:
             "default": True,
             "model": self.progress['model'],
             "workspace": workspace_path,
+            "tools": {
+                "deny": NATIVE_PLUGIN_DENY_TOOLS,
+            },
         })
+
+        plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+        entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
+        plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
+        plugin_entry["enabled"] = True
+        entries[NATIVE_PLUGIN_ID] = plugin_entry
+        plugins["entries"] = entries
+        allow = plugins.get("allow")
+        if isinstance(allow, list):
+            if NATIVE_PLUGIN_ID not in [str(item).strip() for item in allow]:
+                allow.append(NATIVE_PLUGIN_ID)
+                plugins["allow"] = allow
+        config["plugins"] = plugins
 
         if 'channels' not in config:
             config['channels'] = {}
@@ -1048,7 +1074,7 @@ class SetupWizard:
             config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
         maestro_pkg = Path(__file__).parent
-        repo_root = maestro_pkg.parent
+        repo_root = _discover_repo_root()
         agent_dir = maestro_pkg / "agent" if (maestro_pkg / "agent").exists() else repo_root / "agent"
 
         for filename in ['SOUL.md', 'AGENTS.md', 'IDENTITY.md', 'USER.md']:
@@ -1092,6 +1118,17 @@ class SetupWizard:
             success("Copied Maestro skill")
         else:
             warning("Couldn't find skill files — tools will still work via CLI")
+
+        extension_src = agent_dir / "extensions" / NATIVE_PLUGIN_ID
+        extension_dst = workspace / ".openclaw" / "extensions" / NATIVE_PLUGIN_ID
+        if extension_src.exists():
+            if extension_dst.exists():
+                shutil.rmtree(extension_dst)
+            extension_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(extension_src, extension_dst)
+            success("Installed Maestro native tools extension")
+        else:
+            warning("Couldn't find native tools extension files")
 
         env_file = workspace / ".env"
         env_content = render_workspace_env(

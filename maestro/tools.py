@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import functools
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -243,6 +243,7 @@ class MaestroTools:
             item_id = slugify_underscore(self._text(item.get("id")))
             if not item_id:
                 continue
+            notes = self._text(item.get("notes") or item.get("description"))
             normalized_items.append({
                 "id": item_id,
                 "title": self._text(item.get("title")),
@@ -252,7 +253,8 @@ class MaestroTools:
                 "owner": self._text(item.get("owner")),
                 "activity_id": self._text(item.get("activity_id")),
                 "impact": self._text(item.get("impact")),
-                "notes": self._text(item.get("notes")),
+                "notes": notes,
+                "description": notes,
                 "created_at": self._text(item.get("created_at")),
                 "updated_at": self._text(item.get("updated_at")),
                 "closed_at": self._text(item.get("closed_at")),
@@ -283,6 +285,52 @@ class MaestroTools:
             )
 
         return sorted(items, key=_key)
+
+    @staticmethod
+    def _parse_schedule_day(value: Any) -> date | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        candidate = raw[:10]
+        try:
+            return date.fromisoformat(candidate)
+        except ValueError:
+            pass
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.date()
+
+    @staticmethod
+    def _week_start_monday(day: date) -> date:
+        return day - timedelta(days=day.weekday())
+
+    @staticmethod
+    def _month_key(day: date) -> str:
+        return f"{day.year:04d}-{day.month:02d}"
+
+    @staticmethod
+    def _month_bounds(month: str) -> tuple[date, date]:
+        raw = str(month or "").strip()
+        if len(raw) != 7 or raw[4] != "-":
+            raise ValueError("month must be in YYYY-MM format.")
+        try:
+            year = int(raw[:4])
+            month_num = int(raw[5:7])
+            start = date(year, month_num, 1)
+        except (TypeError, ValueError):
+            raise ValueError("month must be in YYYY-MM format.") from None
+
+        if month_num == 12:
+            end = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end = date(year, month_num + 1, 1) - timedelta(days=1)
+        return start, end
+
+    @staticmethod
+    def _month_label(day: date) -> str:
+        return f"{day:%B} {day.year}"
 
     def _build_schedule_summary(self, current_update: dict[str, Any], lookahead: dict[str, Any], managed_items: list[dict[str, Any]]) -> str:
         percent_complete = _safe_int(current_update.get("percent_complete"), 0)
@@ -496,6 +544,104 @@ class MaestroTools:
         }
 
     @requires_license
+    def get_schedule_timeline(
+        self,
+        month: str | None = None,
+        include_empty_days: bool = True,
+    ) -> dict[str, Any] | str:
+        payload = self._load_managed_schedule()
+        items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
+
+        today = datetime.now().date()
+        try:
+            month_start, month_end = self._month_bounds(month or self._month_key(today))
+        except ValueError as exc:
+            return str(exc)
+
+        day_map: dict[date, list[dict[str, Any]]] = {}
+        unscheduled: list[dict[str, Any]] = []
+
+        if include_empty_days:
+            cursor = month_start
+            while cursor <= month_end:
+                day_map[cursor] = []
+                cursor += timedelta(days=1)
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            due_date = self._text(item.get("due_date"))
+            day = self._parse_schedule_day(due_date)
+            timeline_item = {
+                "id": self._text(item.get("id")),
+                "title": self._text(item.get("title")),
+                "description": self._text(item.get("notes") or item.get("description")),
+                "date": due_date,
+                "due_date": due_date,
+                "status": self._normalize_schedule_status(item.get("status"), default="pending"),
+                "owner": self._text(item.get("owner")),
+                "type": self._normalize_schedule_type(item.get("type"), default="activity"),
+                "activity_id": self._text(item.get("activity_id")),
+                "updated_at": self._text(item.get("updated_at")),
+            }
+
+            if day is None:
+                unscheduled.append(timeline_item)
+                continue
+            if day < month_start or day > month_end:
+                continue
+            day_map.setdefault(day, []).append(timeline_item)
+
+        if not day_map:
+            fallback_day = today if month_start <= today <= month_end else month_start
+            day_map[fallback_day] = []
+
+        for day_items in day_map.values():
+            day_items.sort(
+                key=lambda item: (
+                    str(item.get("status") in CLOSED_SCHEDULE_ITEM_STATUSES),
+                    str(item.get("title") or item.get("id") or ""),
+                ),
+            )
+
+        days: list[dict[str, Any]] = []
+        for day in sorted(day_map.keys(), reverse=True):
+            week_start = self._week_start_monday(day)
+            day_items = day_map.get(day, [])
+            days.append({
+                "date": day.isoformat(),
+                "label": f"{day:%a, %b} {day.day}, {day.year}",
+                "is_today": day == today,
+                "is_future": day > today,
+                "is_past": day < today,
+                "week_start": week_start.isoformat(),
+                "week_end": (week_start + timedelta(days=6)).isoformat(),
+                "week_label": f"Week of {week_start:%b} {week_start.day}, {week_start.year}",
+                "item_count": len(day_items),
+                "items": day_items,
+            })
+
+        unscheduled.sort(key=lambda item: (str(item.get("updated_at") or ""), str(item.get("id") or "")), reverse=True)
+
+        return {
+            "today": today.isoformat(),
+            "month": self._month_key(month_start),
+            "month_label": self._month_label(month_start),
+            "month_start": month_start.isoformat(),
+            "month_end": month_end.isoformat(),
+            "previous_month": self._month_key(month_start - timedelta(days=1)),
+            "next_month": self._month_key(month_end + timedelta(days=1)),
+            "include_empty_days": bool(include_empty_days),
+            "week_starts_on": "monday",
+            "sort_order": "future_to_past",
+            "updated_at": self._text(payload.get("updated_at")),
+            "day_count": len(days),
+            "item_count": sum(int(day.get("item_count", 0)) for day in days) + len(unscheduled),
+            "days": days,
+            "unscheduled": unscheduled,
+        }
+
+    @requires_license
     def list_schedule_items(self, status: str | None = None) -> list[dict[str, Any]] | str:
         payload = self._load_managed_schedule()
         items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
@@ -522,10 +668,12 @@ class MaestroTools:
         item_type: str | None = None,
         status: str | None = None,
         due_date: str | None = None,
+        date: str | None = None,
         owner: str | None = None,
         activity_id: str | None = None,
         impact: str | None = None,
         notes: str | None = None,
+        description: str | None = None,
     ) -> dict[str, Any] | str:
         payload = self._load_managed_schedule()
         items = payload.get("items", []) if isinstance(payload.get("items"), list) else []
@@ -579,16 +727,19 @@ class MaestroTools:
         else:
             existing["status"] = current_status
 
-        if due_date is not None:
-            existing["due_date"] = self._text(due_date)
+        effective_due_date = due_date if due_date is not None else date
+        effective_notes = notes if notes is not None else description
+
+        if effective_due_date is not None:
+            existing["due_date"] = self._text(effective_due_date)
         if owner is not None:
             existing["owner"] = self._text(owner)
         if activity_id is not None:
             existing["activity_id"] = self._text(activity_id)
         if impact is not None:
             existing["impact"] = self._text(impact)
-        if notes is not None:
-            existing["notes"] = self._text(notes)
+        if effective_notes is not None:
+            existing["notes"] = self._text(effective_notes)
 
         if existing["status"] in CLOSED_SCHEDULE_ITEM_STATUSES:
             if not self._text(existing.get("closed_at")):
@@ -600,9 +751,10 @@ class MaestroTools:
         existing["updated_at"] = _iso_now()
         self._save_managed_schedule({"version": payload.get("version", 1), "items": items})
 
+        item_payload = {**existing, "description": self._text(existing.get("notes"))}
         return {
             "status": "created" if creating else "updated",
-            "item": existing,
+            "item": item_payload,
             "managed_item_count": len([i for i in items if isinstance(i, dict)]),
         }
 
@@ -659,9 +811,10 @@ class MaestroTools:
         target["closed_at"] = _iso_now()
         target["updated_at"] = _iso_now()
         self._save_managed_schedule({"version": payload.get("version", 1), "items": items})
+        item_payload = {**target, "description": self._text(target.get("notes"))}
         return {
             "status": "closed",
-            "item": target,
+            "item": item_payload,
         }
 
     # ── Workspace Management ──────────────────────────────────────────────────

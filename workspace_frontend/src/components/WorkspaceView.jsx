@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { FileText, ImageIcon, Wand2 } from 'lucide-react'
 import { api } from '../lib/api'
+import MarkdownText from './MarkdownText'
 
 const OVERLAY_COLORS = [
   'rgba(14, 165, 233, 0.25)',
@@ -20,8 +21,18 @@ const OVERLAY_BORDERS = [
   'rgba(15, 118, 110, 0.95)',
 ]
 
+function preferredThumbWidth() {
+  const viewport = typeof window !== 'undefined' ? window.innerWidth : 1280
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1
+  const contentWidth = Math.min(1152, Math.max(360, viewport - 48))
+  return Math.max(900, Math.min(2400, Math.round(contentWidth * dpr)))
+}
+
+const THUMB_WIDTH = preferredThumbWidth()
+const THUMB_QUALITY = 90
+
 function PageCard({ page, onPageClick }) {
-  const thumbUrl = api.getPageThumbUrl(page.page_name, 1000, 80)
+  const thumbUrl = api.getPageThumbUrl(page.page_name, THUMB_WIDTH, THUMB_QUALITY)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState(false)
   const [activeBoxKey, setActiveBoxKey] = useState(null)
@@ -142,7 +153,7 @@ function PageCard({ page, onPageClick }) {
 
       <div className="p-4">
         <h3 className="text-sm font-semibold text-slate-800">{page.page_name}</h3>
-        {page.description && <p className="text-xs text-slate-600 mt-1 leading-relaxed">{page.description}</p>}
+        {page.description && <MarkdownText content={page.description} size="xs" className="mt-1 text-slate-600" />}
         {overlayBoxes.length > 0 && (
           <div className="mt-2 flex gap-1.5 flex-wrap">
             {overlayBoxes.some((box) => box.kind === 'pointer') && (
@@ -166,7 +177,7 @@ function PageCard({ page, onPageClick }) {
 }
 
 function GeneratedImageCard({ image, wsSlug, onImageClick }) {
-  const thumbUrl = api.getGeneratedImageThumbUrl(wsSlug, image.filename, 1000, 80)
+  const thumbUrl = api.getGeneratedImageThumbUrl(wsSlug, image.filename, THUMB_WIDTH, THUMB_QUALITY)
   const fullUrl = api.getGeneratedImageUrl(wsSlug, image.filename)
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState(false)
@@ -204,9 +215,9 @@ function GeneratedImageCard({ image, wsSlug, onImageClick }) {
           <Wand2 size={12} className="text-emerald-600" />
           <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">AI Generated</span>
         </div>
-        <p className="text-xs text-slate-600 mt-1.5 leading-relaxed line-clamp-3">{image.prompt}</p>
+        <MarkdownText content={image.prompt} size="xs" className="mt-1.5 text-slate-600" />
         {image.description && image.description !== image.prompt && (
-          <p className="text-xs text-slate-500 mt-1 italic line-clamp-2">{image.description}</p>
+          <MarkdownText content={image.description} size="xs" className="mt-1 text-slate-500 italic" />
         )}
         {image.reference_pages && image.reference_pages.length > 0 && (
           <p className="text-[11px] text-slate-400 mt-1.5">Ref: {image.reference_pages.join(', ')}</p>
@@ -241,7 +252,7 @@ export default function WorkspaceView({ workspace, onPageClick, onImageClick }) 
         <div className="flex items-center justify-between gap-4">
           <div>
             <h2 className="text-2xl font-bold text-slate-900">{workspace.title || workspace.slug}</h2>
-            {workspace.description && <p className="text-sm text-slate-600 mt-1">{workspace.description}</p>}
+            {workspace.description && <MarkdownText content={workspace.description} size="sm" className="mt-1 text-slate-600" />}
           </div>
           <div className="text-right text-xs text-slate-500">
             <div>{pages.length} pages</div>

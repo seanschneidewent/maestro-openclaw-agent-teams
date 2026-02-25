@@ -1,4 +1,5 @@
 import React from 'react'
+import MarkdownText from './MarkdownText'
 
 export default function ProjectNode({ project, onSelect }) {
   const nodeName = project.node_display_name || project.name
@@ -54,7 +55,9 @@ export default function ProjectNode({ project, onSelect }) {
             </div>
             <div className="text-xs text-slate-400 bg-black/40 p-2.5 border border-white/5 font-mono leading-relaxed min-h-14 flex items-center">
               <span className="text-[#00e5ff] mr-2">›</span>
-              <span className="line-clamp-3">{summary}</span>
+              <div className="min-w-0">
+                <MarkdownText content={summary} size="xs" className="text-slate-400" />
+              </div>
             </div>
           </div>
 

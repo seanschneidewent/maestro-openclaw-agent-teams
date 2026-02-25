@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../lib/api'
+import MarkdownText from './MarkdownText'
 
 const DEFAULT_FORM = {
   id: '',
@@ -287,7 +288,7 @@ export default function SystemDirectivesPanel({ onChanged, availableActions = []
                   {item.status}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-300 mt-2 whitespace-pre-wrap">{item.body || 'No body'}</p>
+              <MarkdownText content={item.body || 'No body'} size="xs" className="text-slate-300 mt-2" />
               <div className="flex items-center justify-between mt-2 text-[10px] text-slate-500 font-mono">
                 <span>scope={item.scope || 'global'} priority={item.priority ?? 50}</span>
                 {canArchive && String(item.status || '').toLowerCase() !== 'archived' && (

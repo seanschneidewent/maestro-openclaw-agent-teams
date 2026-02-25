@@ -16,3 +16,11 @@ def test_parser_ingest_command():
     assert args.command == "ingest"
     assert args.folder == "/tmp/pdfs"
     assert args.project_name == "Project B"
+
+
+def test_parser_setup_quick_command():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "--quick", "--company-name", "ACME"])
+    assert args.command == "setup"
+    assert args.quick is True
+    assert args.company_name == "ACME"

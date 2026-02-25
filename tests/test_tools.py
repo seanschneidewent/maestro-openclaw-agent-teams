@@ -272,6 +272,31 @@ class TestSchedule:
         assert isinstance(items, list)
         assert any(item["id"] == "milestone_podium_pour" for item in items)
 
+    def test_upsert_schedule_item_accepts_date_and_description_aliases(self, tools):
+        created = tools.upsert_schedule_item(
+            "activity_alias_test",
+            title="Alias test",
+            date="2026-03-02",
+            description="Created through alias fields",
+        )
+        assert created["status"] == "created"
+        assert created["item"]["due_date"] == "2026-03-02"
+        assert created["item"]["description"] == "Created through alias fields"
+
+    def test_get_schedule_timeline_month_includes_empty_days(self, tools):
+        tools.upsert_schedule_item(
+            "activity_month_view",
+            title="Month view activity",
+            date="2026-03-02",
+            description="Timeline check",
+        )
+        timeline = tools.get_schedule_timeline(month="2026-03", include_empty_days=True)
+        assert isinstance(timeline, dict)
+        assert timeline["month"] == "2026-03"
+        assert timeline["day_count"] == 31
+        day = next(item for item in timeline["days"] if item["date"] == "2026-03-02")
+        assert any(row["id"] == "activity_month_view" for row in day["items"])
+
     def test_set_schedule_constraint_and_filter(self, tools):
         result = tools.set_schedule_constraint(
             "constraint_rfi_012",

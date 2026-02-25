@@ -1,4 +1,5 @@
 import { Layers, PanelRightClose, BookOpen } from 'lucide-react'
+import MarkdownText from './MarkdownText'
 
 export default function WorkspaceSwitcher({
   workspaces = [],
@@ -8,7 +9,7 @@ export default function WorkspaceSwitcher({
   className = '',
 }) {
   return (
-    <div className={`w-full bg-gradient-to-b from-slate-50 to-white flex flex-col h-full ${className}`}>
+    <div className={`w-full h-full rounded-2xl overflow-hidden bg-gradient-to-b from-slate-50 to-white flex flex-col ${className}`}>
       <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between bg-white/85 backdrop-blur-sm">
         <div className="flex items-center gap-2">
           {onCollapse && (
@@ -47,14 +48,13 @@ export default function WorkspaceSwitcher({
                     {ws.title || ws.slug}
                   </p>
                   {ws.description && (
-                    <p className="text-xs text-slate-500 mt-1 line-clamp-2">{ws.description}</p>
+                    <MarkdownText content={ws.description} size="xs" className="mt-1 text-slate-500" />
                   )}
                   <div className="flex items-center gap-3 mt-2 text-xs text-slate-500">
                     <span className="inline-flex items-center gap-1">
                       <BookOpen size={12} />
                       {ws.page_count || 0} pages
                     </span>
-                    <span>{ws.note_count || 0} notes</span>
                   </div>
                 </div>
               </button>

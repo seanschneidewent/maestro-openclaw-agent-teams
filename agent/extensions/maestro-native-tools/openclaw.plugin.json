@@ -1,0 +1,21 @@
+{
+  "id": "maestro-native-tools",
+  "name": "Maestro Native Tools",
+  "description": "Native Maestro project/workspace/schedule tools for the Solo agent.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "storeRoot": {
+        "type": "string",
+        "description": "Optional knowledge store root override."
+      },
+      "maxSearchResults": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "Default max results returned by maestro_search."
+      }
+    }
+  }
+}

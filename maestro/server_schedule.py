@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +87,7 @@ def _load_managed_schedule(proj: dict[str, Any]) -> dict[str, Any]:
         item_id = _schedule_text(item.get("id"))
         if not item_id:
             continue
+        notes = _schedule_text(item.get("notes") or item.get("description"))
         normalized_items.append({
             "id": item_id,
             "title": _schedule_text(item.get("title")),
@@ -96,7 +97,8 @@ def _load_managed_schedule(proj: dict[str, Any]) -> dict[str, Any]:
             "owner": _schedule_text(item.get("owner")),
             "activity_id": _schedule_text(item.get("activity_id")),
             "impact": _schedule_text(item.get("impact")),
-            "notes": _schedule_text(item.get("notes")),
+            "notes": notes,
+            "description": notes,
             "created_at": _schedule_text(item.get("created_at")),
             "updated_at": _schedule_text(item.get("updated_at")),
             "closed_at": _schedule_text(item.get("closed_at")),
@@ -127,6 +129,88 @@ def _sort_schedule_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             str(item.get("id", "") or ""),
         ),
     )
+
+
+def _parse_schedule_day(value: Any) -> date | None:
+    raw = _schedule_text(value)
+    if not raw:
+        return None
+
+    # Accept bare dates first; then fall back to ISO datetime parsing.
+    candidate = raw[:10]
+    try:
+        return date.fromisoformat(candidate)
+    except ValueError:
+        pass
+
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.date()
+
+
+def _week_start_monday(day: date) -> date:
+    return day - timedelta(days=day.weekday())
+
+
+def _human_day_label(day: date) -> str:
+    return f"{day:%a, %b} {day.day}, {day.year}"
+
+
+def _human_week_label(week_start: date) -> str:
+    return f"Week of {week_start:%b} {week_start.day}, {week_start.year}"
+
+
+def _month_key(day: date) -> str:
+    return f"{day.year:04d}-{day.month:02d}"
+
+
+def _month_bounds(month: str) -> tuple[date, date]:
+    raw = _schedule_text(month)
+    if len(raw) != 7 or raw[4] != "-":
+        raise ValueError("month must be in YYYY-MM format.")
+
+    try:
+        year = int(raw[:4])
+        month_num = int(raw[5:7])
+        start = date(year, month_num, 1)
+    except (TypeError, ValueError):
+        raise ValueError("month must be in YYYY-MM format.") from None
+
+    if month_num == 12:
+        end = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        end = date(year, month_num + 1, 1) - timedelta(days=1)
+    return start, end
+
+
+def _month_label(day: date) -> str:
+    return f"{day:%B} {day.year}"
+
+
+def _iter_days(start: date, end: date):
+    cursor = start
+    while cursor <= end:
+        yield cursor
+        cursor += timedelta(days=1)
+
+
+def _timeline_item_payload(item: dict[str, Any]) -> dict[str, Any]:
+    description = _schedule_text(item.get("description") or item.get("notes"))
+    due_date = _schedule_text(item.get("due_date"))
+    return {
+        "id": _schedule_text(item.get("id")),
+        "title": _schedule_text(item.get("title")),
+        "description": description,
+        "date": due_date,
+        "due_date": due_date,
+        "status": _normalize_schedule_status(item.get("status")),
+        "owner": _schedule_text(item.get("owner")),
+        "type": _normalize_schedule_type(item.get("type")),
+        "activity_id": _schedule_text(item.get("activity_id")),
+        "updated_at": _schedule_text(item.get("updated_at")),
+    }
 
 
 def schedule_status_payload(proj: dict[str, Any]) -> dict[str, Any]:
@@ -237,12 +321,99 @@ def schedule_items_payload(proj: dict[str, Any], status: str | None = None) -> d
     }
 
 
-def upsert_schedule_item_for_project(proj: dict[str, Any], payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+def schedule_timeline_payload(
+    proj: dict[str, Any],
+    *,
+    month: str | None = None,
+    include_empty_days: bool = True,
+) -> dict[str, Any]:
     managed = _load_managed_schedule(proj)
     items = managed.get("items", []) if isinstance(managed.get("items"), list) else []
-    item_id = slugify_underscore(_schedule_text(payload.get("item_id") or payload.get("id")))
+
+    today = datetime.now().date()
+    month_start, month_end = _month_bounds(month or _month_key(today))
+    selected_month = _month_key(month_start)
+    day_map: dict[date, list[dict[str, Any]]] = {}
+    unscheduled: list[dict[str, Any]] = []
+
+    if include_empty_days:
+        for day in _iter_days(month_start, month_end):
+            day_map[day] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        payload_item = _timeline_item_payload(item)
+        day = _parse_schedule_day(payload_item.get("date"))
+        if day is None:
+            unscheduled.append(payload_item)
+            continue
+        if day < month_start or day > month_end:
+            continue
+        day_map.setdefault(day, []).append(payload_item)
+
+    if not day_map:
+        fallback_day = today if month_start <= today <= month_end else month_start
+        day_map[fallback_day] = []
+
+    for day_items in day_map.values():
+        day_items.sort(
+            key=lambda item: (
+                str(item.get("status") in CLOSED_SCHEDULE_ITEM_STATUSES),
+                str(item.get("title") or item.get("id") or ""),
+            ),
+        )
+
+    days = []
+    for day in sorted(day_map.keys(), reverse=True):
+        week_start = _week_start_monday(day)
+        day_items = day_map.get(day, [])
+        days.append({
+            "date": day.isoformat(),
+            "label": _human_day_label(day),
+            "is_today": day == today,
+            "is_future": day > today,
+            "is_past": day < today,
+            "week_start": week_start.isoformat(),
+            "week_end": (week_start + timedelta(days=6)).isoformat(),
+            "week_label": _human_week_label(week_start),
+            "item_count": len(day_items),
+            "items": day_items,
+        })
+
+    unscheduled.sort(key=lambda item: (str(item.get("updated_at") or ""), str(item.get("id") or "")), reverse=True)
+
+    return {
+        "today": today.isoformat(),
+        "month": selected_month,
+        "month_label": _month_label(month_start),
+        "month_start": month_start.isoformat(),
+        "month_end": month_end.isoformat(),
+        "previous_month": _month_key(month_start - timedelta(days=1)),
+        "next_month": _month_key(month_end + timedelta(days=1)),
+        "include_empty_days": bool(include_empty_days),
+        "week_starts_on": "monday",
+        "sort_order": "future_to_past",
+        "updated_at": _schedule_text(managed.get("updated_at")),
+        "day_count": len(days),
+        "item_count": sum(int(day.get("item_count", 0)) for day in days) + len(unscheduled),
+        "days": days,
+        "unscheduled": unscheduled,
+    }
+
+
+def upsert_schedule_item_for_project(proj: dict[str, Any], payload: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    data = payload if isinstance(payload, dict) else {}
+    if "description" in data and "notes" not in data:
+        data = {**data, "notes": data.get("description")}
+    if "date" in data and "due_date" not in data:
+        data = {**data, "due_date": data.get("date")}
+
+    managed = _load_managed_schedule(proj)
+    items = managed.get("items", []) if isinstance(managed.get("items"), list) else []
+    item_id = slugify_underscore(_schedule_text(data.get("item_id") or data.get("id")))
     if not item_id:
-        item_id = slugify_underscore(_schedule_text(payload.get("title")))
+        item_id = slugify_underscore(_schedule_text(data.get("title")))
     if not item_id:
         raise ValueError("item_id or title is required.")
 
@@ -254,7 +425,7 @@ def upsert_schedule_item_for_project(proj: dict[str, Any], payload: dict[str, An
 
     creating = existing is None
     if creating:
-        title = _schedule_text(payload.get("title"))
+        title = _schedule_text(data.get("title"))
         if not title:
             raise ValueError("title is required when creating a schedule item.")
         existing = {
@@ -274,22 +445,22 @@ def upsert_schedule_item_for_project(proj: dict[str, Any], payload: dict[str, An
         }
         items.append(existing)
 
-    if "title" in payload:
-        existing["title"] = _schedule_text(payload.get("title"))
-    if "type" in payload or "item_type" in payload:
-        raw_type = payload.get("type", payload.get("item_type"))
+    if "title" in data:
+        existing["title"] = _schedule_text(data.get("title"))
+    if "type" in data or "item_type" in data:
+        raw_type = data.get("type", data.get("item_type"))
         existing["type"] = _normalize_schedule_type(raw_type, default=_normalize_schedule_type(existing.get("type"), "activity"))
     else:
         existing["type"] = _normalize_schedule_type(existing.get("type"), "activity")
 
-    if "status" in payload:
-        existing["status"] = _normalize_schedule_status(payload.get("status"), default=_normalize_schedule_status(existing.get("status"), "pending"))
+    if "status" in data:
+        existing["status"] = _normalize_schedule_status(data.get("status"), default=_normalize_schedule_status(existing.get("status"), "pending"))
     else:
         existing["status"] = _normalize_schedule_status(existing.get("status"), "pending")
 
     for key in ("due_date", "owner", "activity_id", "impact", "notes"):
-        if key in payload:
-            existing[key] = _schedule_text(payload.get(key))
+        if key in data:
+            existing[key] = _schedule_text(data.get(key))
 
     if existing.get("status") in CLOSED_SCHEDULE_ITEM_STATUSES:
         if not _schedule_text(existing.get("closed_at")):
@@ -300,10 +471,11 @@ def upsert_schedule_item_for_project(proj: dict[str, Any], payload: dict[str, An
 
     existing["updated_at"] = _schedule_now_iso()
     _save_managed_schedule(proj, {"version": managed.get("version", 1), "items": items})
+    item_payload = {**existing, "description": _schedule_text(existing.get("notes"))}
     return (
         {
             "status": "created" if creating else "updated",
-            "item": existing,
+            "item": item_payload,
             "managed_item_count": len([item for item in items if isinstance(item, dict)]),
         },
         creating,
@@ -341,7 +513,8 @@ def close_schedule_item_for_project(
     target["closed_at"] = _schedule_now_iso()
     target["updated_at"] = _schedule_now_iso()
     _save_managed_schedule(proj, {"version": managed.get("version", 1), "items": items})
+    item_payload = {**target, "description": _schedule_text(target.get("notes"))}
     return {
         "status": "closed",
-        "item": target,
+        "item": item_payload,
     }

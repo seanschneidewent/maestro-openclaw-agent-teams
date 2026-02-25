@@ -1,0 +1,893 @@
+"""Fast-path setup flow for one-command Maestro Solo bootstrap on macOS."""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+import httpx
+from rich.align import Align
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
+
+from .doctor import run_doctor
+from .install_state import load_install_state, save_install_state
+from .solo_license import ensure_local_trial_license
+from .workspace_templates import render_personal_agents_md, render_personal_tools_md, render_workspace_env
+
+
+CYAN = "cyan"
+BRIGHT_CYAN = "bright_cyan"
+DIM = "dim"
+
+console = Console(force_terminal=True if platform.system() == "Windows" else None)
+
+NATIVE_PLUGIN_ID = "maestro-native-tools"
+NATIVE_PLUGIN_DENY_TOOLS = ["browser", "web_search", "web_fetch", "canvas", "nodes"]
+
+
+def _success(text: str):
+    console.print(f"  [green]OK[/] {text}")
+
+
+def _warning(text: str):
+    console.print(f"  [yellow]WARN[/] {text}")
+
+
+def _error(text: str):
+    console.print(f"  [red]FAIL[/] {text}")
+
+
+def _info(text: str):
+    console.print(f"  [{CYAN}]INFO[/] {text}")
+
+
+def _run_command(args: list[str], *, timeout: int = 120, capture: bool = True) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            args,
+            check=False,
+            capture_output=capture,
+            text=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return False, str(exc)
+
+    if capture:
+        output = (result.stdout or "").strip() or (result.stderr or "").strip()
+    else:
+        output = ""
+    return result.returncode == 0, output
+
+
+def _run_interactive_command(args: list[str], *, timeout: int = 0) -> int:
+    try:
+        result = subprocess.run(
+            args,
+            check=False,
+            timeout=None if timeout <= 0 else timeout,
+        )
+        return int(result.returncode)
+    except Exception:
+        return 1
+
+
+def _openclaw_oauth_profile_exists(provider_id: str) -> bool:
+    provider = str(provider_id or "").strip().lower()
+    if not provider:
+        return False
+
+    def _entry_has_oauth_token(entry: object, expected_provider: str) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        provider_value = str(entry.get("provider", expected_provider)).strip().lower()
+        entry_type = str(entry.get("type", "oauth")).strip().lower()
+        if provider_value != expected_provider or entry_type != "oauth":
+            return False
+        for key in ("access", "refresh", "token"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+        return False
+
+    agents_root = Path.home() / ".openclaw" / "agents"
+    if not agents_root.exists():
+        return False
+
+    candidate_files: list[Path] = []
+    candidate_files.extend(sorted(agents_root.glob("*/agent/auth-profiles.json")))
+    candidate_files.extend(sorted(agents_root.glob("*/agent/auth.json")))
+
+    for path in candidate_files:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+
+        if not isinstance(payload, dict):
+            continue
+
+        profiles = payload.get("profiles")
+        if isinstance(profiles, dict):
+            for entry in profiles.values():
+                if _entry_has_oauth_token(entry, provider):
+                    return True
+
+        direct = payload.get(provider)
+        if _entry_has_oauth_token(direct, provider):
+            return True
+
+        for entry in payload.values():
+            if _entry_has_oauth_token(entry, provider):
+                return True
+
+    return False
+
+
+def _discover_repo_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "workspace_frontend").exists() and (parent / "packages").exists():
+            return parent
+    return current.parent
+
+
+class QuickSetup:
+    """Quick setup path: minimum required for a live Maestro Solo runtime."""
+
+    def __init__(self, *, company_name: str = ""):
+        state = load_install_state()
+        self.company_name = str(company_name).strip() or str(state.get("company_name", "")).strip() or "Company"
+        self.install_id = str(state.get("install_id", "")).strip() or str(uuid.uuid4())
+        self.provider = "openai"
+        self.provider_env_key = "OPENAI_API_KEY"
+        self.model = "openai-codex/gpt-5.2"
+        self.model_auth_method = "openclaw_oauth"
+        self.gemini_key = ""
+        self.telegram_token = ""
+        self.bot_username = ""
+        self.tailscale_ip = ""
+        self.pending_optional_setup: list[str] = ["ingest_plans"]
+        self.workspace = (Path.home() / ".openclaw" / "workspace-maestro-solo").resolve()
+        self.store_root = (self.workspace / "knowledge_store").resolve()
+        self.trial_info: dict[str, Any] = {}
+
+    def run(self) -> int:
+        if not self._intro():
+            return 1
+        if not self._company_name_step():
+            return 1
+        if not self._prerequisites_step():
+            return 1
+        if not self._openai_oauth_step():
+            return 1
+        if not self._gemini_required_step():
+            return 1
+        if not self._telegram_required_step():
+            return 1
+        if not self._tailscale_optional_step():
+            return 1
+        if not self._configure_openclaw_and_workspace_step():
+            return 1
+        if not self._pair_telegram_required_step():
+            return 1
+        if not self._trial_license_step():
+            return 1
+        if not self._doctor_fix_step():
+            return 1
+        self._save_install_state()
+        self._summary()
+        return 0
+
+    def _intro(self) -> bool:
+        console.print()
+        console.print(Rule(style=CYAN))
+        console.print(Align.center(Text("M A E S T R O", style=f"bold {BRIGHT_CYAN}")))
+        console.print(Align.center(Text("Quick Setup (macOS)", style=DIM)))
+        console.print(Rule(style=CYAN))
+        console.print(Panel(
+            "This flow configures only what is required to get Maestro live:\n"
+            "OpenClaw + OpenAI OAuth + Gemini key + Telegram pairing.\n\n"
+            "Optional setup stays deferred and Maestro can guide it later.",
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]Quick Setup[/]",
+            width=72,
+        ))
+        if platform.system() != "Darwin":
+            _error("Quick setup currently supports macOS only.")
+            return False
+        return True
+
+    def _company_name_step(self) -> bool:
+        console.print()
+        default_name = self.company_name
+        entered = Prompt.ask(
+            f"  [{CYAN}]Company name[/]",
+            default=default_name,
+            console=console,
+        ).strip()
+        self.company_name = entered or default_name
+        if not self.company_name:
+            _error("Company name is required.")
+            return False
+        _success(f"Company: {self.company_name}")
+        return True
+
+    def _prerequisites_step(self) -> bool:
+        console.print()
+        console.print(Panel(
+            "Checking prerequisites and auto-installing missing packages when approved.",
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]Prerequisites[/]",
+            width=72,
+        ))
+
+        if tuple(int(x) for x in platform.python_version_tuple()[:2]) < (3, 11):
+            _error(f"Python {platform.python_version()} detected. Python 3.11+ is required.")
+            _info("Install Python 3.11+ and re-run quick setup.")
+            return False
+        _success(f"Python {platform.python_version()}")
+
+        if not self._ensure_homebrew():
+            return False
+        if not self._ensure_node_and_npm():
+            return False
+        if not self._ensure_openclaw():
+            return False
+
+        _success("Prerequisites complete")
+        return True
+
+    def _ensure_homebrew(self) -> bool:
+        if shutil.which("brew"):
+            _success("Homebrew available")
+            return True
+
+        _warning("Homebrew is missing.")
+        install_now = Confirm.ask(
+            f"  [{CYAN}]Install Homebrew now?[/]",
+            default=True,
+            console=console,
+        )
+        if not install_now:
+            _error("Homebrew is required for automatic prerequisite install.")
+            return False
+
+        rc = _run_interactive_command([
+            "/bin/bash",
+            "-c",
+            "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)",
+        ])
+        if rc != 0:
+            _error("Homebrew install failed.")
+            return False
+
+        for brew_path in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+            path = Path(brew_path)
+            if path.exists():
+                os.environ["PATH"] = f"{path.parent}:{os.environ.get('PATH', '')}"
+                break
+
+        if not shutil.which("brew"):
+            _error("Homebrew installed but not on PATH. Open a new terminal and rerun.")
+            return False
+
+        _success("Homebrew installed")
+        return True
+
+    def _ensure_node_and_npm(self) -> bool:
+        node_ok = shutil.which("node") is not None
+        npm_ok = shutil.which("npm") is not None
+        if node_ok and npm_ok:
+            ok, node_out = _run_command(["node", "--version"])
+            ok_npm, npm_out = _run_command(["npm", "--version"])
+            _success(f"Node.js {node_out if ok else 'available'}")
+            _success(f"npm {npm_out if ok_npm else 'available'}")
+            return True
+
+        _warning("Node.js/npm missing.")
+        install_now = Confirm.ask(
+            f"  [{CYAN}]Install Node.js now (brew install node)?[/]",
+            default=True,
+            console=console,
+        )
+        if not install_now:
+            _error("Node.js and npm are required.")
+            return False
+
+        rc = _run_interactive_command(["brew", "install", "node"])
+        if rc != 0:
+            _error("Node.js install failed.")
+            return False
+
+        if shutil.which("node") is None or shutil.which("npm") is None:
+            _error("Node.js install completed but node/npm not found on PATH.")
+            return False
+
+        ok, node_out = _run_command(["node", "--version"])
+        ok_npm, npm_out = _run_command(["npm", "--version"])
+        _success(f"Node.js {node_out if ok else 'installed'}")
+        _success(f"npm {npm_out if ok_npm else 'installed'}")
+        return True
+
+    def _ensure_openclaw(self) -> bool:
+        if shutil.which("openclaw"):
+            ok, out = _run_command(["openclaw", "--version"])
+            _success(f"OpenClaw {out if ok else 'available'}")
+            return True
+
+        _warning("OpenClaw is missing.")
+        install_now = Confirm.ask(
+            f"  [{CYAN}]Install OpenClaw now (npm install -g openclaw)?[/]",
+            default=True,
+            console=console,
+        )
+        if not install_now:
+            _error("OpenClaw is required.")
+            return False
+
+        rc = _run_interactive_command(["npm", "install", "-g", "openclaw"])
+        if rc != 0:
+            _error("OpenClaw install failed.")
+            return False
+
+        if shutil.which("openclaw") is None:
+            _error("OpenClaw install completed but command not found on PATH.")
+            return False
+
+        ok, out = _run_command(["openclaw", "--version"])
+        _success(f"OpenClaw {out if ok else 'installed'}")
+        return True
+
+    def _openai_oauth_step(self) -> bool:
+        console.print()
+        console.print(Panel(
+            "OpenAI OAuth is required in quick setup.\n"
+            "This avoids manual API-key setup and uses your ChatGPT/OpenAI account.",
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]OpenAI OAuth[/]",
+            width=72,
+        ))
+
+        if _openclaw_oauth_profile_exists("openai-codex"):
+            _success("Existing OpenAI OAuth profile found")
+            return True
+
+        _info("Starting OAuth login: openclaw models auth login --provider openai-codex")
+        rc = _run_interactive_command(["openclaw", "models", "auth", "login", "--provider", "openai-codex"])
+        if rc == 0 and _openclaw_oauth_profile_exists("openai-codex"):
+            _success("OpenAI OAuth configured")
+            return True
+
+        _warning("OAuth login did not complete. Attempting provider bootstrap.")
+        onboard_rc = _run_interactive_command(["openclaw", "onboard", "--auth-choice", "openai-codex"])
+        if onboard_rc != 0:
+            _error("OpenClaw provider bootstrap failed.")
+            return False
+
+        retry_rc = _run_interactive_command(["openclaw", "models", "auth", "login", "--provider", "openai-codex"])
+        if retry_rc == 0 and _openclaw_oauth_profile_exists("openai-codex"):
+            _success("OpenAI OAuth configured")
+            return True
+
+        _error("OpenAI OAuth is required and is not configured.")
+        return False
+
+    def _gemini_required_step(self) -> bool:
+        console.print()
+        console.print(Panel(
+            "Gemini API key is required for ingest + vision tools.",
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]Gemini Key (Required)[/]",
+            width=72,
+        ))
+
+        while True:
+            key = Prompt.ask(
+                f"  [{CYAN}]Paste GEMINI_API_KEY[/]",
+                console=console,
+            ).strip()
+            if len(key) < 20:
+                _warning("Key looks too short. Please retry.")
+                continue
+
+            _info("Validating Gemini key...")
+            try:
+                response = httpx.get(
+                    f"https://generativelanguage.googleapis.com/v1/models?key={key}",
+                    timeout=12,
+                )
+            except Exception as exc:
+                _warning(f"Gemini key validation request failed: {exc}")
+                retry = Confirm.ask(
+                    f"  [{CYAN}]Retry Gemini key entry?[/]",
+                    default=True,
+                    console=console,
+                )
+                if retry:
+                    continue
+                return False
+
+            if response.status_code != 200:
+                _warning(f"Gemini key rejected (status {response.status_code}).")
+                continue
+
+            self.gemini_key = key
+            _success("Gemini key verified")
+            return True
+
+    def _telegram_required_step(self) -> bool:
+        console.print()
+        console.print(Panel(
+            "Telegram is required in quick setup so Maestro can run as an aware chat agent.\n"
+            "Create a bot via @BotFather and paste the bot token.",
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]Telegram (Required)[/]",
+            width=72,
+        ))
+
+        while True:
+            token = Prompt.ask(f"  [{CYAN}]Paste Telegram bot token[/]", console=console).strip()
+            if not re.match(r"^\d+:[A-Za-z0-9_-]+$", token):
+                _warning("Token format invalid. Expected '<digits>:<token>'.")
+                continue
+
+            _info("Validating Telegram token...")
+            try:
+                response = httpx.get(f"https://api.telegram.org/bot{token}/getMe", timeout=12)
+                payload = response.json()
+            except Exception as exc:
+                _warning(f"Telegram validation failed: {exc}")
+                continue
+
+            if response.status_code != 200 or not isinstance(payload, dict) or not payload.get("ok"):
+                _warning("Telegram token rejected by Telegram API.")
+                continue
+
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                _warning("Telegram returned malformed bot metadata.")
+                continue
+
+            username = str(result.get("username", "")).strip()
+            if not username:
+                _warning("Telegram bot username missing.")
+                continue
+
+            self.telegram_token = token
+            self.bot_username = username
+            _success(f"Telegram bot verified: @{username}")
+            return True
+
+    def _tailscale_optional_step(self) -> bool:
+        console.print()
+        configure_now = Confirm.ask(
+            f"  [{CYAN}]Configure Tailscale now for field access?[/]",
+            default=False,
+            console=console,
+        )
+        if not configure_now:
+            _info("Deferring Tailscale setup.")
+            if "tailscale" not in self.pending_optional_setup:
+                self.pending_optional_setup.append("tailscale")
+            return True
+
+        if shutil.which("tailscale") is None:
+            _warning("Tailscale is missing.")
+            install_now = Confirm.ask(
+                f"  [{CYAN}]Install Tailscale now (brew install --cask tailscale)?[/]",
+                default=True,
+                console=console,
+            )
+            if not install_now:
+                if "tailscale" not in self.pending_optional_setup:
+                    self.pending_optional_setup.append("tailscale")
+                return True
+            rc = _run_interactive_command(["brew", "install", "--cask", "tailscale"])
+            if rc != 0:
+                _warning("Tailscale install failed. Deferring setup.")
+                if "tailscale" not in self.pending_optional_setup:
+                    self.pending_optional_setup.append("tailscale")
+                return True
+
+        ok, status = _run_command(["tailscale", "status"], timeout=10)
+        if not ok or "logged out" in status.lower():
+            _warning("Tailscale not connected.")
+            _info("Run 'tailscale up' in another terminal, then return here.")
+            ready = Confirm.ask(
+                f"  [{CYAN}]Have you completed 'tailscale up'?[/]",
+                default=False,
+                console=console,
+            )
+            if not ready:
+                if "tailscale" not in self.pending_optional_setup:
+                    self.pending_optional_setup.append("tailscale")
+                return True
+
+        ok_ip, out_ip = _run_command(["tailscale", "ip", "-4"], timeout=10)
+        if not ok_ip:
+            _warning("Could not resolve Tailscale IPv4. Deferring field access setup.")
+            if "tailscale" not in self.pending_optional_setup:
+                self.pending_optional_setup.append("tailscale")
+            return True
+
+        self.tailscale_ip = str(out_ip.splitlines()[0]).strip()
+        if not self.tailscale_ip:
+            if "tailscale" not in self.pending_optional_setup:
+                self.pending_optional_setup.append("tailscale")
+            return True
+
+        _success(f"Tailscale ready: {self.tailscale_ip}")
+        if "tailscale" in self.pending_optional_setup:
+            self.pending_optional_setup.remove("tailscale")
+        return True
+
+    def _configure_openclaw_and_workspace_step(self) -> bool:
+        console.print()
+        console.print(Panel(
+            "Writing OpenClaw agent config and workspace scaffolding.",
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]Workspace Bootstrap[/]",
+            width=72,
+        ))
+
+        config_dir = Path.home() / ".openclaw"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / "openclaw.json"
+
+        config: dict[str, Any] = {}
+        if config_file.exists():
+            try:
+                loaded = json.loads(config_file.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    config = loaded
+            except Exception:
+                config = {}
+
+        gateway = config.get("gateway") if isinstance(config.get("gateway"), dict) else {}
+        gateway["mode"] = "local"
+        config["gateway"] = gateway
+        config.pop("maestro", None)
+
+        env = config.get("env") if isinstance(config.get("env"), dict) else {}
+        env.pop("OPENAI_API_KEY", None)
+        env["GEMINI_API_KEY"] = self.gemini_key
+        config["env"] = env
+
+        agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
+        existing_list = agents.get("list") if isinstance(agents.get("list"), list) else []
+        clean_list = [
+            item for item in existing_list
+            if isinstance(item, dict) and str(item.get("id", "")).strip() not in {"maestro", "maestro-personal", "maestro-solo-personal"}
+        ]
+        for item in clean_list:
+            if isinstance(item, dict) and item.get("default"):
+                item["default"] = False
+        clean_list.append({
+            "id": "maestro-solo-personal",
+            "name": "Maestro Solo Personal",
+            "default": True,
+            "model": self.model,
+            "workspace": str(self.workspace),
+            "tools": {
+                "deny": NATIVE_PLUGIN_DENY_TOOLS,
+            },
+        })
+        agents["list"] = clean_list
+        config["agents"] = agents
+
+        plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+        entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
+        plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
+        plugin_entry["enabled"] = True
+        entries[NATIVE_PLUGIN_ID] = plugin_entry
+        plugins["entries"] = entries
+
+        allow = plugins.get("allow")
+        if isinstance(allow, list):
+            if NATIVE_PLUGIN_ID not in [str(item).strip() for item in allow]:
+                allow.append(NATIVE_PLUGIN_ID)
+                plugins["allow"] = allow
+        config["plugins"] = plugins
+
+        channels = config.get("channels") if isinstance(config.get("channels"), dict) else {}
+        channels["telegram"] = {
+            "enabled": True,
+            "botToken": self.telegram_token,
+            "dmPolicy": "pairing",
+            "groupPolicy": "allowlist",
+            "streamMode": "partial",
+            "accounts": {
+                "maestro-solo-personal": {
+                    "botToken": self.telegram_token,
+                    "dmPolicy": "pairing",
+                    "groupPolicy": "allowlist",
+                    "streamMode": "partial",
+                }
+            },
+        }
+        config["channels"] = channels
+
+        config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        _success(f"OpenClaw config written: {config_file}")
+
+        sessions_dir = config_dir / "agents" / "maestro-solo-personal" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        _success("Agent session directory ready")
+
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        self.store_root.mkdir(parents=True, exist_ok=True)
+
+        self._seed_workspace_files()
+        self._seed_workspace_skill()
+        self._seed_native_extension()
+        self._maybe_build_workspace_frontend()
+
+        return True
+
+    def _seed_workspace_files(self):
+        module_dir = Path(__file__).resolve().parent
+        repo_root = _discover_repo_root()
+        candidate_dirs = [
+            module_dir / "agent",
+            repo_root / "agent",
+            repo_root,
+            module_dir,
+        ]
+
+        for filename in ("SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md"):
+            src = None
+            for base in candidate_dirs:
+                candidate = base / filename
+                if candidate.exists():
+                    src = candidate
+                    break
+            if src:
+                shutil.copy2(src, self.workspace / filename)
+
+        (self.workspace / "AGENTS.md").write_text(render_personal_agents_md(), encoding="utf-8")
+        (self.workspace / "TOOLS.md").write_text(
+            render_personal_tools_md(active_provider_env_key=self.provider_env_key),
+            encoding="utf-8",
+        )
+
+        env_content = render_workspace_env(
+            store_path="knowledge_store/",
+            provider_env_key=self.provider_env_key,
+            provider_key="",
+            gemini_key=self.gemini_key,
+            agent_role="project",
+            model_auth_method=self.model_auth_method,
+        )
+        (self.workspace / ".env").write_text(env_content, encoding="utf-8")
+
+    def _seed_workspace_skill(self):
+        module_dir = Path(__file__).resolve().parent
+        repo_root = _discover_repo_root()
+        candidate_dirs = [
+            module_dir / "agent",
+            repo_root / "agent",
+            repo_root,
+            module_dir,
+        ]
+
+        skill_src: Path | None = None
+        for base in candidate_dirs:
+            candidate = base / "skills" / "maestro" / "SKILL.md"
+            if candidate.exists():
+                skill_src = candidate
+                break
+
+        if skill_src is None:
+            _warning("Could not find Maestro SKILL.md; agent will rely on built-in tool descriptions.")
+            return
+
+        skill_dir = self.workspace / "skills" / "maestro"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(skill_src, skill_dir / "SKILL.md")
+        _success("Maestro SKILL.md synced")
+
+    def _seed_native_extension(self):
+        module_dir = Path(__file__).resolve().parent
+        repo_root = _discover_repo_root()
+        candidate_dirs = [
+            module_dir / "agent",
+            repo_root / "agent",
+            repo_root,
+            module_dir,
+        ]
+
+        extension_src: Path | None = None
+        for base in candidate_dirs:
+            candidate = base / "extensions" / NATIVE_PLUGIN_ID
+            if candidate.exists() and candidate.is_dir():
+                extension_src = candidate
+                break
+
+        if extension_src is None:
+            _warning("Could not find Maestro native extension files.")
+            return
+
+        extension_dst = self.workspace / ".openclaw" / "extensions" / NATIVE_PLUGIN_ID
+        if extension_dst.exists():
+            shutil.rmtree(extension_dst)
+        extension_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(extension_src, extension_dst)
+        _success("Maestro native tools extension installed")
+
+    def _maybe_build_workspace_frontend(self):
+        repo_root = _discover_repo_root()
+        frontend_dir = repo_root / "workspace_frontend"
+        if not (frontend_dir / "package.json").exists():
+            return
+
+        dist_dir = frontend_dir / "dist"
+        if dist_dir.exists():
+            _success("workspace_frontend/dist already present (build skipped)")
+            return
+
+        if shutil.which("npm") is None:
+            _warning("npm not available; could not build workspace frontend.")
+            return
+
+        _info("Building workspace frontend (dist missing)...")
+        install_ok, install_out = _run_command(["npm", "install", "--prefix", str(frontend_dir)], timeout=600)
+        if not install_ok:
+            _warning(f"npm install failed: {install_out}")
+            return
+        build_ok, build_out = _run_command(["npm", "run", "build", "--prefix", str(frontend_dir)], timeout=600)
+        if not build_ok:
+            _warning(f"npm run build failed: {build_out}")
+            return
+        _success("Workspace frontend built")
+
+    def _pair_telegram_required_step(self) -> bool:
+        console.print()
+        console.print(Panel(
+            "Telegram pairing is required in quick setup.\n"
+            f"Send a message to @{self.bot_username} and approve the pairing code.",
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]Telegram Pairing (Required)[/]",
+            width=72,
+        ))
+
+        _info("Starting OpenClaw gateway...")
+        start_rc = _run_interactive_command(["openclaw", "gateway", "start"])
+        if start_rc != 0:
+            _warning("Gateway start returned non-zero; trying restart.")
+            _ = _run_interactive_command(["openclaw", "gateway", "restart"])
+
+        time.sleep(2)
+
+        while True:
+            pairing_code = Prompt.ask(
+                f"  [{CYAN}]Paste Telegram pairing code[/]",
+                console=console,
+            ).strip()
+            if not pairing_code:
+                _warning("Pairing code is required.")
+                continue
+
+            ok, out = _run_command(["openclaw", "pairing", "approve", "telegram", pairing_code], timeout=30)
+            if ok:
+                _success("Telegram pairing approved")
+                return True
+
+            _warning(f"Pairing approval failed: {out}")
+            retry = Confirm.ask(
+                f"  [{CYAN}]Retry pairing?[/]",
+                default=True,
+                console=console,
+            )
+            if not retry:
+                return False
+
+    def _trial_license_step(self) -> bool:
+        console.print()
+        _info("Ensuring local trial license so runtime can start immediately...")
+        trial = ensure_local_trial_license(
+            purchase_id=f"trial-{self.install_id[:12]}",
+            email="trial@maestro.local",
+            plan_id="solo_trial",
+            source="quick_setup_trial",
+        )
+        self.trial_info = trial if isinstance(trial, dict) else {}
+        status = trial.get("status", {}) if isinstance(trial, dict) else {}
+        if not isinstance(status, dict) or not bool(status.get("valid")):
+            _error("Could not create or validate trial license.")
+            return False
+        if bool(trial.get("created")):
+            _success(f"Trial license active until {status.get('expires_at', '')}")
+        else:
+            _success("Existing valid local license found")
+        return True
+
+    def _doctor_fix_step(self) -> bool:
+        console.print()
+        _info("Running doctor --fix verification...")
+        code = run_doctor(
+            fix=True,
+            store_override=str(self.store_root),
+            restart_gateway=True,
+            json_output=False,
+            field_access_required=False,
+        )
+        if code != 0:
+            _error("Doctor checks failed. Resolve the warnings/errors above and rerun setup.")
+            return False
+        _success("Doctor verification complete")
+        return True
+
+    def _save_install_state(self):
+        save_install_state(
+            {
+                "version": 1,
+                "product": "maestro-solo",
+                "install_id": self.install_id,
+                "company_name": self.company_name,
+                "workspace_root": str(self.workspace),
+                "store_root": str(self.store_root),
+                "active_project_slug": "",
+                "active_project_name": "",
+                "setup_mode": "quick",
+                "setup_completed": True,
+                "pending_optional_setup": list(dict.fromkeys(self.pending_optional_setup)),
+            }
+        )
+
+    def _summary(self):
+        console.print()
+        local_workspace_url = "http://localhost:3000/workspace"
+        tailnet_workspace_url = (
+            f"http://{self.tailscale_ip}:3000/workspace"
+            if self.tailscale_ip
+            else "Not configured"
+        )
+
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_row("Company", self.company_name)
+        table.add_row("Agent", "maestro-solo-personal")
+        table.add_row("Model", self.model)
+        table.add_row("Auth", "OpenAI OAuth via OpenClaw")
+        table.add_row("Telegram", f"@{self.bot_username}")
+        table.add_row("Workspace", str(self.workspace))
+        table.add_row("Store", str(self.store_root))
+        table.add_row("Local URL", local_workspace_url)
+        table.add_row("Field URL", tailnet_workspace_url)
+        if self.pending_optional_setup:
+            table.add_row("Deferred", ", ".join(self.pending_optional_setup))
+
+        console.print(Panel(
+            table,
+            border_style="green",
+            title="[bold green]Quick Setup Complete[/]",
+            width=84,
+        ))
+
+        console.print(Panel(
+            "Start live runtime now:\n"
+            "  [bold white]maestro-solo up --tui[/]\n\n"
+            "Then open:\n"
+            f"  [bold white]{local_workspace_url}[/]",
+            border_style=CYAN,
+            title=f"[bold {BRIGHT_CYAN}]Next Step[/]",
+            width=84,
+        ))
+
+
+def run_quick_setup(*, company_name: str = "") -> int:
+    runner = QuickSetup(company_name=company_name)
+    return runner.run()

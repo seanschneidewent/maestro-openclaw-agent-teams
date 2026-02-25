@@ -91,9 +91,20 @@ export const api = {
   // Workspaces
   getWorkspaces: () => request('/api/workspaces'),
   getWorkspace: (slug) => request(`/api/workspaces/${encodeURIComponent(slug)}`),
+  getProjectNotes: () => request('/api/project-notes'),
 
   // Schedule
   getScheduleStatus: () => request('/api/schedule/status'),
+  getScheduleTimeline: (options = {}) => {
+    const params = new URLSearchParams()
+    if (options?.month) params.set('month', String(options.month))
+    const includeEmptyDays = options?.includeEmptyDays
+    if (includeEmptyDays !== undefined) {
+      params.set('include_empty_days', includeEmptyDays ? '1' : '0')
+    }
+    const qs = params.toString()
+    return request(`/api/schedule/timeline${qs ? `?${qs}` : ''}`)
+  },
   getScheduleItems: (status) => {
     const qs = status ? `?status=${encodeURIComponent(status)}` : ''
     return request(`/api/schedule/items${qs}`)

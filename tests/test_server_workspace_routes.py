@@ -58,6 +58,19 @@ def test_workspace_websocket_initializes(tmp_path: Path):
             assert "page_count" in event
 
 
+def test_workspace_project_notes_route_returns_empty_payload(tmp_path: Path):
+    _make_single_project_store(tmp_path, name="Solo Project")
+    with _with_store(tmp_path):
+        client = TestClient(server.app)
+        response = client.get("/workspace/api/project-notes")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["project_slug"]
+        assert payload["categories"]
+        assert payload["note_count"] == 0
+
+
 def test_command_center_disabled_in_solo_returns_actionable_404(monkeypatch):
     monkeypatch.setattr(server, "profile_fleet_enabled", lambda: False)
     client = TestClient(server.app)

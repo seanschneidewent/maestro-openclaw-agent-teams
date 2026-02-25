@@ -8,6 +8,8 @@ export function useWebSocket({
   onInit,
   onWorkspaceUpdated,
   onScheduleUpdated,
+  onProjectNotesUpdated,
+  onReload,
 } = {}) {
   const wsRef = useRef(null)
   const [connected, setConnected] = useState(false)
@@ -18,6 +20,8 @@ export function useWebSocket({
     onInit,
     onWorkspaceUpdated,
     onScheduleUpdated,
+    onProjectNotesUpdated,
+    onReload,
   })
 
   useEffect(() => {
@@ -28,8 +32,10 @@ export function useWebSocket({
       onInit,
       onWorkspaceUpdated,
       onScheduleUpdated,
+      onProjectNotesUpdated,
+      onReload,
     }
-  }, [onPageAdded, onPageUpdated, onRegionComplete, onInit, onWorkspaceUpdated, onScheduleUpdated])
+  }, [onPageAdded, onPageUpdated, onRegionComplete, onInit, onWorkspaceUpdated, onScheduleUpdated, onProjectNotesUpdated, onReload])
 
   useEffect(() => {
     const url = api.getWsUrl()
@@ -53,6 +59,8 @@ export function useWebSocket({
           if (data.type === 'region_complete' && h.onRegionComplete) h.onRegionComplete(data)
           if (data.type === 'workspace_updated' && h.onWorkspaceUpdated) h.onWorkspaceUpdated(data)
           if (data.type === 'schedule_updated' && h.onScheduleUpdated) h.onScheduleUpdated(data)
+          if (data.type === 'project_notes_updated' && h.onProjectNotesUpdated) h.onProjectNotesUpdated(data)
+          if (data.type === 'reload' && h.onReload) h.onReload(data)
         } catch (error) {
           console.error('Invalid WebSocket event', error)
         }
