@@ -110,3 +110,4 @@ Use `maestro-solo up --require-pro` when you want startup to fail unless Pro ent
 See:
 
 - [Railway Billing + License Deploy](../operations/railway-billing-license.md)
+- [Billing Service Architecture](./billing-service-architecture.md)
