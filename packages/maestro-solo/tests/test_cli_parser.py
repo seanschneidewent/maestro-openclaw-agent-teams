@@ -39,3 +39,10 @@ def test_parser_up_require_pro_flag():
     args = parser.parse_args(["up", "--require-pro"])
     assert args.command == "up"
     assert args.require_pro is True
+
+
+def test_parser_unsubscribe_command():
+    parser = build_parser()
+    args = parser.parse_args(["unsubscribe", "--email", "owner@example.com"])
+    assert args.command == "unsubscribe"
+    assert args.email == "owner@example.com"

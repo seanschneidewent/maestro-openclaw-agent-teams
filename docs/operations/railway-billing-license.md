@@ -47,6 +47,7 @@ This installs local packages from this repo:
 Set in both services:
 
 - `MAESTRO_INTERNAL_TOKEN` (exact same value in both)
+- `MAESTRO_DATABASE_URL` (exact same DB URL in both; recommended Railway Postgres reference)
 
 Set in billing service:
 
@@ -60,11 +61,27 @@ Optional:
 
 - `MAESTRO_STRIPE_PRICE_ID_<MODE>_<PLAN>` overrides
 - `MAESTRO_STRIPE_WEBHOOK_TOLERANCE_SECONDS` (default 300)
+- `MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL` (default `<billing-base-url>/upgrade`)
 
 Set in license service:
 
 - `MAESTRO_ENTITLEMENT_PRIVATE_KEY` (optional, enables signed entitlement tokens)
 - `MAESTRO_ENTITLEMENT_PUBLIC_KEY` (optional, mainly for verification clients)
+
+## Persistent State (Railway Postgres)
+
+Use a shared Postgres service so billing + license data survives redeploys/restarts.
+
+1. Create a Railway Postgres service (for example name it `maestro-solo-db`).
+2. In `maestro-license-service` variables, set:
+   - `MAESTRO_DATABASE_URL=${{maestro-solo-db.DATABASE_URL}}`
+3. In `maestro-billing-service` variables, set:
+   - `MAESTRO_DATABASE_URL=${{maestro-solo-db.DATABASE_URL}}`
+
+Notes:
+
+- Billing and license store separate rows in the same table (`maestro_service_state`) using service keys (`billing`, `license`).
+- If `MAESTRO_DATABASE_URL` is unset, services fall back to local JSON files (not suitable for production persistence on Railway).
 
 ## Stripe Webhook
 
@@ -95,19 +112,29 @@ maestro-solo purchase --email you@example.com --plan solo_monthly --mode live --
 2. Confirm purchase becomes `licensed` via polling and local `maestro-solo status`.
 3. In Stripe dashboard, confirm webhook delivery `2xx` for the event.
 
+4. Verify unsubscribe portal:
+
+```bash
+maestro-solo unsubscribe --billing-url https://<your-billing-domain>
+```
+
+This should open Stripe Customer Portal for cancel/manage actions.
+
 ## Fast Setup Checklist
 
-1. Create Railway service `maestro-license-service`:
+1. Create Railway Postgres service `maestro-solo-db`.
+
+2. Create Railway service `maestro-license-service`:
 - Build command: `bash scripts/railway-build-solo-services.sh`
 - Start command: `bash scripts/railway-start-license.sh`
-- Set env: `MAESTRO_INTERNAL_TOKEN`
+- Set env: `MAESTRO_INTERNAL_TOKEN`, `MAESTRO_DATABASE_URL=${{maestro-solo-db.DATABASE_URL}}`
 
-2. Create Railway service `maestro-billing-service`:
+3. Create Railway service `maestro-billing-service`:
 - Build command: `bash scripts/railway-build-solo-services.sh`
 - Start command: `bash scripts/railway-start-billing.sh`
-- Set env: `MAESTRO_INTERNAL_TOKEN`, `MAESTRO_LICENSE_URL`, Stripe vars + price IDs
+- Set env: `MAESTRO_INTERNAL_TOKEN`, `MAESTRO_DATABASE_URL=${{maestro-solo-db.DATABASE_URL}}`, `MAESTRO_LICENSE_URL`, Stripe vars + price IDs
 
-3. In Stripe, create webhook endpoint:
+4. In Stripe, create webhook endpoint:
 - URL: `https://<billing-domain>/v1/stripe/webhook`
 - Events: exactly the list above
 - Set resulting `whsec_...` in billing env as `MAESTRO_STRIPE_WEBHOOK_SECRET`

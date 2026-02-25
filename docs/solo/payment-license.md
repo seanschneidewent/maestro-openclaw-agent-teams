@@ -15,9 +15,10 @@ maestro-solo-billing-service --port 8081
 
 Optional environment overrides:
 
-- `MAESTRO_LICENSE_URL` (default `http://127.0.0.1:8082`)
-- `MAESTRO_BILLING_URL` (default `http://127.0.0.1:8081`)
+- `MAESTRO_LICENSE_URL` (default `https://maestro-license-service-production.up.railway.app`)
+- `MAESTRO_BILLING_URL` (default `https://maestro-billing-service-production.up.railway.app`)
 - `MAESTRO_INTERNAL_TOKEN` (shared service-to-service token)
+- `MAESTRO_DATABASE_URL` (shared persistent state DB for billing + license; if unset, local JSON files are used)
 
 Stripe configuration (billing service):
 
@@ -27,6 +28,8 @@ Stripe configuration (billing service):
 - Optional mode-specific override:
   `MAESTRO_STRIPE_PRICE_ID_<MODE>_<PLAN>`
   (for example `MAESTRO_STRIPE_PRICE_ID_LIVE_SOLO_MONTHLY`)
+- Optional:
+  `MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL`
 
 Template file:
 
@@ -36,7 +39,7 @@ Template file:
 ## Purchase Flow
 
 ```bash
-maestro-solo purchase --email you@example.com --plan solo_test_monthly
+maestro-solo purchase --email you@example.com
 ```
 
 What happens:
@@ -53,11 +56,37 @@ What happens:
 7. CLI stores license under `~/.maestro-solo/license.json`.
 8. If billing returns `entitlement_token`, CLI stores it under `~/.maestro-solo/entitlement.json`.
 
+Important:
+
+- If `--success-url` and `--cancel-url` are omitted, billing uses built-in pages:
+  - `/checkout/success?purchase_id=...`
+  - `/checkout/cancel?purchase_id=...`
+
+For local dev checkout simulation instead of Stripe:
+
+```bash
+maestro-solo purchase --email you@example.com --plan solo_test_monthly --mode test --billing-url http://127.0.0.1:8081
+```
+
 Purchase states:
 
 - `pending -> paid -> licensed`
 - `pending/paid -> failed` (license issue or payment failure)
 - `pending/paid/licensed -> canceled` (checkout expired or subscription deleted)
+
+## Self-Serve Unsubscribe
+
+Open Stripe Customer Portal from CLI:
+
+```bash
+maestro-solo unsubscribe
+```
+
+Behavior:
+
+1. CLI reads local purchase context from `~/.maestro-solo/license.json`.
+2. Billing creates a Stripe portal session (`/v1/solo/portal-sessions`).
+3. Browser opens Stripe portal where user can cancel/manage subscription.
 
 ## Validate Runtime Tier
 

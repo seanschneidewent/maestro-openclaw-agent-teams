@@ -43,7 +43,7 @@ maestro-solo-billing-service --port 8081
 5. Complete purchase:
 
 ```bash
-maestro-solo purchase --email you@example.com --plan solo_test_monthly
+maestro-solo purchase --email you@example.com --plan solo_test_monthly --mode test --billing-url http://127.0.0.1:8081
 ```
 
 6. Verify Pro entitlement after purchase:
@@ -53,19 +53,25 @@ maestro-solo status --remote-verify
 maestro-solo entitlements status
 ```
 
-7. Start runtime:
+7. Verify unsubscribe portal opens:
+
+```bash
+maestro-solo unsubscribe
+```
+
+8. Start runtime:
 
 ```bash
 maestro-solo up --tui
 ```
 
-8. Ingest plans:
+9. Ingest plans:
 
 ```bash
 maestro-solo ingest /abs/path/to/plans
 ```
 
-9. Open workspace:
+10. Open workspace:
 
 `http://localhost:3000/workspace`
 
@@ -75,4 +81,5 @@ maestro-solo ingest /abs/path/to/plans
 2. Core install runs without source checkout and without editable installs.
 3. `maestro-solo up --tui` starts in Core mode before purchase.
 4. Purchase transitions to licensed and status resolves Pro tier.
-5. Workspace search/ingest flow works with no Fleet UI elements.
+5. `maestro-solo unsubscribe` opens Stripe Customer Portal for self-serve cancellation.
+6. Workspace search/ingest flow works with no Fleet UI elements.

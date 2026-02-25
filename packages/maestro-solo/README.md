@@ -13,6 +13,7 @@ pip install -e /absolute/path/to/repo/packages/maestro-engine -e /absolute/path/
 - `maestro-solo setup`
 - `maestro-solo setup --quick`
 - `maestro-solo purchase`
+- `maestro-solo unsubscribe`
 - `maestro-solo status`
 - `maestro-solo entitlements status`
 - `maestro-solo entitlements activate --token <token>`

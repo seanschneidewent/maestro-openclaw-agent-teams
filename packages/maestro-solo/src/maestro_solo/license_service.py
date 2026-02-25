@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from .entitlements import issue_entitlement_token, plan_tier
 from .solo_license import issue_solo_license, verify_solo_license_key
+from .state_store import load_service_state, save_service_state
 from maestro_engine.utils import load_json, save_json
 
 
@@ -22,8 +23,14 @@ def _state_path() -> Path:
     return base / "license-service.json"
 
 
+def _state_default() -> dict[str, Any]:
+    return {"licenses_by_purchase": {}}
+
+
 def _load_state() -> dict[str, Any]:
-    payload = load_json(_state_path(), default={})
+    payload = load_service_state("license", _state_default())
+    if payload is None:
+        payload = load_json(_state_path(), default={})
     if not isinstance(payload, dict):
         payload = {}
     by_purchase = payload.get("licenses_by_purchase")
@@ -33,6 +40,8 @@ def _load_state() -> dict[str, Any]:
 
 
 def _save_state(state: dict[str, Any]):
+    if save_service_state("license", state):
+        return
     save_json(_state_path(), state)
 
 

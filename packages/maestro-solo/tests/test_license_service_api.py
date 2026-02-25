@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import base64
+import sqlite3
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat, PublicFormat
 from fastapi.testclient import TestClient
+import pytest
 
 from maestro_solo import license_service
 from maestro_solo.entitlements import verify_entitlement_token
+
+
+@pytest.fixture(autouse=True)
+def _clear_database_url(monkeypatch):
+    monkeypatch.delenv("MAESTRO_DATABASE_URL", raising=False)
 
 
 def test_issue_and_verify_solo_license_api(tmp_path, monkeypatch):
@@ -41,6 +48,38 @@ def test_issue_and_verify_solo_license_api(tmp_path, monkeypatch):
     verify_data = verify.json()
     assert verify_data["valid"] is True
     assert verify_data["plan_id"] == "solo_test_monthly"
+
+
+def test_license_state_uses_sqlite_database_when_configured(tmp_path, monkeypatch):
+    db_path = tmp_path / "license.sqlite3"
+    solo_home = tmp_path / "solo-home"
+    monkeypatch.setenv("MAESTRO_SOLO_HOME", str(solo_home))
+    monkeypatch.setenv("MAESTRO_DATABASE_URL", f"sqlite:///{db_path}")
+
+    license_service._save_state(
+        {
+            "licenses_by_purchase": {
+                "pur_sqlite_001": {
+                    "license_key": "solo_abc",
+                    "plan_id": "solo_monthly",
+                }
+            }
+        }
+    )
+
+    loaded = license_service._load_state()
+    assert loaded["licenses_by_purchase"]["pur_sqlite_001"]["license_key"] == "solo_abc"
+    assert not (solo_home / "license-service.json").exists()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT service_name FROM maestro_service_state WHERE service_name = ?",
+            ("license",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
 
 
 def test_issue_license_includes_entitlement_token_when_key_configured(tmp_path, monkeypatch):

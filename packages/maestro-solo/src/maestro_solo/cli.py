@@ -37,9 +37,27 @@ from .migration import migrate_legacy, print_migration_report
 from .solo_license import load_local_license, save_local_license, verify_solo_license_key
 
 
-DEFAULT_BILLING_URL = "http://127.0.0.1:8081"
-DEFAULT_LICENSE_URL = "http://127.0.0.1:8082"
-DEFAULT_PLAN = "solo_test_monthly"
+DEFAULT_BILLING_URL = (
+    os.environ.get("MAESTRO_BILLING_URL_DEFAULT", "https://maestro-billing-service-production.up.railway.app")
+    .strip()
+    .rstrip("/")
+)
+if not DEFAULT_BILLING_URL:
+    DEFAULT_BILLING_URL = "https://maestro-billing-service-production.up.railway.app"
+
+DEFAULT_LICENSE_URL = (
+    os.environ.get("MAESTRO_LICENSE_URL_DEFAULT", "https://maestro-license-service-production.up.railway.app")
+    .strip()
+    .rstrip("/")
+)
+if not DEFAULT_LICENSE_URL:
+    DEFAULT_LICENSE_URL = "https://maestro-license-service-production.up.railway.app"
+DEFAULT_PLAN = "solo_monthly"
+DEFAULT_PURCHASE_MODE = (
+    os.environ.get("MAESTRO_SOLO_PURCHASE_MODE", "live").strip().lower() or "live"
+)
+if DEFAULT_PURCHASE_MODE not in {"test", "live"}:
+    DEFAULT_PURCHASE_MODE = "live"
 CYAN = "cyan"
 BRIGHT_CYAN = "bright_cyan"
 DIM = "dim"
@@ -134,6 +152,21 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_purchase_payload(args: argparse.Namespace, *, email: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "email": email,
+        "plan_id": args.plan.strip(),
+        "mode": _clean_text(args.mode) or "test",
+    }
+    success_url = _clean_text(getattr(args, "success_url", ""))
+    if success_url:
+        payload["success_url"] = success_url
+    cancel_url = _clean_text(getattr(args, "cancel_url", ""))
+    if cancel_url:
+        payload["cancel_url"] = cancel_url
+    return payload
+
+
 def _cmd_purchase(args: argparse.Namespace) -> int:
     email = str(args.email or "").strip()
     if not email:
@@ -147,13 +180,7 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
         return 1
 
     billing = _billing_url(args.billing_url)
-    payload = {
-        "email": email,
-        "plan_id": args.plan.strip(),
-        "mode": str(args.mode).strip() or "test",
-        "success_url": str(args.success_url or "").strip() or "http://localhost/success",
-        "cancel_url": str(args.cancel_url or "").strip() or "http://localhost/cancel",
-    }
+    payload = _build_purchase_payload(args, email=email)
 
     console.print(Panel(
         "\n".join([
@@ -271,6 +298,64 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
         title="[bold yellow]Purchase Pending[/]",
     ))
     return 1
+
+
+def _cmd_unsubscribe(args: argparse.Namespace) -> int:
+    billing = _billing_url(args.billing_url)
+    local = load_local_license()
+    purchase_id = _clean_text(args.purchase_id) or _clean_text(local.get("purchase_id"))
+    email = _clean_text(args.email) or _clean_text(local.get("email"))
+    return_url = _clean_text(args.return_url)
+
+    if not purchase_id and not email:
+        console.print("[red]No purchase context found. Provide --purchase-id or --email.[/]")
+        return 1
+
+    payload: dict[str, Any] = {}
+    if purchase_id:
+        payload["purchase_id"] = purchase_id
+    if email:
+        payload["email"] = email
+    if return_url:
+        payload["return_url"] = return_url
+
+    console.print(Panel(
+        "\n".join([
+            f"Billing API: {billing}",
+            f"purchase_id: {purchase_id or '(lookup by email)'}",
+            f"email: {email or '(not provided)'}",
+        ]),
+        border_style=CYAN,
+        title=f"[bold {BRIGHT_CYAN}]Manage Subscription[/]",
+    ))
+
+    ok, created = _http_post_json(f"{billing}/v1/solo/portal-sessions", payload, timeout=20)
+    if not ok:
+        console.print("[red]Failed to create billing portal session.[/]")
+        _print_json(created)
+        return 1
+
+    portal_url = _clean_text(created.get("portal_url"))
+    if not portal_url:
+        console.print("[red]Billing portal response missing portal_url.[/]")
+        _print_json(created)
+        return 1
+
+    console.print(Panel(
+        "\n".join([
+            "Stripe customer portal ready.",
+            f"portal_url: {portal_url}",
+            "Use this page to cancel or manage your subscription.",
+        ]),
+        border_style="green",
+        title="[bold green]Portal Session Created[/]",
+    ))
+    if not args.no_open:
+        _open_url(portal_url)
+        console.print(f"[{DIM}]Opened billing portal in browser.[/]")
+    else:
+        console.print(f"[{DIM}]Portal auto-open disabled (--no-open).[/]")
+    return 0
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -522,14 +607,26 @@ def build_parser() -> argparse.ArgumentParser:
     purchase = sub.add_parser("purchase", help="Create Solo purchase and wait for license provisioning")
     purchase.add_argument("--email", default="")
     purchase.add_argument("--plan", default=DEFAULT_PLAN)
-    purchase.add_argument("--mode", default="test", choices=["test", "live"], help=argparse.SUPPRESS)
-    purchase.add_argument("--billing-url", default=None, help=argparse.SUPPRESS)
+    purchase.add_argument(
+        "--mode",
+        default=DEFAULT_PURCHASE_MODE,
+        choices=["test", "live"],
+        help="Checkout mode: live uses Stripe, test uses local dev checkout",
+    )
+    purchase.add_argument("--billing-url", default=None, help="Override billing API base URL")
     purchase.add_argument("--success-url", default=None, help=argparse.SUPPRESS)
     purchase.add_argument("--cancel-url", default=None, help=argparse.SUPPRESS)
     purchase.add_argument("--poll-seconds", type=int, default=3, help=argparse.SUPPRESS)
     purchase.add_argument("--timeout-seconds", type=int, default=300, help=argparse.SUPPRESS)
     purchase.add_argument("--no-open", action="store_true", help=argparse.SUPPRESS)
     purchase.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
+
+    unsubscribe = sub.add_parser("unsubscribe", help="Open Stripe billing portal to cancel/manage subscription")
+    unsubscribe.add_argument("--purchase-id", default="", help="Override purchase ID (otherwise inferred from local license)")
+    unsubscribe.add_argument("--email", default="", help="Fallback email lookup if purchase ID is unavailable")
+    unsubscribe.add_argument("--billing-url", default=None, help="Override billing API base URL")
+    unsubscribe.add_argument("--return-url", default="", help="Optional return URL after leaving Stripe portal")
+    unsubscribe.add_argument("--no-open", action="store_true", help=argparse.SUPPRESS)
 
     status = sub.add_parser("status", help="Show runtime tier, capabilities, and license details")
     status.add_argument("--json", action="store_true")
@@ -591,6 +688,7 @@ def main(argv: list[str] | None = None):
     handlers = {
         "setup": _cmd_setup,
         "purchase": _cmd_purchase,
+        "unsubscribe": _cmd_unsubscribe,
         "status": _cmd_status,
         "entitlements": _cmd_entitlements,
         "ingest": _cmd_ingest,

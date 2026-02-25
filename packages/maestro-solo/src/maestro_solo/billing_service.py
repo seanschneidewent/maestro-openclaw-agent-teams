@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import hashlib
 import hmac
 import json
@@ -17,10 +18,11 @@ from typing import Any
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from maestro_engine.utils import load_json, save_json
+from .state_store import load_service_state, save_service_state
 
 
 PURCHASE_PENDING = "pending"
@@ -30,6 +32,7 @@ PURCHASE_FAILED = "failed"
 PURCHASE_CANCELED = "canceled"
 
 STRIPE_ENDPOINT = "https://api.stripe.com/v1/checkout/sessions"
+STRIPE_BILLING_PORTAL_ENDPOINT = "https://api.stripe.com/v1/billing_portal/sessions"
 STRIPE_WEBHOOK_TOLERANCE_SECONDS_DEFAULT = 300
 
 
@@ -52,8 +55,14 @@ def _state_path() -> Path:
     return base / "billing-service.json"
 
 
+def _state_default() -> dict[str, Any]:
+    return {"purchases": {}, "processed_events": {}}
+
+
 def _load_state() -> dict[str, Any]:
-    payload = load_json(_state_path(), default={})
+    payload = load_service_state("billing", _state_default())
+    if payload is None:
+        payload = load_json(_state_path(), default={})
     if not isinstance(payload, dict):
         payload = {}
     purchases = payload.get("purchases")
@@ -66,6 +75,8 @@ def _load_state() -> dict[str, Any]:
 
 
 def _save_state(state: dict[str, Any]):
+    if save_service_state("billing", state):
+        return
     save_json(_state_path(), state)
 
 
@@ -145,6 +156,17 @@ def _stripe_webhook_tolerance_seconds() -> int:
         return STRIPE_WEBHOOK_TOLERANCE_SECONDS_DEFAULT
 
 
+def _request_base_url(raw_request: Request) -> str:
+    forwarded_proto = _clean_text(raw_request.headers.get("x-forwarded-proto"))
+    forwarded_host = _clean_text(raw_request.headers.get("x-forwarded-host"))
+    if forwarded_proto and forwarded_host:
+        proto = forwarded_proto.split(",")[0].strip().lower()
+        host = forwarded_host.split(",")[0].strip()
+        if proto and host:
+            return f"{proto}://{host}"
+    return str(raw_request.base_url).rstrip("/")
+
+
 def _plan_checkout_mode(plan_id: str) -> str:
     clean = _clean_text(plan_id).lower()
     if "monthly" in clean or "yearly" in clean:
@@ -170,6 +192,11 @@ def _stripe_price_id(plan_id: str, mode: str) -> str:
         if value:
             return value
     return ""
+
+
+def _stripe_billing_portal_return_url(base_url: str) -> str:
+    configured = _clean_text(os.environ.get("MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL"))
+    return configured or f"{base_url}/upgrade"
 
 
 def _create_stripe_checkout_session(
@@ -199,7 +226,6 @@ def _create_stripe_checkout_session(
         "success_url": success_url,
         "cancel_url": cancel_url,
         "client_reference_id": purchase_id,
-        "customer_email": email,
         "metadata[purchase_id]": purchase_id,
         "metadata[plan_id]": plan_id,
         "metadata[email]": email,
@@ -230,6 +256,52 @@ def _create_stripe_checkout_session(
     checkout_session_id = _clean_text(data.get("id"))
     if not checkout_url or not checkout_session_id:
         return False, {"error": "stripe_missing_checkout_url", "detail": data}
+    return True, data
+
+
+def _create_stripe_billing_portal_session(
+    customer_id: str,
+    *,
+    return_url: str,
+    idempotency_key: str,
+    timeout_seconds: int = 20,
+) -> tuple[bool, dict[str, Any]]:
+    secret = _stripe_secret_key()
+    if not secret:
+        return False, {"error": "stripe_secret_key_missing"}
+
+    customer = _clean_text(customer_id)
+    if not customer:
+        return False, {"error": "stripe_customer_id_missing"}
+
+    payload = {
+        "customer": customer,
+        "return_url": _clean_text(return_url),
+    }
+    headers = {
+        "Authorization": f"Bearer {secret}",
+        "Idempotency-Key": idempotency_key,
+    }
+    try:
+        response = httpx.post(
+            STRIPE_BILLING_PORTAL_ENDPOINT,
+            data=payload,
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+    except Exception as exc:
+        return False, {"error": f"stripe_portal_unreachable: {exc}"}
+
+    try:
+        data = response.json()
+    except Exception:
+        data = {"error": response.text}
+    if response.status_code >= 300:
+        return False, {"error": f"stripe_portal_status_{response.status_code}", "detail": data}
+    if not isinstance(data, dict):
+        return False, {"error": "stripe_portal_invalid_response"}
+    if not _clean_text(data.get("url")):
+        return False, {"error": "stripe_portal_missing_url", "detail": data}
     return True, data
 
 
@@ -406,6 +478,51 @@ def _find_purchase_by_customer_id(state: dict[str, Any], customer_id: str) -> tu
         if _clean_text(purchase.get("stripe_customer_id")) == target:
             return str(purchase_id), purchase
     return None
+
+
+def _find_latest_purchase_by_email(state: dict[str, Any], email: str) -> tuple[str, dict[str, Any]] | None:
+    target = _clean_text(email).lower()
+    if not target:
+        return None
+    purchases = state.get("purchases")
+    if not isinstance(purchases, dict):
+        return None
+
+    matches: list[tuple[str, str, dict[str, Any]]] = []
+    for purchase_id, purchase in purchases.items():
+        if not isinstance(purchase, dict):
+            continue
+        purchase_email = _clean_text(purchase.get("email")).lower()
+        if purchase_email != target:
+            continue
+        created_at = _clean_text(purchase.get("created_at"))
+        matches.append((created_at, str(purchase_id), purchase))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda item: item[0], reverse=True)
+    _, purchase_id, purchase = matches[0]
+    return purchase_id, purchase
+
+
+def _resolve_portal_purchase(
+    state: dict[str, Any],
+    *,
+    purchase_id: str,
+    email: str,
+) -> tuple[str, dict[str, Any]] | None:
+    purchases = state.get("purchases")
+    if not isinstance(purchases, dict):
+        return None
+
+    normalized_purchase_id = _clean_text(purchase_id)
+    if normalized_purchase_id:
+        purchase = purchases.get(normalized_purchase_id)
+        if isinstance(purchase, dict):
+            return normalized_purchase_id, purchase
+
+    return _find_latest_purchase_by_email(state, email)
 
 
 def _handle_checkout_session_completed(state: dict[str, Any], event: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
@@ -605,6 +722,12 @@ class MarkPaidRequest(BaseModel):
     purchase_id: str = Field(..., min_length=1)
 
 
+class CreateBillingPortalSessionRequest(BaseModel):
+    purchase_id: str | None = None
+    email: str | None = None
+    return_url: str | None = None
+
+
 app = FastAPI(title="Maestro Solo Billing Service", docs_url=None, redoc_url=None)
 
 
@@ -613,11 +736,197 @@ def healthz():
     return {"ok": True}
 
 
+@app.get("/upgrade")
+def upgrade_page():
+    body = """<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Upgrade to Maestro Solo Pro</title>
+    <style>
+      :root {
+        --ink: #13212f;
+        --muted: #4a5b6a;
+        --accent: #0d9f6e;
+        --accent-strong: #0b825b;
+        --card: rgba(255, 255, 255, 0.88);
+        --bg-a: #f6efe5;
+        --bg-b: #dce9f5;
+        --line: #d3deea;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(1200px 720px at -10% -10%, #ffe4c5 0%, transparent 60%),
+          radial-gradient(800px 480px at 110% 110%, #d5ecff 0%, transparent 60%),
+          linear-gradient(150deg, var(--bg-a), var(--bg-b));
+        display: grid;
+        place-items: center;
+        padding: 20px;
+      }
+      .panel {
+        width: min(560px, 100%);
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--card);
+        box-shadow: 0 18px 48px rgba(28, 44, 60, 0.12);
+        backdrop-filter: blur(4px);
+        padding: 26px;
+      }
+      .eyebrow {
+        display: inline-block;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #0c6d92;
+        font-weight: 700;
+        margin-bottom: 8px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: clamp(28px, 4vw, 36px);
+        line-height: 1.08;
+        letter-spacing: -0.02em;
+      }
+      p {
+        margin: 0 0 16px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      form {
+        margin-top: 14px;
+        display: grid;
+        gap: 12px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 13px;
+        color: #2d4254;
+      }
+      input, select {
+        border: 1px solid #b8c6d4;
+        border-radius: 12px;
+        padding: 12px 13px;
+        font-size: 15px;
+        background: #fff;
+        color: #142536;
+      }
+      button {
+        margin-top: 4px;
+        border: 0;
+        border-radius: 12px;
+        padding: 13px 16px;
+        font-size: 15px;
+        font-weight: 700;
+        color: #fff;
+        background: linear-gradient(135deg, var(--accent), #1ca47b);
+        cursor: pointer;
+      }
+      button:hover { background: linear-gradient(135deg, var(--accent-strong), #198f6b); }
+      button[disabled] { opacity: 0.7; cursor: default; }
+      .note {
+        margin-top: 12px;
+        font-size: 12px;
+        color: #486071;
+      }
+      .error {
+        display: none;
+        margin-top: 10px;
+        padding: 11px 12px;
+        border-radius: 10px;
+        border: 1px solid #f4b2b2;
+        background: #fff4f4;
+        color: #952626;
+        font-size: 13px;
+      }
+      .error.show { display: block; }
+    </style>
+  </head>
+  <body>
+    <main class="panel">
+      <div class="eyebrow">Maestro Solo Pro</div>
+      <h1>Upgrade to Pro</h1>
+      <p>Enter your email, continue to secure Stripe checkout, and Pro capabilities are provisioned automatically after payment.</p>
+      <form id="upgrade-form">
+        <label>
+          Email
+          <input id="email" type="email" required placeholder="you@example.com" />
+        </label>
+        <label>
+          Plan
+          <select id="plan">
+            <option value="solo_monthly" selected>Solo Pro Monthly</option>
+          </select>
+        </label>
+        <button id="submit" type="submit">Continue to Secure Checkout</button>
+      </form>
+      <div id="error" class="error"></div>
+      <div class="note">Payment is processed by Stripe. Your card details are never entered on this page.</div>
+    </main>
+    <script>
+      const form = document.getElementById("upgrade-form");
+      const email = document.getElementById("email");
+      const plan = document.getElementById("plan");
+      const submit = document.getElementById("submit");
+      const error = document.getElementById("error");
+
+      function showError(message) {
+        error.textContent = message || "Unable to start checkout.";
+        error.classList.add("show");
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        error.classList.remove("show");
+        submit.disabled = true;
+        submit.textContent = "Starting checkout...";
+
+        try {
+          const res = await fetch("/v1/solo/purchases", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              email: email.value.trim(),
+              plan_id: plan.value,
+              mode: "live"
+            })
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            throw new Error((data && data.detail) || "purchase_create_failed");
+          }
+          if (!data.checkout_url) {
+            throw new Error("missing_checkout_url");
+          }
+          window.location.href = data.checkout_url;
+        } catch (err) {
+          showError(String(err.message || err));
+          submit.disabled = false;
+          submit.textContent = "Continue to Secure Checkout";
+        }
+      });
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(body)
+
+
 @app.post("/v1/solo/purchases")
 def create_purchase(request: CreatePurchaseRequest, raw_request: Request):
     purchase_id = _purchase_id()
-    base_url = str(raw_request.base_url).rstrip("/")
-    mode = _clean_text(request.mode) or "test"
+    base_url = _request_base_url(raw_request)
+    mode = (_clean_text(request.mode) or "test").lower()
+    if mode not in {"test", "live"}:
+        mode = "test"
+    if mode == "live" and not _stripe_secret_key():
+        raise HTTPException(status_code=503, detail="live_checkout_unavailable:stripe_secret_key_missing")
+
     purchase = {
         "purchase_id": purchase_id,
         "status": PURCHASE_PENDING,
@@ -639,7 +948,7 @@ def create_purchase(request: CreatePurchaseRequest, raw_request: Request):
         "updated_at": _now_iso(),
     }
 
-    if _stripe_secret_key():
+    if mode == "live":
         ok, stripe_session = _create_stripe_checkout_session(purchase, base_url=base_url)
         if not ok:
             raise HTTPException(status_code=502, detail=str(stripe_session.get("error", "stripe_checkout_failed")))
@@ -675,6 +984,51 @@ def get_purchase(purchase_id: str):
     if not isinstance(purchase, dict):
         raise HTTPException(status_code=404, detail="purchase not found")
     return _purchase_response(purchase)
+
+
+@app.post("/v1/solo/portal-sessions")
+def create_portal_session(request: CreateBillingPortalSessionRequest, raw_request: Request):
+    state = _load_state()
+    resolved = _resolve_portal_purchase(
+        state,
+        purchase_id=_clean_text(request.purchase_id),
+        email=_clean_text(request.email),
+    )
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="purchase not found for portal session")
+
+    purchase_id, purchase = resolved
+    provider = _clean_text(purchase.get("provider")).lower()
+    if provider != "stripe":
+        raise HTTPException(status_code=400, detail="billing_portal_available_for_stripe_only")
+
+    customer_id = _clean_text(purchase.get("stripe_customer_id"))
+    if not customer_id:
+        raise HTTPException(status_code=409, detail="stripe_customer_missing_for_purchase")
+
+    base_url = _request_base_url(raw_request)
+    return_url = _clean_text(request.return_url) or _stripe_billing_portal_return_url(base_url)
+    idempotency_key = f"portal_{purchase_id}"
+    ok, session = _create_stripe_billing_portal_session(
+        customer_id,
+        return_url=return_url,
+        idempotency_key=idempotency_key,
+    )
+    if not ok:
+        raise HTTPException(status_code=502, detail=str(session.get("error", "stripe_portal_session_failed")))
+
+    portal_url = _clean_text(session.get("url"))
+    if not portal_url:
+        raise HTTPException(status_code=502, detail="stripe_portal_missing_url")
+
+    purchase["updated_at"] = _now_iso()
+    state["purchases"][purchase_id] = purchase
+    _save_state(state)
+    return {
+        "purchase_id": purchase_id,
+        "portal_url": portal_url,
+        "return_url": return_url,
+    }
 
 
 @app.post("/v1/solo/dev/mark-paid")
@@ -714,9 +1068,124 @@ async def stripe_webhook(raw_request: Request):
     return {"ok": True, **result}
 
 
+@app.get("/checkout/success")
+def checkout_success_page(raw_request: Request):
+    purchase_id = _clean_text(raw_request.query_params.get("purchase_id"))
+    purchase_safe = html.escape(purchase_id)
+    purchase_json = json.dumps(purchase_id)
+    body = f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Payment Received</title>
+    <style>
+      body {{ font-family: "Avenir Next", "Segoe UI", sans-serif; margin: 0; padding: 22px; background: #f4f7fb; color: #172532; }}
+      .box {{ max-width: 680px; margin: 0 auto; background: #fff; border: 1px solid #d8e2ec; border-radius: 12px; padding: 18px; }}
+      .pill {{ display: inline-block; margin-bottom: 8px; padding: 6px 10px; border-radius: 999px; background: #e7f7ee; color: #1d6a3f; font-size: 12px; font-weight: 700; }}
+      h2 {{ margin-top: 0; }}
+      code {{ background: #f1f5f8; border-radius: 6px; padding: 2px 6px; }}
+      .muted {{ color: #4c6073; }}
+      .state {{ margin-top: 12px; padding: 10px 12px; border-radius: 8px; background: #edf3fb; border: 1px solid #d3e0ef; }}
+      .state.ok {{ background: #e9f7ee; border-color: #c4e9d0; color: #175e37; }}
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <div class="pill">Success. You can close this tab.</div>
+      <h2>Payment received</h2>
+      <p class="muted">Stripe checkout completed. We are confirming your license provisioning.</p>
+      <p>Purchase ID: <code>{purchase_safe or "unknown"}</code></p>
+      <div id="status" class="state">Checking purchase status...</div>
+      <p class="muted">If you started this from the terminal, return to it and wait for <code>status: licensed</code>.</p>
+    </div>
+    <script>
+      const purchaseId = {purchase_json};
+      const statusEl = document.getElementById("status");
+
+      async function poll() {{
+        if (!purchaseId) {{
+          statusEl.textContent = "Payment completed. You can close this tab.";
+          statusEl.classList.add("ok");
+          return;
+        }}
+        try {{
+          const res = await fetch("/v1/solo/purchases/" + encodeURIComponent(purchaseId));
+          const data = await res.json();
+          const state = data.status || "unknown";
+          if (state === "licensed") {{
+            statusEl.textContent = "Success. License is active. You can close this tab.";
+            statusEl.classList.add("ok");
+            return;
+          }}
+          if (state === "failed" || state === "canceled") {{
+            statusEl.textContent = "Checkout completed but license status is " + state + ". Return to terminal for details.";
+            return;
+          }}
+          statusEl.textContent = "Current status: " + state;
+          if (state !== "failed" && state !== "canceled") {{
+            setTimeout(poll, 2500);
+          }}
+        }} catch (err) {{
+          statusEl.textContent = "Payment completed. Status lookup failed; return to terminal to confirm license.";
+        }}
+      }}
+      poll();
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(body)
+
+
+@app.get("/checkout/cancel")
+def checkout_cancel_page(raw_request: Request):
+    purchase_id = _clean_text(raw_request.query_params.get("purchase_id"))
+    purchase_safe = html.escape(purchase_id)
+    body = f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Checkout Canceled</title>
+    <style>
+      body {{ font-family: "Avenir Next", "Segoe UI", sans-serif; margin: 0; padding: 22px; background: #f7f8fa; color: #172532; }}
+      .box {{ max-width: 620px; margin: 0 auto; background: #fff; border: 1px solid #dae1e8; border-radius: 12px; padding: 18px; }}
+      h2 {{ margin-top: 0; }}
+      code {{ background: #f2f5f7; border-radius: 6px; padding: 2px 6px; }}
+      .muted {{ color: #4d6274; }}
+    </style>
+  </head>
+  <body>
+    <div class="box">
+      <h2>Checkout canceled</h2>
+      <p class="muted">No charge was completed. You can restart anytime from the upgrade page.</p>
+      <p>Purchase ID: <code>{purchase_safe or "unknown"}</code></p>
+      <p><a href="/upgrade">Return to Upgrade to Pro</a></p>
+    </div>
+  </body>
+</html>"""
+    return HTMLResponse(body)
+
+
 @app.get("/checkout/{purchase_id}")
 def checkout_page(purchase_id: str):
-    purchase = str(purchase_id).strip()
+    purchase = _clean_text(purchase_id)
+    purchase_safe = html.escape(purchase)
+    purchase_json = json.dumps(purchase)
+    state = _load_state()
+    stored = state.get("purchases", {}).get(purchase)
+    if isinstance(stored, dict):
+        provider = _clean_text(stored.get("provider")).lower()
+        checkout_url = _clean_text(stored.get("checkout_url"))
+        mode = _clean_text(stored.get("mode")).lower() or "test"
+        if provider == "stripe" and checkout_url:
+            return RedirectResponse(url=checkout_url, status_code=307)
+        if mode == "live":
+            return HTMLResponse(
+                "<h3>Checkout unavailable</h3><p>Live checkout is not configured for this purchase.</p>",
+                status_code=503,
+            )
+
     body = f"""<!doctype html>
 <html>
   <head>
@@ -732,17 +1201,18 @@ def checkout_page(purchase_id: str):
   <body>
     <div class="card">
       <h2>Maestro Solo Checkout (Test Mode)</h2>
-      <p>Purchase id: <code>{purchase}</code></p>
+      <p>Purchase id: <code>{purchase_safe}</code></p>
       <p>This is a development checkout page. Click the button to simulate payment completion.</p>
       <button onclick="markPaid()">Mark Paid + Provision License</button>
       <pre id="out"></pre>
     </div>
     <script>
+      const purchaseId = {purchase_json};
       async function markPaid() {{
         const res = await fetch('/v1/solo/dev/mark-paid', {{
           method: 'POST',
           headers: {{ 'content-type': 'application/json' }},
-          body: JSON.stringify({{ purchase_id: '{purchase}' }})
+          body: JSON.stringify({{ purchase_id: purchaseId }})
         }});
         const data = await res.json();
         document.getElementById('out').textContent = JSON.stringify(data, null, 2);

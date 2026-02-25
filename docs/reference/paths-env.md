@@ -47,6 +47,8 @@ Fleet transition state path: `~/.maestro/install.json`
 - `MAESTRO_BILLING_URL`
 - `MAESTRO_LICENSE_URL`
 - `MAESTRO_INTERNAL_TOKEN` (service-to-service auth for local billing/license test flow)
+- `MAESTRO_DATABASE_URL` (shared persistent state DB for billing/license services)
+- `MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL` (optional Stripe Customer Portal return URL)
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 - `ANTHROPIC_API_KEY`
