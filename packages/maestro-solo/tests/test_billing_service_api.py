@@ -362,6 +362,28 @@ def test_create_portal_session_falls_back_to_latest_email_purchase(tmp_path, mon
     assert payload["portal_url"] == "https://billing.stripe.test/session/bps_test_002"
 
 
+def test_create_portal_session_can_lookup_customer_by_email_without_purchase_record(monkeypatch):
+    def _fake_lookup(email: str, *, timeout_seconds: int = 20):
+        assert email == "lookup@example.com"
+        return True, {"id": "cus_lookup_001"}
+
+    def _fake_create_portal(customer_id: str, *, return_url: str, idempotency_key: str, timeout_seconds: int = 20):
+        assert customer_id == "cus_lookup_001"
+        assert idempotency_key == "portal_cus_lookup_001"
+        assert return_url == "http://testserver/upgrade"
+        return True, {"id": "bps_test_003", "url": "https://billing.stripe.test/session/bps_test_003"}
+
+    monkeypatch.setattr(billing_service, "_find_stripe_customer_by_email", _fake_lookup)
+    monkeypatch.setattr(billing_service, "_create_stripe_billing_portal_session", _fake_create_portal)
+
+    client = TestClient(billing_service.app)
+    portal = client.post("/v1/solo/portal-sessions", json={"email": "lookup@example.com"})
+    assert portal.status_code == 200
+    payload = portal.json()
+    assert payload["purchase_id"] == ""
+    assert payload["portal_url"] == "https://billing.stripe.test/session/bps_test_003"
+
+
 def test_stripe_webhook_checkout_session_completed_is_idempotent(tmp_path, monkeypatch):
     monkeypatch.setenv("MAESTRO_SOLO_HOME", str(tmp_path))
     monkeypatch.setenv("MAESTRO_STRIPE_WEBHOOK_SECRET", "whsec_test_123")

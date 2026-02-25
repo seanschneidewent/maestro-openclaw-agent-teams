@@ -33,6 +33,7 @@ PURCHASE_CANCELED = "canceled"
 
 STRIPE_ENDPOINT = "https://api.stripe.com/v1/checkout/sessions"
 STRIPE_BILLING_PORTAL_ENDPOINT = "https://api.stripe.com/v1/billing_portal/sessions"
+STRIPE_CUSTOMERS_ENDPOINT = "https://api.stripe.com/v1/customers"
 STRIPE_WEBHOOK_TOLERANCE_SECONDS_DEFAULT = 300
 
 
@@ -303,6 +304,59 @@ def _create_stripe_billing_portal_session(
     if not _clean_text(data.get("url")):
         return False, {"error": "stripe_portal_missing_url", "detail": data}
     return True, data
+
+
+def _find_stripe_customer_by_email(
+    email: str,
+    *,
+    timeout_seconds: int = 20,
+) -> tuple[bool, dict[str, Any]]:
+    secret = _stripe_secret_key()
+    if not secret:
+        return False, {"error": "stripe_secret_key_missing"}
+
+    clean_email = _clean_text(email)
+    if not clean_email:
+        return False, {"error": "email_missing"}
+
+    headers = {
+        "Authorization": f"Bearer {secret}",
+    }
+    params = {
+        "email": clean_email,
+        "limit": "1",
+    }
+    try:
+        response = httpx.get(
+            STRIPE_CUSTOMERS_ENDPOINT,
+            params=params,
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+    except Exception as exc:
+        return False, {"error": f"stripe_customer_lookup_unreachable: {exc}"}
+
+    try:
+        data = response.json()
+    except Exception:
+        data = {"error": response.text}
+    if response.status_code >= 300:
+        return False, {"error": f"stripe_customer_lookup_status_{response.status_code}", "detail": data}
+    if not isinstance(data, dict):
+        return False, {"error": "stripe_customer_lookup_invalid_response"}
+
+    records = data.get("data")
+    if not isinstance(records, list) or not records:
+        return False, {"error": "stripe_customer_not_found"}
+
+    customer = records[0]
+    if not isinstance(customer, dict):
+        return False, {"error": "stripe_customer_invalid_record"}
+
+    customer_id = _clean_text(customer.get("id"))
+    if not customer_id:
+        return False, {"error": "stripe_customer_missing_id"}
+    return True, customer
 
 
 def _verify_stripe_signature(payload: bytes, signature_header: str) -> tuple[bool, dict[str, Any] | str]:
@@ -989,26 +1043,38 @@ def get_purchase(purchase_id: str):
 @app.post("/v1/solo/portal-sessions")
 def create_portal_session(request: CreateBillingPortalSessionRequest, raw_request: Request):
     state = _load_state()
+    lookup_email = _clean_text(request.email)
     resolved = _resolve_portal_purchase(
         state,
         purchase_id=_clean_text(request.purchase_id),
-        email=_clean_text(request.email),
+        email=lookup_email,
     )
-    if resolved is None:
-        raise HTTPException(status_code=404, detail="purchase not found for portal session")
+    purchase_id = ""
+    purchase: dict[str, Any] | None = None
+    provider = ""
+    customer_id = ""
+    if resolved is not None:
+        purchase_id, purchase = resolved
+        provider = _clean_text(purchase.get("provider")).lower()
+        customer_id = _clean_text(purchase.get("stripe_customer_id"))
+        if not lookup_email:
+            lookup_email = _clean_text(purchase.get("email"))
 
-    purchase_id, purchase = resolved
-    provider = _clean_text(purchase.get("provider")).lower()
-    if provider != "stripe":
-        raise HTTPException(status_code=400, detail="billing_portal_available_for_stripe_only")
+    if not customer_id and lookup_email:
+        found, customer = _find_stripe_customer_by_email(lookup_email)
+        if found:
+            customer_id = _clean_text(customer.get("id"))
 
-    customer_id = _clean_text(purchase.get("stripe_customer_id"))
     if not customer_id:
+        if resolved is None:
+            raise HTTPException(status_code=404, detail="purchase not found for portal session")
+        if provider and provider != "stripe":
+            raise HTTPException(status_code=400, detail="billing_portal_available_for_stripe_only")
         raise HTTPException(status_code=409, detail="stripe_customer_missing_for_purchase")
 
     base_url = _request_base_url(raw_request)
     return_url = _clean_text(request.return_url) or _stripe_billing_portal_return_url(base_url)
-    idempotency_key = f"portal_{purchase_id}"
+    idempotency_key = f"portal_{purchase_id or customer_id}"
     ok, session = _create_stripe_billing_portal_session(
         customer_id,
         return_url=return_url,
@@ -1021,9 +1087,12 @@ def create_portal_session(request: CreateBillingPortalSessionRequest, raw_reques
     if not portal_url:
         raise HTTPException(status_code=502, detail="stripe_portal_missing_url")
 
-    purchase["updated_at"] = _now_iso()
-    state["purchases"][purchase_id] = purchase
-    _save_state(state)
+    if purchase_id and purchase is not None:
+        purchase["updated_at"] = _now_iso()
+        if not _clean_text(purchase.get("stripe_customer_id")):
+            purchase["stripe_customer_id"] = customer_id
+        state["purchases"][purchase_id] = purchase
+        _save_state(state)
     return {
         "purchase_id": purchase_id,
         "portal_url": portal_url,
