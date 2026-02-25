@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { FolderOpen, Layers, Wifi, WifiOff, CalendarClock, MessageSquare } from 'lucide-react'
+import { FolderOpen, Layers, Wifi, WifiOff, CalendarClock, NotebookPen } from 'lucide-react'
 import { api } from './lib/api'
 import { useWebSocket } from './hooks/useWebSocket'
 import PlansPanel from './components/PlansPanel'
@@ -295,6 +295,45 @@ export default function App() {
     })
   }, [])
 
+  const openNoteSourcePage = useCallback(async (source) => {
+    const pageName = String(source?.page_name || '').trim()
+    if (!pageName) return
+
+    const fallbackWorkspace = activeWorkspace || (workspaces.length > 0 ? String(workspaces[0]?.slug || '') : '')
+    const sourceWorkspace = String(source?.workspace_slug || '').trim()
+    const targetWorkspace = sourceWorkspace || fallbackWorkspace
+
+    let selectedPointers = null
+    let customHighlights = []
+
+    if (targetWorkspace) {
+      try {
+        const data = await api.getWorkspace(targetWorkspace)
+        const pages = Array.isArray(data?.pages) ? data.pages : []
+        const pageEntry = pages.find((entry) => String(entry?.page_name || '').trim() === pageName)
+        if (pageEntry) {
+          selectedPointers = Array.isArray(pageEntry.selected_pointers) ? pageEntry.selected_pointers : null
+          customHighlights = Array.isArray(pageEntry.custom_highlights) ? pageEntry.custom_highlights : []
+        }
+      } catch (error) {
+        console.error('Failed to open note source workspace page:', error)
+      }
+    }
+
+    if (targetWorkspace && targetWorkspace !== activeWorkspace) {
+      setActiveWorkspace(targetWorkspace)
+    }
+
+    setViewingPage({
+      pageName,
+      title: pageName,
+      imageUrl: api.getPageImageUrl(pageName),
+      selectedPointers,
+      customHighlights,
+    })
+    setNotesOpen(false)
+  }, [activeWorkspace, workspaces])
+
   const selectWorkspace = useCallback(
     (slug) => {
       setActiveWorkspace(slug)
@@ -388,6 +427,7 @@ export default function App() {
         open={notesOpen}
         projectName={projectName}
         payload={projectNotes}
+        onSourcePageClick={openNoteSourcePage}
       />
 
       <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white/95 backdrop-blur-sm p-1.5 shadow-xl">
@@ -422,7 +462,7 @@ export default function App() {
           title="Notes"
           aria-label="Notes"
         >
-          <MessageSquare size={16} />
+          <NotebookPen size={16} />
         </button>
         <button
           type="button"

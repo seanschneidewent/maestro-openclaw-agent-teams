@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
 import sys
 from contextlib import asynccontextmanager, suppress
@@ -12,9 +11,7 @@ from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
-from PIL import Image
 
-from maestro_engine.config import THUMBNAIL_CACHE_DIR
 from maestro_engine.server_schedule import (
     close_schedule_item_for_project as _close_schedule_item_for_project,
     schedule_items_payload as _schedule_items_payload,
@@ -29,8 +26,19 @@ from maestro_engine.server_project_store import (
 from maestro_engine.server_workspace_data import (
     get_page_bboxes as _get_page_bboxes,
     load_all_workspaces as _load_all_workspaces,
+    load_project_notes as _load_project_notes,
     load_workspace as _load_workspace,
     workspaces_dir as _workspaces_dir,
+)
+from maestro_engine.server_runtime_shared import (
+    THUMB_MAX_QUALITY,
+    THUMB_MAX_WIDTH,
+    get_generated_image_thumbnail,
+    get_page_thumbnail,
+    page_event_from_change,
+    remap_ws_clients,
+    resolve_active_project_slug,
+    resolve_project_change_context,
 )
 from maestro_engine.utils import slugify, slugify_underscore
 
@@ -70,10 +78,6 @@ server_port: int = 3000
 ws_clients: dict[str, set[WebSocket]] = {}
 project_dir_slug_index: dict[str, str] = {}
 
-THUMB_MAX_WIDTH = 2800
-THUMB_MAX_QUALITY = 95
-THUMB_CACHE_VERSION = "v2"
-
 
 def _workspace_missing_project_response() -> JSONResponse:
     return JSONResponse(
@@ -86,23 +90,7 @@ def _workspace_missing_project_response() -> JSONResponse:
 
 
 def _active_workspace_slug() -> str | None:
-    state = load_install_state()
-    active_slug = str(state.get("active_project_slug", "")).strip()
-    if active_slug and active_slug in projects:
-        return active_slug
-
-    active_name = str(state.get("active_project_name", "")).strip()
-    if active_name:
-        by_name = slugify(active_name)
-        if by_name in projects:
-            return by_name
-        for slug, proj in projects.items():
-            if str(proj.get("name", "")).strip().lower() == active_name.lower():
-                return slug
-
-    if projects:
-        return next(iter(sorted(projects.keys())))
-    return None
+    return resolve_active_project_slug(projects, load_install_state(), slugify)
 
 
 def load_all_projects():
@@ -110,7 +98,7 @@ def load_all_projects():
     global projects, ws_clients, project_dir_slug_index
     existing_clients = ws_clients
     projects, project_dir_slug_index = load_projects_from_store(store_path)
-    ws_clients = {slug: existing_clients.get(slug, set()) for slug in projects.keys()}
+    ws_clients = remap_ws_clients(existing_clients, projects)
 
     for slug, proj in projects.items():
         page_count = len(proj.get("pages", {}))
@@ -148,55 +136,51 @@ async def watch_knowledge_store():
         for _, path_str in changes:
             path = Path(path_str)
 
-            try:
-                rel_parts = path.relative_to(store_path).parts
-            except ValueError:
+            slug, project_rel_parts = resolve_project_change_context(
+                path=path,
+                projects=projects,
+                store_path=store_path,
+                project_dir_slug_index=project_dir_slug_index,
+                slugify_fn=slugify,
+            )
+            if not slug:
                 continue
-
-            if len(rel_parts) < 2:
-                continue
-
-            project_dir_name = rel_parts[0]
-            slug = project_dir_slug_index.get(project_dir_name, slugify(project_dir_name))
             proj = projects.get(slug)
             if not proj:
                 continue
 
             # Workspace mutations should show up live in the workspace list/details.
-            if len(rel_parts) >= 3 and rel_parts[1] == "workspaces":
-                ws_slug = rel_parts[2] if len(rel_parts) > 2 else None
+            if project_rel_parts and project_rel_parts[0] == "workspaces":
+                ws_slug = project_rel_parts[1] if len(project_rel_parts) > 1 else None
                 await broadcast(slug, {"type": "workspace_updated", "slug": ws_slug})
                 continue
 
             # Schedule file changes should live-refresh schedule UI.
-            if rel_parts[1] == "schedule":
+            if project_rel_parts and project_rel_parts[0] == "schedule":
                 await broadcast(slug, {"type": "schedule_updated"})
+                continue
+
+            # Project-level note changes should live-refresh notes UI.
+            if project_rel_parts and project_rel_parts[0] == "notes":
+                await broadcast(slug, {"type": "project_notes_updated"})
                 continue
 
             if path.suffix not in (".json", ".png"):
                 continue
 
-            if len(rel_parts) < 3 or rel_parts[1] != "pages":
+            if len(project_rel_parts) < 2 or project_rel_parts[0] != "pages":
                 # Unknown but relevant project-level JSON/PNG mutation.
                 await broadcast(slug, {"type": "reload"})
                 continue
 
-            pg_name = rel_parts[2]
-            pg_dir = store_path / rel_parts[0] / "pages" / pg_name
+            pg_name = project_rel_parts[1]
+            pg_dir = Path(str(proj.get("path", ""))) / "pages" / pg_name
             if not pg_dir.is_dir():
                 await broadcast(slug, {"type": "reload"})
                 continue
 
             load_project_page(proj, pg_dir)
-            if path.name == "pass1.json":
-                event = {"type": "page_added", "page": pg_name}
-            elif path.name == "pass2.json" and len(rel_parts) >= 5:
-                event = {"type": "region_complete", "page": pg_name, "region": rel_parts[4]}
-            elif path.name == "page.png":
-                event = {"type": "page_image_ready", "page": pg_name}
-            else:
-                event = {"type": "page_updated", "page": pg_name}
-            await broadcast(slug, event)
+            await broadcast(slug, page_event_from_change(path.name, project_rel_parts, pg_name))
 
 
 async def broadcast(slug: str, event: dict):
@@ -211,47 +195,6 @@ async def broadcast(slug: str, event: dict):
         except Exception:
             disconnected.add(ws)
     clients -= disconnected
-
-
-def get_thumbnail(page_dir: Path, width: int = 800, quality: int = 80) -> bytes | None:
-    png_path = page_dir / "page.png"
-    if not png_path.exists():
-        return None
-
-    target_width = max(200, min(int(width), THUMB_MAX_WIDTH))
-    target_quality = max(40, min(int(quality), THUMB_MAX_QUALITY))
-    cache_dir = page_dir / THUMBNAIL_CACHE_DIR
-    cache_key = f"thumb_{THUMB_CACHE_VERSION}_{target_width}q{target_quality}.jpg"
-    cache_path = cache_dir / cache_key
-
-    if cache_path.exists() and cache_path.stat().st_mtime >= png_path.stat().st_mtime:
-        return cache_path.read_bytes()
-
-    try:
-        img = Image.open(png_path)
-        render_width = min(target_width, img.width)
-        w_ratio = render_width / img.width
-        new_height = int(img.height * w_ratio)
-        img = img.resize((render_width, new_height), Image.LANCZOS)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(
-            buf,
-            format="JPEG",
-            quality=target_quality,
-            optimize=True,
-            progressive=True,
-            subsampling=0,
-        )
-        data = buf.getvalue()
-        cache_dir.mkdir(exist_ok=True)
-        cache_path.write_bytes(data)
-        return data
-    except Exception as e:
-        print(f"Thumbnail error for {png_path}: {e}", file=sys.stderr)
-        return None
-
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
@@ -393,6 +336,14 @@ async def api_workspace_generated_image_thumb(ws_slug: str, filename: str, w: in
     return await api_workspace_image_thumb(str(slug), ws_slug, filename, w=w, q=q)
 
 
+@app.get("/workspace/api/project-notes")
+async def api_workspace_project_notes():
+    slug, response = _workspace_slug_or_response()
+    if response is not None:
+        return response
+    return await api_project_notes(str(slug))
+
+
 @app.get("/workspace/api/schedule/status")
 async def api_workspace_schedule_status():
     slug, response = _workspace_slug_or_response()
@@ -514,7 +465,7 @@ async def api_page_thumb(slug: str, page_name: str, w: int = 800, q: int = 80):
     page = proj.get("pages", {}).get(page_name)
     if not page or not page.get("path"):
         return JSONResponse({"error": "Not found"}, status_code=404)
-    data = get_thumbnail(Path(page["path"]), width=min(w, THUMB_MAX_WIDTH), quality=min(q, THUMB_MAX_QUALITY))
+    data = get_page_thumbnail(Path(page["path"]), width=min(w, THUMB_MAX_WIDTH), quality=min(q, THUMB_MAX_QUALITY))
     if not data:
         return JSONResponse({"error": "Image not available"}, status_code=404)
     return Response(content=data, media_type="image/jpeg")
@@ -630,39 +581,15 @@ async def api_workspace_image_thumb(slug: str, ws_slug: str, filename: str, w: i
     if not img_path.exists():
         return JSONResponse({"error": "Image not found"}, status_code=404)
 
-    target_width = max(200, min(int(w), THUMB_MAX_WIDTH))
-    target_quality = max(40, min(int(q), THUMB_MAX_QUALITY))
-    cache_dir = img_dir / ".cache"
-    cache_key = f"{img_path.stem}_thumb_{THUMB_CACHE_VERSION}_{target_width}q{target_quality}.jpg"
-    cache_path = cache_dir / cache_key
-
-    if cache_path.exists() and cache_path.stat().st_mtime >= img_path.stat().st_mtime:
-        return Response(content=cache_path.read_bytes(), media_type="image/jpeg")
-
-    try:
-        img = Image.open(img_path)
-        render_width = min(target_width, img.width)
-        w_ratio = render_width / img.width
-        new_height = int(img.height * w_ratio)
-        img = img.resize((render_width, new_height), Image.LANCZOS)
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        buf = io.BytesIO()
-        img.save(
-            buf,
-            format="JPEG",
-            quality=target_quality,
-            optimize=True,
-            progressive=True,
-            subsampling=0,
-        )
-        data = buf.getvalue()
-        cache_dir.mkdir(exist_ok=True)
-        cache_path.write_bytes(data)
-        return Response(content=data, media_type="image/jpeg")
-    except Exception as e:
-        print(f"Thumbnail error for {img_path}: {e}", file=sys.stderr)
+    data = get_generated_image_thumbnail(
+        image_path=img_path,
+        cache_dir=img_dir / ".cache",
+        width=min(w, THUMB_MAX_WIDTH),
+        quality=min(q, THUMB_MAX_QUALITY),
+    )
+    if data is None:
         return JSONResponse({"error": "Thumbnail generation failed"}, status_code=500)
+    return Response(content=data, media_type="image/jpeg")
 
 
 @app.get("/{slug}/api/workspaces/{ws_slug}")
@@ -692,6 +619,24 @@ async def api_workspace(slug: str, ws_slug: str):
         generated_images.append({**img, "has_file": img_path.exists()})
 
     return {**ws, "pages": enriched_pages, "generated_images": generated_images}
+
+
+@app.get("/{slug}/api/project-notes")
+async def api_project_notes(slug: str):
+    proj = _get_project(slug)
+    if not proj:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    payload = _load_project_notes(proj)
+    return {
+        "ok": True,
+        "project_slug": slug,
+        "version": payload.get("version", 1),
+        "updated_at": payload.get("updated_at", ""),
+        "category_count": len(payload.get("categories", [])),
+        "note_count": len(payload.get("notes", [])),
+        "categories": payload.get("categories", []),
+        "notes": payload.get("notes", []),
+    }
 
 
 @app.get("/{slug}/api/schedule/status")

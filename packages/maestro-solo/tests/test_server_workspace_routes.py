@@ -73,3 +73,45 @@ def test_root_redirects_to_workspace(tmp_path: Path, monkeypatch):
         response = client.get("/", follow_redirects=False)
         assert response.status_code in (302, 307)
         assert response.headers["location"] == "/workspace"
+
+
+def test_workspace_project_notes_route_returns_notes(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MAESTRO_SOLO_HOME", str(home / ".maestro-solo"))
+
+    _make_single_project_store(tmp_path, name="Solo Project")
+    _write_json(
+        tmp_path / "notes" / "project_notes.json",
+        {
+            "version": 1,
+            "updated_at": "2026-02-25T05:36:28.291Z",
+            "categories": [{"id": "general", "name": "General", "color": "slate", "order": 0}],
+            "notes": [
+                {
+                    "id": "inspection-note",
+                    "text": "Spoke with Andy — planning a two-stage pour.",
+                    "category_id": "general",
+                    "source_pages": [{"page_name": "VC_05_Header_and_Venting_Pipe_Cross_Section_p001"}],
+                    "status": "open",
+                    "pinned": False,
+                }
+            ],
+        },
+    )
+
+    with _with_store(tmp_path):
+        client = TestClient(server.app)
+        workspace_response = client.get("/workspace/api/project-notes")
+        assert workspace_response.status_code == 200
+        workspace_payload = workspace_response.json()
+        assert workspace_payload["ok"] is True
+        assert workspace_payload["note_count"] == 1
+        assert workspace_payload["category_count"] >= 1
+        assert workspace_payload["notes"][0]["text"] == "Spoke with Andy — planning a two-stage pour."
+
+        project_payload = client.get("/workspace/api/project").json()
+        project_slug = project_payload["slug"]
+        slug_response = client.get(f"/{project_slug}/api/project-notes")
+        assert slug_response.status_code == 200
+        assert slug_response.json()["note_count"] == 1

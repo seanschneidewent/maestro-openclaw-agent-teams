@@ -1,4 +1,4 @@
-import { MessageSquare, Link2 } from 'lucide-react'
+import { MessageSquare, Link2, NotebookPen } from 'lucide-react'
 import MarkdownText from './MarkdownText'
 
 const CATEGORY_STYLES = {
@@ -73,7 +73,7 @@ function sortNotes(notes = []) {
   })
 }
 
-function NoteCard({ note, category }) {
+function NoteCard({ note, category, onSourcePageClick }) {
   const style = getCategoryStyle(category?.color)
   const sourcePages = normalizeSourcePages(note)
   const isArchived = String(note?.status || '').toLowerCase() === 'archived'
@@ -96,13 +96,15 @@ function NoteCard({ note, category }) {
               </span>
             ) : null}
             {sourcePages.map((source, index) => (
-              <span
+              <button
                 key={`${source.page_name}-${source.workspace_slug || 'global'}-${index}`}
+                type="button"
+                onClick={() => onSourcePageClick?.(source)}
                 className="text-[11px] px-2 py-0.5 rounded-full border border-slate-300 bg-white text-slate-600 inline-flex items-center gap-1"
               >
                 <Link2 size={11} />
                 {source.workspace_slug ? `${source.workspace_slug} · ${source.page_name}` : source.page_name}
-              </span>
+              </button>
             ))}
           </div>
         </div>
@@ -111,7 +113,7 @@ function NoteCard({ note, category }) {
   )
 }
 
-export default function NotesSheet({ open, projectName, payload }) {
+export default function NotesSheet({ open, projectName, payload, onSourcePageClick }) {
   const categories = Array.isArray(payload?.categories) ? payload.categories : []
   const notes = Array.isArray(payload?.notes) ? payload.notes : []
 
@@ -154,8 +156,8 @@ export default function NotesSheet({ open, projectName, payload }) {
       <div className="h-full overflow-auto p-4 bg-gradient-to-b from-slate-50 to-white rounded-2xl">
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <div className="flex items-center gap-2 mb-1">
-            <MessageSquare size={14} className="text-slate-600" />
-            <h3 className="text-sm font-semibold text-slate-800">Project Notes</h3>
+            <NotebookPen size={14} className="text-slate-600" />
+            <h3 className="text-sm font-semibold text-slate-800">Notes</h3>
           </div>
           <p className="text-xs text-slate-500 mb-3">{projectName || 'No active project'}</p>
 
@@ -178,7 +180,12 @@ export default function NotesSheet({ open, projectName, payload }) {
                     </div>
                     <div className="space-y-2">
                       {categoryNotes.map((note) => (
-                        <NoteCard key={String(note?.id || `${categoryId}-${note?.text || ''}`)} note={note} category={category} />
+                        <NoteCard
+                          key={String(note?.id || `${categoryId}-${note?.text || ''}`)}
+                          note={note}
+                          category={category}
+                          onSourcePageClick={onSourcePageClick}
+                        />
                       ))}
                     </div>
                   </div>

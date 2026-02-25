@@ -22,7 +22,8 @@ maestro-solo doctor --fix --field-access-required
 
 1. Search ingested project knowledge.
 2. Build/manage workspaces.
-3. Manage schedule items and constraints.
+3. Review project notes and linked source pages.
+4. Manage schedule items and constraints.
 
 ## Compatibility Routes
 
