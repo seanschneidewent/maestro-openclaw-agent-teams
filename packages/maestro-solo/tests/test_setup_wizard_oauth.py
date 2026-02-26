@@ -82,3 +82,26 @@ def test_setup_wizard_configure_openclaw_writes_isolated_config(tmp_path, monkey
     shared = home / ".openclaw" / "openclaw.json"
     assert isolated.exists()
     assert not shared.exists()
+
+
+def test_setup_wizard_blocks_shared_openclaw_writes_without_write_override(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MAESTRO_ALLOW_SHARED_OPENCLAW", "1")
+    monkeypatch.setenv("MAESTRO_OPENCLAW_PROFILE", "shared")
+    monkeypatch.delenv("MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE", raising=False)
+
+    wizard = SetupWizard()
+    wizard.progress.update(
+        {
+            "provider_env_key": "OPENAI_API_KEY",
+            "provider_key": "",
+            "provider_auth_method": "openclaw_oauth",
+            "model": "openai-codex/gpt-5.2",
+            "gemini_key": "GEMINI_KEY_FOR_TEST",
+            "telegram_token": "",
+        }
+    )
+    assert wizard.openclaw_root == home / ".openclaw"
+    assert wizard.step_configure_openclaw() is False
+    assert not (home / ".openclaw" / "openclaw.json").exists()

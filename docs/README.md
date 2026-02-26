@@ -24,6 +24,7 @@ This is the canonical documentation entrypoint for the repository.
 - [Payment and License](solo/payment-license.md)
 - [Migration from Legacy](solo/migrate-legacy.md)
 - [Clean-Machine Validation](solo/clean-machine-test.md)
+- [OpenClaw Isolation Validation](solo/openclaw-isolation-test-plan.md)
 
 ## Fleet Docs
 

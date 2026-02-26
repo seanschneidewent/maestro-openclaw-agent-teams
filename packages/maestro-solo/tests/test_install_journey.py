@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from argparse import Namespace
+
 from maestro_solo.install_journey import InstallJourneyOptions, run_install_journey
 
 
@@ -163,3 +165,51 @@ def test_journey_install_intent_pro_auto_approve_skips_prompt(monkeypatch):
     assert ["auth", "login", "--billing-url", "https://billing.example.com"] in calls
     real_calls = [cmd for cmd in calls if cmd and cmd[0] == "purchase" and "--preview" not in cmd]
     assert len(real_calls) == 1
+
+
+def test_options_from_env_and_args_auto_channel_resolution(monkeypatch, tmp_path):
+    monkeypatch.setenv("MAESTRO_SOLO_HOME", str(tmp_path / "solo-home"))
+    monkeypatch.setenv("MAESTRO_OPENCLAW_PROFILE", "maestro-solo")
+
+    from maestro_solo.install_journey import options_from_env_and_args
+
+    args = Namespace(
+        flow="install",
+        intent="pro",
+        channel="auto",
+        billing_url="https://billing.example.com/",
+        plan="solo_monthly",
+        email="owner@example.com",
+        force_pro_purchase=False,
+        no_replay_setup=False,
+    )
+    opts = options_from_env_and_args(args)
+    assert opts.flow == "install"
+    assert opts.intent == "pro"
+    assert opts.channel == "pro"
+    assert opts.solo_home == str((tmp_path / "solo-home").resolve())
+    assert opts.openclaw_profile == "maestro-solo"
+    assert opts.replay_setup is True
+
+
+def test_options_from_env_and_args_invalid_values_fallback(monkeypatch, tmp_path):
+    monkeypatch.setenv("MAESTRO_SOLO_HOME", str(tmp_path / "solo-home"))
+    monkeypatch.setenv("MAESTRO_INSTALL_INTENT", "core")
+
+    from maestro_solo.install_journey import options_from_env_and_args
+
+    args = Namespace(
+        flow="weird",
+        intent="",
+        channel="broken",
+        billing_url="",
+        plan="solo_monthly",
+        email="",
+        force_pro_purchase=False,
+        no_replay_setup=True,
+    )
+    opts = options_from_env_and_args(args)
+    assert opts.flow == "free"
+    assert opts.intent == "free"
+    assert opts.channel == "core"
+    assert opts.replay_setup is False

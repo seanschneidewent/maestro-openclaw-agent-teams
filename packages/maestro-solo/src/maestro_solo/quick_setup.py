@@ -24,12 +24,13 @@ from rich.text import Text
 
 from .doctor import run_doctor
 from .entitlements import entitlement_label, has_capability, normalize_tier, resolve_effective_entitlement
+from .install_flow import resolve_install_runtime
 from .install_state import load_install_state, save_install_state
+from .openclaw_config_transform import SoloConfigTransformRequest, transform_openclaw_config
 from .openclaw_runtime import (
     DEFAULT_MAESTRO_OPENCLAW_PROFILE,
-    openclaw_state_root,
+    ensure_safe_openclaw_write_target,
     prepend_openclaw_profile_args,
-    resolve_openclaw_profile,
 )
 from .solo_license import ensure_local_trial_license
 from .workspace_templates import render_personal_agents_md, render_personal_tools_md, render_workspace_env
@@ -263,8 +264,13 @@ class QuickSetup:
         self.model = "openai-codex/gpt-5.2"
         self.model_auth_method = "openclaw_oauth"
 
-        self.openclaw_profile = resolve_openclaw_profile(default=DEFAULT_MAESTRO_OPENCLAW_PROFILE)
-        self.openclaw_root = openclaw_state_root(profile=self.openclaw_profile)
+        runtime = resolve_install_runtime(
+            workspace_dir="workspace-maestro-solo",
+            store_subdir="knowledge_store",
+            openclaw_profile_default=DEFAULT_MAESTRO_OPENCLAW_PROFILE,
+        )
+        self.openclaw_profile = runtime.openclaw_profile
+        self.openclaw_root = runtime.openclaw_root
         self.openclaw_config_file = self.openclaw_root / "openclaw.json"
 
         openclaw_config = _load_openclaw_config(self.openclaw_config_file)
@@ -283,8 +289,8 @@ class QuickSetup:
         self.bot_username = ""
         self.tailscale_ip = ""
         self.pending_optional_setup: list[str] = ["ingest_plans"]
-        self.workspace = (self.openclaw_root / "workspace-maestro-solo").resolve()
-        self.store_root = (self.workspace / "knowledge_store").resolve()
+        self.workspace = runtime.workspace_root
+        self.store_root = runtime.store_root
         self.trial_info: dict[str, Any] = {}
         self.entitlement: dict[str, Any] = resolve_effective_entitlement()
         self.tier = normalize_tier(str(self.entitlement.get("tier", "core")))
@@ -300,6 +306,13 @@ class QuickSetup:
 
     def _run_openclaw_interactive(self, args: list[str], *, timeout: int = 0) -> int:
         return _run_interactive_command(self._openclaw_cmd(args), timeout=timeout)
+
+    def _ensure_safe_openclaw_write_target(self) -> bool:
+        ok, message = ensure_safe_openclaw_write_target(self.openclaw_root)
+        if ok:
+            return True
+        _error(message)
+        return False
 
     def run(self) -> int:
         if not self._intro():
@@ -568,6 +581,9 @@ class QuickSetup:
         return None
 
     def _ensure_openai_oauth_provider_plugin(self) -> bool:
+        if not self._ensure_safe_openclaw_write_target():
+            return False
+
         source_dir = self._locate_extension_source(OPENAI_OAUTH_PLUGIN_ID)
         if source_dir is None:
             _warning("Could not locate Maestro OpenAI OAuth plugin files.")
@@ -823,6 +839,8 @@ class QuickSetup:
             title=f"[bold {BRIGHT_CYAN}]Workspace Bootstrap[/]",
             width=72,
         ))
+        if not self._ensure_safe_openclaw_write_target():
+            return False
         self._refresh_entitlement()
         pro_skill_enabled = has_capability(self.entitlement, "maestro_skill")
         native_extension_enabled = has_capability(self.entitlement, "maestro_native_tools")
@@ -841,83 +859,22 @@ class QuickSetup:
             except Exception:
                 config = {}
 
-        gateway = config.get("gateway") if isinstance(config.get("gateway"), dict) else {}
-        gateway["mode"] = "local"
-        config["gateway"] = gateway
-        config.pop("maestro", None)
-
-        env = config.get("env") if isinstance(config.get("env"), dict) else {}
-        env.pop("OPENAI_API_KEY", None)
-        env["GEMINI_API_KEY"] = self.gemini_key
-        config["env"] = env
-
-        agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
-        existing_list = agents.get("list") if isinstance(agents.get("list"), list) else []
-        clean_list = [
-            item for item in existing_list
-            if isinstance(item, dict) and str(item.get("id", "")).strip() not in {"maestro", "maestro-personal", "maestro-solo-personal"}
-        ]
-        for item in clean_list:
-            if isinstance(item, dict) and item.get("default"):
-                item["default"] = False
-        clean_list.append({
-            "id": "maestro-solo-personal",
-            "name": "Maestro Solo Personal",
-            "default": True,
-            "model": self.model,
-            "workspace": str(self.workspace),
-            "tools": {
-                "deny": NATIVE_PLUGIN_DENY_TOOLS,
-            },
-        })
-        agents["list"] = clean_list
-        config["agents"] = agents
-
-        plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
-        entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
-        if native_extension_enabled:
-            plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
-            plugin_entry["enabled"] = True
-            entries[NATIVE_PLUGIN_ID] = plugin_entry
-        else:
-            entries.pop(NATIVE_PLUGIN_ID, None)
-        if entries:
-            plugins["entries"] = entries
-        else:
-            plugins.pop("entries", None)
-
-        allow = plugins.get("allow")
-        if isinstance(allow, list):
-            allow_clean = [str(item).strip() for item in allow if str(item).strip()]
-            if native_extension_enabled and NATIVE_PLUGIN_ID not in allow_clean:
-                allow_clean.append(NATIVE_PLUGIN_ID)
-            if not native_extension_enabled:
-                allow_clean = [item for item in allow_clean if item != NATIVE_PLUGIN_ID]
-            if allow_clean:
-                plugins["allow"] = allow_clean
-            else:
-                plugins.pop("allow", None)
-        elif native_extension_enabled:
-            plugins["allow"] = [NATIVE_PLUGIN_ID]
-        config["plugins"] = plugins
-
-        channels = config.get("channels") if isinstance(config.get("channels"), dict) else {}
-        channels["telegram"] = {
-            "enabled": True,
-            "botToken": self.telegram_token,
-            "dmPolicy": "pairing",
-            "groupPolicy": "allowlist",
-            "streamMode": "partial",
-            "accounts": {
-                "maestro-solo-personal": {
-                    "botToken": self.telegram_token,
-                    "dmPolicy": "pairing",
-                    "groupPolicy": "allowlist",
-                    "streamMode": "partial",
-                }
-            },
-        }
-        config["channels"] = channels
+        config = transform_openclaw_config(
+            config,
+            request=SoloConfigTransformRequest(
+                workspace=str(self.workspace),
+                model=self.model,
+                gemini_key=self.gemini_key,
+                telegram_token=self.telegram_token,
+                native_plugin_enabled=bool(native_extension_enabled),
+                native_plugin_id=NATIVE_PLUGIN_ID,
+                native_plugin_deny_tools=tuple(NATIVE_PLUGIN_DENY_TOOLS),
+                provider_env_key="OPENAI_API_KEY",
+                provider_key="",
+                provider_auth_method="openclaw_oauth",
+                clear_env_keys=("OPENAI_API_KEY",),
+            ),
+        )
 
         config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
         _success(f"OpenClaw config written: {config_file}")

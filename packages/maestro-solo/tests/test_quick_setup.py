@@ -232,3 +232,26 @@ def test_pairing_fails_fast_when_gateway_is_not_running(monkeypatch, tmp_path):
         ["openclaw", "--profile", "maestro-solo", "gateway", "restart"],
         ["openclaw", "--profile", "maestro-solo", "gateway", "start"],
     ]
+
+
+def test_quick_setup_blocks_shared_openclaw_writes_without_explicit_write_override(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAESTRO_ALLOW_SHARED_OPENCLAW", "1")
+    monkeypatch.setenv("MAESTRO_OPENCLAW_PROFILE", "shared")
+    monkeypatch.delenv("MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE", raising=False)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    assert runner.openclaw_root == Path(tmp_path / "home" / ".openclaw")
+    assert runner._configure_openclaw_and_workspace_step() is False
+    assert not Path(tmp_path / "home" / ".openclaw" / "openclaw.json").exists()
+
+
+def test_openai_oauth_plugin_bootstrap_blocks_shared_openclaw_without_write_override(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAESTRO_ALLOW_SHARED_OPENCLAW", "1")
+    monkeypatch.setenv("MAESTRO_OPENCLAW_PROFILE", "shared")
+    monkeypatch.delenv("MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE", raising=False)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    assert runner.openclaw_root == Path(tmp_path / "home" / ".openclaw")
+    assert runner._ensure_openai_oauth_provider_plugin() is False

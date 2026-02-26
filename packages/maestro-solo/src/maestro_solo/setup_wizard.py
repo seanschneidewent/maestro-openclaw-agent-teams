@@ -33,11 +33,12 @@ from .workspace_templates import (
     render_workspace_env,
 )
 from .entitlements import entitlement_label, has_capability, normalize_tier, resolve_effective_entitlement
+from .install_flow import resolve_install_runtime
 from .install_state import save_install_state
+from .openclaw_config_transform import SoloConfigTransformRequest, transform_openclaw_config
 from .openclaw_runtime import (
     DEFAULT_MAESTRO_OPENCLAW_PROFILE,
-    openclaw_state_root,
-    resolve_openclaw_profile,
+    ensure_safe_openclaw_write_target,
 )
 
 # Theme colors
@@ -102,8 +103,20 @@ class SetupWizard:
         self.is_windows = platform.system() == "Windows"
         self.entitlement = resolve_effective_entitlement()
         self.tier = normalize_tier(str(self.entitlement.get("tier", "core")))
-        self.openclaw_profile = resolve_openclaw_profile(default=DEFAULT_MAESTRO_OPENCLAW_PROFILE)
-        self.openclaw_root = openclaw_state_root(profile=self.openclaw_profile)
+        runtime = resolve_install_runtime(
+            workspace_dir="workspace-maestro-solo",
+            store_subdir="knowledge_store",
+            openclaw_profile_default=DEFAULT_MAESTRO_OPENCLAW_PROFILE,
+        )
+        self.openclaw_profile = runtime.openclaw_profile
+        self.openclaw_root = runtime.openclaw_root
+
+    def _ensure_safe_openclaw_write_target(self) -> bool:
+        ok, message = ensure_safe_openclaw_write_target(self.openclaw_root)
+        if ok:
+            return True
+        error(message)
+        return False
 
     def load_progress(self) -> Dict[str, Any]:
         if self.progress_file.exists():
@@ -966,6 +979,8 @@ class SetupWizard:
     def step_configure_openclaw(self) -> bool:
         """Step 7: Configure OpenClaw"""
         step_header(7, "Configuring OpenClaw")
+        if not self._ensure_safe_openclaw_write_target():
+            return False
 
         config_dir = self.openclaw_root
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -980,90 +995,26 @@ class SetupWizard:
         else:
             config = {}
 
-        if 'gateway' not in config:
-            config['gateway'] = {}
-        config['gateway']['mode'] = 'local'
-
-        # Store install metadata outside openclaw.json (NOT in openclaw.json —
-        # OpenClaw rejects unknown top-level keys and will crash the gateway)
-        # Clean up any stale 'maestro' key from previous installs
-        config.pop('maestro', None)
-
-        if 'env' not in config:
-            config['env'] = {}
-
-        env_key = self.progress['provider_env_key']
-        provider_key = str(self.progress.get('provider_key', '')).strip()
-        auth_method = str(self.progress.get('provider_auth_method', '')).strip().lower()
-        if provider_key:
-            config['env'][env_key] = provider_key
-        elif auth_method == 'openclaw_oauth':
-            config['env'].pop(env_key, None)
-        if self.progress.get('gemini_key'):
-            config['env']['GEMINI_API_KEY'] = self.progress['gemini_key']
-
-        # Solo default agent is project-capable Maestro Personal.
-        if 'agents' not in config:
-            config['agents'] = {}
-        if 'list' not in config['agents']:
-            config['agents']['list'] = []
-
-        # Remove legacy/default personal entries so Solo installs are deterministic.
-        config['agents']['list'] = [
-            a for a in config['agents']['list']
-            if a.get('id') not in ('maestro', 'maestro-personal', 'maestro-solo-personal')
-        ]
-
-        for agent in config['agents']['list']:
-            if isinstance(agent, dict) and agent.get("default"):
-                agent["default"] = False
-
-        config['agents']['list'].append({
-            "id": "maestro-solo-personal",
-            "name": "Maestro Solo Personal",
-            "default": True,
-            "model": self.progress['model'],
-            "workspace": workspace_path,
-            "tools": {
-                "deny": NATIVE_PLUGIN_DENY_TOOLS,
-            },
-        })
-
-        plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
-        entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
-        plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
-        plugin_entry["enabled"] = True
-        entries[NATIVE_PLUGIN_ID] = plugin_entry
-        plugins["entries"] = entries
-        allow = plugins.get("allow")
-        if isinstance(allow, list):
-            if NATIVE_PLUGIN_ID not in [str(item).strip() for item in allow]:
-                allow.append(NATIVE_PLUGIN_ID)
-                plugins["allow"] = allow
-        config["plugins"] = plugins
-
-        if 'channels' not in config:
-            config['channels'] = {}
-
         bot_token = str(self.progress.get('telegram_token', '')).strip()
-        if bot_token:
-            config['channels']['telegram'] = {
-                "enabled": True,
-                "botToken": bot_token,
-                "dmPolicy": "pairing",
-                "groupPolicy": "allowlist",
-                "streamMode": "partial",
-                "accounts": {
-                    "maestro-solo-personal": {
-                        "botToken": bot_token,
-                        "dmPolicy": "pairing",
-                        "groupPolicy": "allowlist",
-                        "streamMode": "partial",
-                    }
-                },
-            }
-        else:
+        if not bot_token:
             warning("Telegram is not configured — local/web usage remains fully available.")
+
+        config = transform_openclaw_config(
+            config,
+            request=SoloConfigTransformRequest(
+                workspace=workspace_path,
+                model=str(self.progress.get('model', '')).strip(),
+                gemini_key=str(self.progress.get('gemini_key', '')).strip(),
+                telegram_token=bot_token,
+                native_plugin_enabled=True,
+                native_plugin_id=NATIVE_PLUGIN_ID,
+                native_plugin_deny_tools=tuple(NATIVE_PLUGIN_DENY_TOOLS),
+                provider_env_key=str(self.progress.get('provider_env_key', '')).strip(),
+                provider_key=str(self.progress.get('provider_key', '')).strip(),
+                provider_auth_method=str(self.progress.get('provider_auth_method', '')).strip(),
+                clear_env_keys=(),
+            ),
+        )
 
         with open(config_file, 'w') as f:
             json.dump(config, f, indent=2)
@@ -1084,6 +1035,8 @@ class SetupWizard:
     def step_configure_maestro(self) -> bool:
         """Step 8: Configure personal workspace"""
         step_header(8, "Personal Workspace")
+        if not self._ensure_safe_openclaw_write_target():
+            return False
 
         default_workspace = self.openclaw_root / "workspace-maestro-solo"
 
@@ -1111,31 +1064,22 @@ class SetupWizard:
                 config = {}
         if not isinstance(config, dict):
             config = {}
-        agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
-        agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
-        for agent in agent_list:
-            if not isinstance(agent, dict):
-                continue
-            if str(agent.get("id", "")).strip() == "maestro-solo-personal":
-                agent["workspace"] = str(workspace.resolve())
-
-        plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
-        entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
-        plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
-        plugin_entry["enabled"] = bool(native_extension_enabled)
-        entries[NATIVE_PLUGIN_ID] = plugin_entry
-        plugins["entries"] = entries
-        allow = plugins.get("allow")
-        if isinstance(allow, list):
-            cleaned = [str(item).strip() for item in allow if str(item).strip()]
-            if native_extension_enabled and NATIVE_PLUGIN_ID not in cleaned:
-                allow.append(NATIVE_PLUGIN_ID)
-            if not native_extension_enabled:
-                allow = [item for item in allow if str(item).strip() != NATIVE_PLUGIN_ID]
-            plugins["allow"] = allow
-        elif native_extension_enabled:
-            plugins["allow"] = [NATIVE_PLUGIN_ID]
-        config["plugins"] = plugins
+        config = transform_openclaw_config(
+            config,
+            request=SoloConfigTransformRequest(
+                workspace=str(workspace.resolve()),
+                model=str(self.progress.get('model', '')).strip(),
+                gemini_key=str(self.progress.get('gemini_key', '')).strip(),
+                telegram_token=str(self.progress.get('telegram_token', '')).strip(),
+                native_plugin_enabled=bool(native_extension_enabled),
+                native_plugin_id=NATIVE_PLUGIN_ID,
+                native_plugin_deny_tools=tuple(NATIVE_PLUGIN_DENY_TOOLS),
+                provider_env_key=str(self.progress.get('provider_env_key', '')).strip(),
+                provider_key=str(self.progress.get('provider_key', '')).strip(),
+                provider_auth_method=str(self.progress.get('provider_auth_method', '')).strip(),
+                clear_env_keys=(),
+            ),
+        )
         if config_file.exists():
             config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
 

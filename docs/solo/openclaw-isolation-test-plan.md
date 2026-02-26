@@ -1,6 +1,6 @@
 # OpenClaw Isolation Test Plan
 
-Use this runbook to verify Maestro Solo installs never mutate shared `~/.openclaw` unless explicitly opted in.
+Use this runbook to verify Maestro Solo installs never mutate shared `~/.openclaw` unless explicitly and unsafely opted in.
 
 ## Preconditions
 
@@ -40,11 +40,21 @@ test -f ~/.openclaw-maestro-solo/openclaw.json
 
 ## 3) Negative Test (blocked shared profile)
 
-Installer should fail when targeting shared profile without explicit unsafe override:
+Installer should fail when targeting shared profile without explicit write override:
 
 ```bash
 set +e
 MAESTRO_OPENCLAW_PROFILE=shared MAESTRO_INSTALL_AUTO=1 bash scripts/install-maestro-macos.sh
+rc=$?
+set -e
+test "$rc" -ne 0
+```
+
+Also confirm the profile-allow flag alone is still blocked for writes:
+
+```bash
+set +e
+MAESTRO_ALLOW_SHARED_OPENCLAW=1 MAESTRO_OPENCLAW_PROFILE=shared MAESTRO_INSTALL_AUTO=1 bash scripts/install-maestro-macos.sh
 rc=$?
 set -e
 test "$rc" -ne 0
@@ -56,6 +66,7 @@ Only for controlled verification:
 
 ```bash
 MAESTRO_ALLOW_SHARED_OPENCLAW=1 \
+MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE=1 \
 MAESTRO_OPENCLAW_PROFILE=shared \
 MAESTRO_INSTALL_AUTO=1 \
 bash scripts/install-maestro-macos.sh
@@ -84,4 +95,6 @@ test -f ~/.openclaw-maestro-solo/openclaw.json
 - Shared config hash is identical before/after (`cmp` exits 0).
 - Isolated config exists at `~/.openclaw-maestro-solo/openclaw.json`.
 - Active Maestro agent config/workspace lives under `~/.openclaw-maestro-solo`.
-- Shared-profile install is blocked unless `MAESTRO_ALLOW_SHARED_OPENCLAW=1`.
+- Shared-profile install is blocked unless both:
+  - `MAESTRO_ALLOW_SHARED_OPENCLAW=1`
+  - `MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE=1`

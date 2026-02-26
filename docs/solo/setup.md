@@ -51,7 +51,14 @@ Optional env overrides:
 - `MAESTRO_SETUP_REPLAY=0` to disable replay mode and run fresh quick setup.
 - `MAESTRO_INSTALL_CHANNEL=core|pro` to override default auto-resolution (`free -> core`, `pro -> pro`).
 - `MAESTRO_OPENCLAW_PROFILE=<name>` to isolate into `~/.openclaw-<name>` (default: `maestro-solo`).
-- `MAESTRO_ALLOW_SHARED_OPENCLAW=1` to intentionally target shared `~/.openclaw` (unsafe, disabled by default).
+- `MAESTRO_ALLOW_SHARED_OPENCLAW=1` to allow shared-profile targeting.
+- `MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE=1` to explicitly allow shared `~/.openclaw` writes (required in addition to the previous flag).
+
+Shared-profile safety model:
+
+- Default: isolated profile only (`~/.openclaw-maestro-solo`).
+- Shared profile is denied unless `MAESTRO_ALLOW_SHARED_OPENCLAW=1`.
+- Even with shared profile selected, write operations are denied unless `MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE=1`.
 
 One-liner UX note:
 

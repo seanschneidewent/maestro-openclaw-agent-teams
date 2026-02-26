@@ -19,6 +19,11 @@ def shared_openclaw_allowed() -> bool:
     return raw in _TRUTHY
 
 
+def shared_openclaw_write_allowed() -> bool:
+    raw = str(os.environ.get("MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE", "")).strip().lower()
+    return raw in _TRUTHY
+
+
 def _normalize_profile(raw: str) -> str:
     clean = str(raw or "").strip()
     if not clean:
@@ -80,6 +85,30 @@ def openclaw_state_root(*, home_dir: Path | None = None, profile: str | None = N
 
 def openclaw_config_path(*, home_dir: Path | None = None, profile: str | None = None) -> Path:
     return openclaw_state_root(home_dir=home_dir, profile=profile) / "openclaw.json"
+
+
+def is_shared_openclaw_root(path: Path, *, home_dir: Path | None = None) -> bool:
+    home = Path(home_dir).expanduser().resolve() if home_dir is not None else Path.home().resolve()
+    shared_root = (home / ".openclaw").resolve()
+    return Path(path).expanduser().resolve() == shared_root
+
+
+def ensure_safe_openclaw_write_target(
+    path: Path,
+    *,
+    home_dir: Path | None = None,
+    allow_shared_write: bool | None = None,
+) -> tuple[bool, str]:
+    target = Path(path).expanduser().resolve()
+    if not is_shared_openclaw_root(target, home_dir=home_dir):
+        return True, ""
+    allowed = shared_openclaw_write_allowed() if allow_shared_write is None else bool(allow_shared_write)
+    if allowed:
+        return True, ""
+    return False, (
+        "Refusing to write to shared ~/.openclaw without explicit override. "
+        "Set MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE=1 only for controlled migrations."
+    )
 
 
 def prepend_openclaw_profile_args(args: list[str], *, profile: str | None = None) -> list[str]:

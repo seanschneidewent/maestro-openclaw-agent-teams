@@ -50,6 +50,21 @@ def test_shared_profile_override_requires_unsafe_flag(monkeypatch, tmp_path):
     assert openclaw_runtime.prepend_openclaw_profile_args(["openclaw", "status"]) == ["openclaw", "status"]
 
 
+def test_shared_write_guard_requires_explicit_write_override(monkeypatch, tmp_path):
+    home, _ = _configure_env(monkeypatch, tmp_path)
+    monkeypatch.setenv("MAESTRO_ALLOW_SHARED_OPENCLAW", "1")
+    monkeypatch.setenv("MAESTRO_OPENCLAW_PROFILE", "shared")
+    monkeypatch.delenv("MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE", raising=False)
+
+    ok, message = openclaw_runtime.ensure_safe_openclaw_write_target(home / ".openclaw")
+    assert ok is False
+    assert "MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE=1" in message
+
+    monkeypatch.setenv("MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE", "1")
+    ok_after, _ = openclaw_runtime.ensure_safe_openclaw_write_target(home / ".openclaw")
+    assert ok_after is True
+
+
 def test_install_state_profile_is_used(monkeypatch, tmp_path):
     _, solo_home = _configure_env(monkeypatch, tmp_path)
     monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)

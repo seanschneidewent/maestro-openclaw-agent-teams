@@ -48,6 +48,7 @@ Fleet transition state path: `~/.maestro/install.json`
 - `MAESTRO_SOLO_HOME`
 - `MAESTRO_OPENCLAW_PROFILE` (default `maestro-solo`; creates `~/.openclaw-<profile>`)
 - `MAESTRO_ALLOW_SHARED_OPENCLAW` (default `0`; set `1` only to intentionally target shared `~/.openclaw`)
+- `MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE` (default `0`; required to allow writes to shared `~/.openclaw`, even when shared profile targeting is enabled)
 - `MAESTRO_INSTALL_FLOW` (`free` or `pro`, installer orchestration)
 - `MAESTRO_INSTALL_CHANNEL` (`auto`, `core`, `pro`)
 - `MAESTRO_SETUP_REPLAY` (`1` default; set `0` to disable setup replay in installer journey)

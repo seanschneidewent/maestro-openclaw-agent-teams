@@ -12,10 +12,15 @@ from pathlib import Path
 from rich.prompt import Confirm, Prompt
 
 from .entitlements import normalize_tier, resolve_effective_entitlement
+from .install_flow import (
+    install_auto_approve_enabled,
+    is_truthy,
+    resolve_install_runtime,
+    resolve_journey_selection,
+)
 from .openclaw_runtime import (
     DEFAULT_MAESTRO_OPENCLAW_PROFILE,
     openclaw_config_path,
-    resolve_openclaw_profile,
 )
 from .solo_license import load_local_license
 
@@ -47,15 +52,6 @@ def _warn(message: str):
 
 def _step(number: int, title: str):
     print(f"\n[maestro-install] ===== Step {number}/{TOTAL_STEPS}: {title} =====")
-
-
-def _is_truthy(value: str) -> bool:
-    clean = str(value or "").strip().lower()
-    return clean in {"1", "true", "yes", "on"}
-
-
-def _auto_approve_enabled() -> bool:
-    return _is_truthy(os.environ.get("MAESTRO_INSTALL_AUTO", ""))
 
 
 def _load_json(path: Path) -> dict:
@@ -176,7 +172,7 @@ def _resolve_pro_activation_choice(options: InstallJourneyOptions) -> bool:
         return False
 
     default_yes = options.intent == "pro"
-    if _auto_approve_enabled():
+    if install_auto_approve_enabled():
         if default_yes:
             _log("Auto-approve mode: activating Pro now.")
         else:
@@ -327,43 +323,23 @@ def run_install_journey(options: InstallJourneyOptions) -> int:
 
 
 def options_from_env_and_args(args) -> InstallJourneyOptions:
-    flow = str(getattr(args, "flow", "free") or "free").strip().lower()
-    if flow not in {"free", "pro", "install"}:
-        flow = "free"
-
-    raw_intent = str(getattr(args, "intent", "") or os.environ.get("MAESTRO_INSTALL_INTENT", "")).strip().lower()
-    if raw_intent == "core":
-        raw_intent = "free"
-    intent = raw_intent if raw_intent in {"free", "pro"} else ""
-
-    channel = str(getattr(args, "channel", "auto") or "auto").strip().lower()
-    if channel == "auto":
-        if flow == "pro":
-            channel = "pro"
-        elif flow == "install" and intent == "pro":
-            channel = "pro"
-        else:
-            channel = "core"
-    if channel not in {"core", "pro"}:
-        channel = "core"
-
-    raw_home = str(os.environ.get("MAESTRO_SOLO_HOME", "")).strip()
-    solo_home = raw_home or str(Path.home() / ".maestro-solo")
-
-    profile_default = DEFAULT_MAESTRO_OPENCLAW_PROFILE
-    openclaw_profile = resolve_openclaw_profile(default=profile_default)
-
-    replay_setup = not _is_truthy(str(getattr(args, "no_replay_setup", False)).strip())
+    selection = resolve_journey_selection(
+        raw_flow=str(getattr(args, "flow", "free") or "free"),
+        raw_intent=str(getattr(args, "intent", "") or os.environ.get("MAESTRO_INSTALL_INTENT", "")),
+        raw_channel=str(getattr(args, "channel", "auto") or "auto"),
+    )
+    runtime = resolve_install_runtime(openclaw_profile_default=DEFAULT_MAESTRO_OPENCLAW_PROFILE)
+    replay_setup = not is_truthy(str(getattr(args, "no_replay_setup", False)).strip())
 
     return InstallJourneyOptions(
-        flow=flow,
-        intent=intent,
-        channel=channel,
-        solo_home=solo_home,
+        flow=selection.flow,
+        intent=selection.intent,
+        channel=selection.channel,
+        solo_home=str(runtime.solo_home),
         billing_url=str(getattr(args, "billing_url", "") or "").strip().rstrip("/"),
         plan_id=str(getattr(args, "plan", "solo_monthly") or "solo_monthly").strip(),
         purchase_email=str(getattr(args, "email", "") or "").strip(),
         force_pro_purchase=bool(getattr(args, "force_pro_purchase", False)),
         replay_setup=replay_setup,
-        openclaw_profile=openclaw_profile,
+        openclaw_profile=runtime.openclaw_profile,
     )

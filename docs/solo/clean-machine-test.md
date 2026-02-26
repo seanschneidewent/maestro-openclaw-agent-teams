@@ -86,6 +86,10 @@ Expected stage behavior:
   - `MAESTRO_OPENCLAW_PROFILE=shared MAESTRO_INSTALL_AUTO=1 bash scripts/install-maestro-macos.sh`
 - Expected:
   - Fails closed without `MAESTRO_ALLOW_SHARED_OPENCLAW=1`.
+  - Still fails for writes with only that flag.
+  - Shared writes are allowed only when both are set:
+    - `MAESTRO_ALLOW_SHARED_OPENCLAW=1`
+    - `MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE=1`
 
 ### S6: Production launcher drift check
 

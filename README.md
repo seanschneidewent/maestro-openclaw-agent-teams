@@ -58,6 +58,7 @@ Notes:
 - Optional for unattended Pro installs: `MAESTRO_PURCHASE_EMAIL=person@example.com`.
 - Optional setup replay override: `MAESTRO_SETUP_REPLAY=0` (uses fresh setup instead of replay checks).
 - OpenClaw state is isolated by default under `~/.openclaw-maestro-solo`; shared `~/.openclaw` is blocked unless `MAESTRO_ALLOW_SHARED_OPENCLAW=1`.
+- Shared `~/.openclaw` writes are hard-blocked unless `MAESTRO_ALLOW_SHARED_OPENCLAW_WRITE=1` is also set.
 - Local repo dev mode is still available via `MAESTRO_USE_LOCAL_REPO=1`.
 
 Open:
