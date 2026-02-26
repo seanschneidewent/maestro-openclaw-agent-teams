@@ -170,10 +170,10 @@ prime_sudo_for_noninteractive_homebrew() {
     return 0
   fi
   log "Homebrew installation requires administrator privileges."
-  if [[ ! -t 0 ]]; then
-    fatal "Cannot request sudo credentials in a non-interactive terminal."
+  if [[ ! -r "/dev/tty" ]]; then
+    fatal "Cannot request sudo credentials because no terminal is attached."
   fi
-  /usr/bin/sudo -v || fatal "Failed to obtain sudo credentials for Homebrew installation."
+  /usr/bin/sudo -v </dev/tty || fatal "Failed to obtain sudo credentials for Homebrew installation."
 }
 
 ensure_macos() {
