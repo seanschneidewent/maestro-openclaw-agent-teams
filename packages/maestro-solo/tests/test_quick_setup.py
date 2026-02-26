@@ -96,6 +96,39 @@ def test_openai_oauth_plugin_bootstrap_stages_plugin_and_config(monkeypatch, tmp
     assert npm_calls == []
 
 
+def test_workspace_bootstrap_core_tier_does_not_reference_native_plugin(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    runner.gemini_key = "GEMINI_KEY_FOR_TEST"
+    runner.telegram_token = "123456:abcDEF123_token"
+    runner.bot_username = "trace_bot"
+
+    monkeypatch.setattr(runner, "_refresh_entitlement", lambda: None)
+    monkeypatch.setattr(quick_setup, "has_capability", lambda _entitlement, _capability: False)
+    monkeypatch.setattr(runner, "_seed_workspace_files", lambda *, pro_enabled: None)
+    monkeypatch.setattr(runner, "_seed_workspace_skill", lambda: None)
+    monkeypatch.setattr(runner, "_seed_native_extension", lambda: None)
+    monkeypatch.setattr(runner, "_maybe_build_workspace_frontend", lambda: None)
+
+    assert runner._configure_openclaw_and_workspace_step() is True
+
+    config_path = Path(tmp_path / "home" / ".openclaw" / "openclaw.json")
+    assert config_path.exists()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+
+    plugins = config.get("plugins", {})
+    entries = plugins.get("entries", {})
+    assert "maestro-native-tools" not in entries
+
+    telegram = config.get("channels", {}).get("telegram", {})
+    assert telegram.get("streaming") == "partial"
+    assert "streamMode" not in telegram
+    account = telegram.get("accounts", {}).get("maestro-solo-personal", {})
+    assert account.get("streaming") == "partial"
+    assert "streamMode" not in account
+
+
 def test_tailscale_step_defers_when_not_installed_without_prompt(monkeypatch, tmp_path):
     _configure_env(monkeypatch, tmp_path)
 

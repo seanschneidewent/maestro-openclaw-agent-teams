@@ -780,19 +780,28 @@ class QuickSetup:
 
         plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
         entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
-        plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
-        plugin_entry["enabled"] = bool(native_extension_enabled)
-        entries[NATIVE_PLUGIN_ID] = plugin_entry
-        plugins["entries"] = entries
+        if native_extension_enabled:
+            plugin_entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
+            plugin_entry["enabled"] = True
+            entries[NATIVE_PLUGIN_ID] = plugin_entry
+        else:
+            entries.pop(NATIVE_PLUGIN_ID, None)
+        if entries:
+            plugins["entries"] = entries
+        else:
+            plugins.pop("entries", None)
 
         allow = plugins.get("allow")
         if isinstance(allow, list):
             allow_clean = [str(item).strip() for item in allow if str(item).strip()]
             if native_extension_enabled and NATIVE_PLUGIN_ID not in allow_clean:
-                allow.append(NATIVE_PLUGIN_ID)
+                allow_clean.append(NATIVE_PLUGIN_ID)
             if not native_extension_enabled:
-                allow = [item for item in allow if str(item).strip() != NATIVE_PLUGIN_ID]
-            plugins["allow"] = allow
+                allow_clean = [item for item in allow_clean if item != NATIVE_PLUGIN_ID]
+            if allow_clean:
+                plugins["allow"] = allow_clean
+            else:
+                plugins.pop("allow", None)
         elif native_extension_enabled:
             plugins["allow"] = [NATIVE_PLUGIN_ID]
         config["plugins"] = plugins
@@ -803,13 +812,13 @@ class QuickSetup:
             "botToken": self.telegram_token,
             "dmPolicy": "pairing",
             "groupPolicy": "allowlist",
-            "streamMode": "partial",
+            "streaming": "partial",
             "accounts": {
                 "maestro-solo-personal": {
                     "botToken": self.telegram_token,
                     "dmPolicy": "pairing",
                     "groupPolicy": "allowlist",
-                    "streamMode": "partial",
+                    "streaming": "partial",
                 }
             },
         }
