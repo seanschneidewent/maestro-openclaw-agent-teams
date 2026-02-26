@@ -44,6 +44,11 @@ This installs local packages from this repo:
 
 ## Required Environment Variables
 
+Copy-ready placeholder templates:
+
+- Billing + license combined template: `/Users/seanschneidewent/maestro-openclaw-agent-teams/.env.billing.example`
+- Billing-only Railway template: `/Users/seanschneidewent/maestro-openclaw-agent-teams/docs/operations/railway-billing-vars.example`
+
 Set in both services:
 
 - `MAESTRO_INTERNAL_TOKEN` (exact same value in both)

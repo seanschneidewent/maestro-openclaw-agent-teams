@@ -1,0 +1,31 @@
+# Railway billing service variables (placeholders)
+# Use these in the Railway variables UI or via Railway CLI.
+
+# Required shared values
+MAESTRO_INTERNAL_TOKEN=replace-with-long-random-token
+MAESTRO_DATABASE_URL=${{maestro-solo-db.DATABASE_URL}}
+MAESTRO_LICENSE_URL=https://maestro-license-service-production.up.railway.app
+
+# Billing auth (Google OAuth)
+MAESTRO_BILLING_REQUIRE_AUTH=1
+MAESTRO_AUTH_JWT_SECRET=replace-with-long-random-secret
+MAESTRO_GOOGLE_CLIENT_ID=GOOGLE_OAUTH_CLIENT_ID_PLACEHOLDER
+MAESTRO_GOOGLE_CLIENT_SECRET=GOOGLE_OAUTH_CLIENT_SECRET_PLACEHOLDER
+MAESTRO_GOOGLE_REDIRECT_URI=https://maestro-billing-service-production.up.railway.app/v1/auth/google/callback
+
+# Stripe billing
+MAESTRO_STRIPE_SECRET_KEY=STRIPE_SECRET_KEY_PLACEHOLDER
+MAESTRO_STRIPE_WEBHOOK_SECRET=STRIPE_WEBHOOK_SECRET_PLACEHOLDER
+MAESTRO_STRIPE_WEBHOOK_TOLERANCE_SECONDS=300
+MAESTRO_STRIPE_PRICE_ID_SOLO_MONTHLY=price_replace_me
+MAESTRO_STRIPE_PRICE_ID_SOLO_YEARLY=price_replace_me
+MAESTRO_STRIPE_PRICE_ID_SOLO_TEST_MONTHLY=price_replace_me
+
+# Production safety
+MAESTRO_ENABLE_DEV_ENDPOINTS=0
+
+# Optional
+# MAESTRO_AUTH_ALLOWED_DOMAINS=company.com,subsidiary.com
+# MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL=https://maestro-billing-service-production.up.railway.app/upgrade
+# MAESTRO_STRIPE_PRICE_ID_LIVE_SOLO_MONTHLY=price_replace_me
+# MAESTRO_STRIPE_PRICE_ID_LIVE_SOLO_YEARLY=price_replace_me
