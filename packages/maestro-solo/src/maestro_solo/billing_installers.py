@@ -68,12 +68,14 @@ def build_installer_script(*, flow: str, billing_base_url: str) -> str:
     if clean_flow == "pro" and not pro_spec and not core_spec:
         raise HTTPException(status_code=503, detail="installer_not_configured:missing_pro_or_core_package_spec")
 
+    script_base_url = _installer_script_base_url().rstrip("/")
     script_url = _installer_free_script_url() if clean_flow == "free" else _installer_pro_script_url()
     env_assignments: list[tuple[str, str]] = []
     if core_spec:
         env_assignments.append(("MAESTRO_CORE_PACKAGE_SPEC", core_spec))
     if clean_flow == "pro" and pro_spec:
         env_assignments.append(("MAESTRO_PRO_PACKAGE_SPEC", pro_spec))
+    env_assignments.append(("MAESTRO_INSTALL_BASE_URL", f"{script_base_url}/install-maestro-macos.sh"))
     if billing_base_url:
         env_assignments.append(("MAESTRO_BILLING_URL", billing_base_url))
 
