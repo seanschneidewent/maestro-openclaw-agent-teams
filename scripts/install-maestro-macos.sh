@@ -159,6 +159,23 @@ refresh_path_for_brew() {
   fi
 }
 
+prime_sudo_for_noninteractive_homebrew() {
+  if [[ "${EUID:-$(id -u)}" == "0" ]]; then
+    return 0
+  fi
+  if [[ ! -x "/usr/bin/sudo" ]]; then
+    fatal "sudo is required for Homebrew installation on macOS."
+  fi
+  if /usr/bin/sudo -n -v >/dev/null 2>&1; then
+    return 0
+  fi
+  log "Homebrew installation requires administrator privileges."
+  if [[ ! -t 0 ]]; then
+    fatal "Cannot request sudo credentials in a non-interactive terminal."
+  fi
+  /usr/bin/sudo -v || fatal "Failed to obtain sudo credentials for Homebrew installation."
+}
+
 ensure_macos() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
     fatal "This installer currently supports macOS only."
@@ -178,6 +195,7 @@ ensure_homebrew() {
   fi
 
   if [[ "$AUTO_APPROVE" == "1" ]]; then
+    prime_sudo_for_noninteractive_homebrew
     env NONINTERACTIVE=1 CI=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   else
     /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
