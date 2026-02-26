@@ -42,6 +42,7 @@ maestro-solo-billing-service --port 8081
 5. Complete purchase:
 
 ```bash
+maestro-solo auth login --billing-url http://127.0.0.1:8081
 maestro-solo purchase --email you@example.com --plan solo_test_monthly --mode test --billing-url http://127.0.0.1:8081
 ```
 

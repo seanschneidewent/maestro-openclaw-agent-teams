@@ -21,7 +21,7 @@ def billing_state_path() -> Path:
 
 
 def billing_state_default() -> dict[str, Any]:
-    return {"purchases": {}, "processed_events": {}}
+    return {"purchases": {}, "processed_events": {}, "auth_cli_sessions": {}}
 
 
 def load_billing_state() -> dict[str, Any]:
@@ -36,7 +36,10 @@ def load_billing_state() -> dict[str, Any]:
     processed_events = payload.get("processed_events")
     if not isinstance(processed_events, dict):
         processed_events = {}
-    return {"purchases": purchases, "processed_events": processed_events}
+    auth_cli_sessions = payload.get("auth_cli_sessions")
+    if not isinstance(auth_cli_sessions, dict):
+        auth_cli_sessions = {}
+    return {"purchases": purchases, "processed_events": processed_events, "auth_cli_sessions": auth_cli_sessions}
 
 
 def save_billing_state(state: dict[str, Any]):

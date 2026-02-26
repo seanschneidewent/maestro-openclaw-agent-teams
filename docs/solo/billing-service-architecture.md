@@ -26,10 +26,11 @@ Keep purchase and licensing behavior stable while making billing code easier to 
 
 ## Runtime Flow
 
-1. `POST /v1/solo/purchases` creates purchase state, optionally creates Stripe checkout.
-2. Stripe webhook events update state and provision license through license service.
-3. `POST /v1/solo/portal-sessions` creates Stripe customer portal sessions for self-serve cancellation/management.
-4. Success/cancel pages render from `billing_views`.
+1. `GET /v1/auth/google/start` and `GET /v1/auth/google/callback` establish signed billing auth sessions.
+2. `POST /v1/solo/purchases` creates purchase state for authenticated user, optionally creates Stripe checkout.
+3. Stripe webhook events update state and provision license through license service.
+4. `POST /v1/solo/portal-sessions` creates Stripe customer portal sessions for authenticated owner cancellation/management.
+5. Success/cancel pages render from `billing_views`.
 
 ## Persistence Rules
 

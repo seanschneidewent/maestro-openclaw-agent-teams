@@ -26,8 +26,9 @@ Installer behavior:
 2. Creates `~/.maestro/venv-maestro-solo`.
 3. Installs Solo private wheel spec.
 4. Runs `maestro-solo setup --quick`.
-5. Pro flow only: runs `maestro-solo purchase --mode live`.
-6. Starts `maestro-solo up --tui`.
+5. Pro flow only: runs `maestro-solo auth login`.
+6. Pro flow only: runs `maestro-solo purchase --mode live`.
+7. Starts `maestro-solo up --tui`.
 
 Existing install behavior:
 
@@ -62,6 +63,7 @@ Quick setup auto-creates a local trial license when no valid local license exist
 To upgrade an existing Free install:
 
 ```bash
+maestro-solo auth login
 maestro-solo purchase --email you@example.com --plan solo_monthly --mode live
 ```
 

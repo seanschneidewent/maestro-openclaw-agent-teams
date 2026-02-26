@@ -48,6 +48,12 @@ Template file:
 
 ## Purchase Flow
 
+Authenticate first:
+
+```bash
+maestro-solo auth login
+```
+
 ```bash
 maestro-solo purchase --email you@example.com
 ```

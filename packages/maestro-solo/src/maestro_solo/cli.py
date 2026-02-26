@@ -8,6 +8,7 @@ import os
 import platform
 import subprocess
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,51 @@ def _print_json(payload: dict[str, Any]):
     print(json.dumps(payload, indent=2))
 
 
+def _solo_home() -> Path:
+    raw = _clean_text(os.environ.get("MAESTRO_SOLO_HOME"))
+    return Path(raw).expanduser().resolve() if raw else (Path.home() / ".maestro-solo").resolve()
+
+
+def _auth_cache_path() -> Path:
+    return _solo_home() / "auth.json"
+
+
+def _load_auth_cache() -> dict[str, Any]:
+    path = _auth_cache_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_auth_cache(payload: dict[str, Any]):
+    path = _auth_cache_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _clear_auth_cache():
+    path = _auth_cache_path()
+    if path.exists():
+        path.unlink(missing_ok=True)
+
+
+def _local_access_token() -> str:
+    return _clean_text(_load_auth_cache().get("access_token"))
+
+
+def _auth_headers(required: bool = False) -> dict[str, str]:
+    token = _local_access_token()
+    if not token:
+        if required:
+            raise RuntimeError("auth_required: run 'maestro-solo auth login'")
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _billing_url(value: str | None) -> str:
     text = str(value or "").strip()
     if text:
@@ -106,9 +152,14 @@ def _license_url(value: str | None) -> str:
     return DEFAULT_LICENSE_URL
 
 
-def _http_post_json(url: str, payload: dict[str, Any], timeout: int = 20) -> tuple[bool, dict[str, Any]]:
+def _http_post_json(
+    url: str,
+    payload: dict[str, Any],
+    timeout: int = 20,
+    headers: dict[str, str] | None = None,
+) -> tuple[bool, dict[str, Any]]:
     try:
-        response = httpx.post(url, json=payload, timeout=timeout)
+        response = httpx.post(url, json=payload, timeout=timeout, headers=headers)
     except Exception as exc:
         return False, {"error": f"http_post_failed: {exc}"}
     try:
@@ -123,9 +174,14 @@ def _http_post_json(url: str, payload: dict[str, Any], timeout: int = 20) -> tup
     return True, data if isinstance(data, dict) else {"result": data}
 
 
-def _http_get_json(url: str, timeout: int = 20) -> tuple[bool, dict[str, Any]]:
+def _http_get_json(
+    url: str,
+    timeout: int = 20,
+    headers: dict[str, str] | None = None,
+    params: dict[str, Any] | None = None,
+) -> tuple[bool, dict[str, Any]]:
     try:
-        response = httpx.get(url, timeout=timeout)
+        response = httpx.get(url, timeout=timeout, headers=headers, params=params)
     except Exception as exc:
         return False, {"error": f"http_get_failed: {exc}"}
     try:
@@ -150,6 +206,133 @@ def _cmd_setup(args: argparse.Namespace) -> int:
 
     setup_main()
     return 0
+
+
+def _cmd_auth(args: argparse.Namespace) -> int:
+    action = _clean_text(getattr(args, "auth_action", "")).lower() or "status"
+    billing = _billing_url(getattr(args, "billing_url", None))
+
+    if action == "logout":
+        headers = _auth_headers(required=False)
+        if headers:
+            _http_post_json(f"{billing}/v1/auth/logout", {}, timeout=20, headers=headers)
+        _clear_auth_cache()
+        console.print("[green]Signed out from local Maestro auth cache.[/]")
+        return 0
+
+    if action == "status":
+        headers = _auth_headers(required=False)
+        if not headers:
+            console.print("[yellow]Auth status: not signed in.[/]")
+            return 0
+        ok, payload = _http_get_json(f"{billing}/v1/auth/session", timeout=20, headers=headers)
+        if not ok or not bool(payload.get("authenticated")):
+            console.print("[yellow]Auth token is missing or expired. Run: maestro-solo auth login[/]")
+            if bool(getattr(args, "json", False)):
+                _print_json({"authenticated": False, "detail": payload})
+            return 1
+        if bool(getattr(args, "json", False)):
+            _print_json(payload)
+            return 0
+        console.print(Panel(
+            "\n".join([
+                "Signed in.",
+                f"email: {payload.get('email', '')}",
+                f"sub: {payload.get('sub', '')}",
+            ]),
+            border_style="green",
+            title="[bold green]Maestro Auth[/]",
+        ))
+        return 0
+
+    if action != "login":
+        console.print(f"[red]Unknown auth action: {action}[/]")
+        return 1
+
+    # Reuse existing token if still valid.
+    headers = _auth_headers(required=False)
+    if headers:
+        ok, payload = _http_get_json(f"{billing}/v1/auth/session", timeout=20, headers=headers)
+        if ok and bool(payload.get("authenticated")):
+            console.print(f"[green]Already signed in as {payload.get('email', '')}.[/]")
+            return 0
+        _clear_auth_cache()
+
+    ok, created = _http_post_json(
+        f"{billing}/v1/auth/cli/sessions",
+        {"return_to": "/upgrade"},
+        timeout=20,
+    )
+    if not ok:
+        console.print("[red]Failed to start Google auth session.[/]")
+        _print_json(created)
+        return 1
+
+    session_id = _clean_text(created.get("session_id"))
+    poll_token = _clean_text(created.get("poll_token"))
+    authorize_url = _clean_text(created.get("authorize_url"))
+    poll_url = _clean_text(created.get("poll_url")) or f"{billing}/v1/auth/cli/sessions/{session_id}"
+    if not session_id or not poll_token or not authorize_url:
+        console.print("[red]Auth session response missing required fields.[/]")
+        _print_json(created)
+        return 1
+
+    console.print(Panel(
+        "\n".join([
+            "Google sign-in is required.",
+            f"authorize_url: {authorize_url}",
+        ]),
+        border_style=CYAN,
+        title=f"[bold {BRIGHT_CYAN}]Maestro Auth Login[/]",
+    ))
+
+    if not bool(getattr(args, "no_open", False)):
+        _open_url(authorize_url)
+        console.print(f"[{DIM}]Opened Google sign-in in browser.[/]")
+    else:
+        console.print(f"[{DIM}]Auto-open disabled (--no-open).[/]")
+
+    timeout_seconds = max(30, int(getattr(args, "timeout_seconds", 180)))
+    poll_seconds = max(1, int(getattr(args, "poll_seconds", 2)))
+    deadline = time.time() + timeout_seconds
+    last_status = ""
+    while time.time() < deadline:
+        ok, polled = _http_get_json(
+            poll_url,
+            timeout=20,
+            params={"poll_token": poll_token},
+        )
+        if not ok:
+            time.sleep(poll_seconds)
+            continue
+        status = _clean_text(polled.get("status")).lower()
+        if status and status != last_status:
+            console.print(f"[{CYAN}]auth status:[/] {status}")
+            last_status = status
+        if status == "authenticated":
+            access_token = _clean_text(polled.get("access_token"))
+            if not access_token:
+                console.print("[red]Auth completed but access_token is missing.[/]")
+                _print_json(polled)
+                return 1
+            _save_auth_cache(
+                {
+                    "access_token": access_token,
+                    "sub": _clean_text(polled.get("sub")),
+                    "email": _clean_text(polled.get("email")),
+                    "name": _clean_text(polled.get("name")),
+                    "saved_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                }
+            )
+            console.print(f"[green]Signed in as {_clean_text(polled.get('email'))}.[/]")
+            return 0
+        if status == "expired":
+            console.print("[red]Google auth session expired. Run the command again.[/]")
+            return 1
+        time.sleep(poll_seconds)
+
+    console.print("[red]Timed out waiting for Google authentication.[/]")
+    return 1
 
 
 def _build_purchase_payload(args: argparse.Namespace, *, email: str) -> dict[str, Any]:
@@ -181,6 +364,11 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
 
     billing = _billing_url(args.billing_url)
     payload = _build_purchase_payload(args, email=email)
+    try:
+        headers = _auth_headers(required=True)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
 
     console.print(Panel(
         "\n".join([
@@ -193,7 +381,7 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
         title=f"[bold {BRIGHT_CYAN}]Maestro Solo Purchase[/]",
     ))
 
-    ok, create = _http_post_json(f"{billing}/v1/solo/purchases", payload, timeout=20)
+    ok, create = _http_post_json(f"{billing}/v1/solo/purchases", payload, timeout=20, headers=headers)
     if not ok:
         console.print("[red]Failed to create purchase.[/]")
         _print_json(create)
@@ -222,11 +410,16 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
 
     if payload["mode"] == "test":
         console.print("")
-        console.print("[bold]Test mode helper:[/]")
-        console.print(
+        console.print("[bold]Test mode helper (requires MAESTRO_ENABLE_DEV_ENDPOINTS=1):[/]")
+        auth_header = _clean_text(headers.get("Authorization", ""))
+        curl_cmd = (
             f"curl -sS -X POST {billing}/v1/solo/dev/mark-paid "
-            f"-H 'content-type: application/json' -d '{json.dumps({'purchase_id': purchase_id})}'"
+            "-H 'content-type: application/json' "
         )
+        if auth_header:
+            curl_cmd += f"-H 'Authorization: {auth_header}' "
+        curl_cmd += f"-d '{json.dumps({'purchase_id': purchase_id})}'"
+        console.print(curl_cmd)
 
     deadline = time.time() + max(10, int(args.timeout_seconds))
     poll_seconds = max(1, int(args.poll_seconds))
@@ -235,7 +428,7 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
     console.print("[bold]Waiting for payment confirmation...[/]")
 
     while time.time() < deadline:
-        ok, polled = _http_get_json(f"{billing}/v1/solo/purchases/{purchase_id}", timeout=20)
+        ok, polled = _http_get_json(f"{billing}/v1/solo/purchases/{purchase_id}", timeout=20, headers=headers)
         if not ok:
             console.print("[yellow]Polling failed; retrying...[/]")
             _print_json(polled)
@@ -302,6 +495,12 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
 
 def _cmd_unsubscribe(args: argparse.Namespace) -> int:
     billing = _billing_url(args.billing_url)
+    try:
+        headers = _auth_headers(required=True)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
+
     local = load_local_license()
     purchase_id = _clean_text(args.purchase_id) or _clean_text(local.get("purchase_id"))
     email = _clean_text(args.email) or _clean_text(local.get("email"))
@@ -329,7 +528,7 @@ def _cmd_unsubscribe(args: argparse.Namespace) -> int:
         title=f"[bold {BRIGHT_CYAN}]Manage Subscription[/]",
     ))
 
-    ok, created = _http_post_json(f"{billing}/v1/solo/portal-sessions", payload, timeout=20)
+    ok, created = _http_post_json(f"{billing}/v1/solo/portal-sessions", payload, timeout=20, headers=headers)
     if not ok:
         console.print("[red]Failed to create billing portal session.[/]")
         _print_json(created)
@@ -604,6 +803,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional company name used by --quick",
     )
 
+    auth = sub.add_parser("auth", help="Sign in/out and inspect Maestro billing auth session")
+    auth_sub = auth.add_subparsers(dest="auth_action", required=False)
+    auth_status = auth_sub.add_parser("status", help="Show current auth session status")
+    auth_status.add_argument("--billing-url", default=None)
+    auth_status.add_argument("--json", action="store_true")
+    auth_login = auth_sub.add_parser("login", help="Sign in with Google for billing operations")
+    auth_login.add_argument("--billing-url", default=None)
+    auth_login.add_argument("--no-open", action="store_true")
+    auth_login.add_argument("--timeout-seconds", type=int, default=180)
+    auth_login.add_argument("--poll-seconds", type=int, default=2)
+    auth_logout = auth_sub.add_parser("logout", help="Clear local auth session")
+    auth_logout.add_argument("--billing-url", default=None)
+
     purchase = sub.add_parser("purchase", help="Create Solo purchase and wait for license provisioning")
     purchase.add_argument("--email", default="")
     purchase.add_argument("--plan", default=DEFAULT_PLAN)
@@ -687,6 +899,7 @@ def main(argv: list[str] | None = None):
     args = build_parser().parse_args(parsed_argv)
     handlers = {
         "setup": _cmd_setup,
+        "auth": _cmd_auth,
         "purchase": _cmd_purchase,
         "unsubscribe": _cmd_unsubscribe,
         "status": _cmd_status,

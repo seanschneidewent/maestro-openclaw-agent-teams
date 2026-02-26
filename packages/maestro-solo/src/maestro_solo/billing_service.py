@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import hmac
 import json
@@ -11,12 +12,13 @@ import re
 import secrets
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 from typing import Any
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from .billing_storage import billing_state_default, load_billing_state, save_billing_state
@@ -27,6 +29,8 @@ from .billing_stripe import (
 )
 from .billing_views import (
     render_checkout_cancel_page,
+    render_checkout_cli_auth_complete_page,
+    render_checkout_login_page,
     render_checkout_dev_page,
     render_checkout_success_page,
     render_upgrade_page,
@@ -40,6 +44,12 @@ PURCHASE_FAILED = "failed"
 PURCHASE_CANCELED = "canceled"
 
 STRIPE_WEBHOOK_TOLERANCE_SECONDS_DEFAULT = 300
+AUTH_TOKEN_PREFIX = "MAAUTH"
+AUTH_STATE_PREFIX = "MASTATE"
+AUTH_COOKIE_NAME = "maestro_auth"
+AUTH_TOKEN_TTL_SECONDS_DEFAULT = 60 * 60 * 24 * 7
+AUTH_STATE_TTL_SECONDS_DEFAULT = 60 * 15
+AUTH_CLI_SESSION_TTL_SECONDS_DEFAULT = 60 * 15
 
 
 def _now_iso() -> str:
@@ -85,6 +95,378 @@ def _purchase_response(purchase: dict[str, Any]) -> dict[str, Any]:
         "error": purchase.get("error"),
     }
 
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(raw: str) -> bytes:
+    padding = "=" * ((4 - len(raw) % 4) % 4)
+    return base64.urlsafe_b64decode((raw + padding).encode("ascii"))
+
+
+def _is_truthy(raw: str) -> bool:
+    return _clean_text(raw).lower() in {"1", "true", "yes", "on"}
+
+
+def _billing_auth_required() -> bool:
+    return not _clean_text(os.environ.get("MAESTRO_BILLING_REQUIRE_AUTH", "1")).lower() in {"0", "false", "no", "off"}
+
+
+def _enable_dev_endpoints() -> bool:
+    return _is_truthy(os.environ.get("MAESTRO_ENABLE_DEV_ENDPOINTS", "0"))
+
+
+def _auth_secret() -> str:
+    return _clean_text(os.environ.get("MAESTRO_AUTH_JWT_SECRET"))
+
+
+def _auth_token_ttl_seconds() -> int:
+    raw = _clean_text(os.environ.get("MAESTRO_AUTH_TOKEN_TTL_SECONDS"))
+    if not raw:
+        return AUTH_TOKEN_TTL_SECONDS_DEFAULT
+    try:
+        return max(300, int(raw))
+    except ValueError:
+        return AUTH_TOKEN_TTL_SECONDS_DEFAULT
+
+
+def _auth_state_ttl_seconds() -> int:
+    raw = _clean_text(os.environ.get("MAESTRO_AUTH_STATE_TTL_SECONDS"))
+    if not raw:
+        return AUTH_STATE_TTL_SECONDS_DEFAULT
+    try:
+        return max(60, int(raw))
+    except ValueError:
+        return AUTH_STATE_TTL_SECONDS_DEFAULT
+
+
+def _auth_cli_session_ttl_seconds() -> int:
+    raw = _clean_text(os.environ.get("MAESTRO_AUTH_CLI_SESSION_TTL_SECONDS"))
+    if not raw:
+        return AUTH_CLI_SESSION_TTL_SECONDS_DEFAULT
+    try:
+        return max(120, int(raw))
+    except ValueError:
+        return AUTH_CLI_SESSION_TTL_SECONDS_DEFAULT
+
+
+def _google_client_id() -> str:
+    return _clean_text(os.environ.get("MAESTRO_GOOGLE_CLIENT_ID"))
+
+
+def _google_client_secret() -> str:
+    return _clean_text(os.environ.get("MAESTRO_GOOGLE_CLIENT_SECRET"))
+
+
+def _google_redirect_uri() -> str:
+    return _clean_text(os.environ.get("MAESTRO_GOOGLE_REDIRECT_URI"))
+
+
+def _google_oauth_configured() -> bool:
+    return bool(_google_client_id() and _google_client_secret() and _google_redirect_uri())
+
+
+def _allowed_google_domains() -> set[str]:
+    raw = _clean_text(os.environ.get("MAESTRO_AUTH_ALLOWED_DOMAINS"))
+    if not raw:
+        return set()
+    values: set[str] = set()
+    for token in re.split(r"[,\s]+", raw):
+        clean = _clean_text(token).lower()
+        if clean:
+            values.add(clean)
+    return values
+
+
+def _auth_cookie_secure(raw_request: Request) -> bool:
+    override = _clean_text(os.environ.get("MAESTRO_AUTH_COOKIE_SECURE"))
+    if override:
+        return _is_truthy(override)
+    forwarded_proto = _clean_text(raw_request.headers.get("x-forwarded-proto")).lower()
+    if forwarded_proto:
+        return forwarded_proto.split(",")[0].strip() == "https"
+    return str(raw_request.url.scheme).lower() == "https"
+
+
+def _require_auth_secret() -> str:
+    secret = _auth_secret()
+    if not secret:
+        raise HTTPException(status_code=503, detail="auth_not_configured:missing_MAESTRO_AUTH_JWT_SECRET")
+    return secret
+
+
+def _sign_blob(prefix: str, payload_b64: str, *, secret: str) -> str:
+    signed = f"{prefix}.{payload_b64}".encode("utf-8")
+    return _b64url_encode(hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).digest())
+
+
+def _issue_signed_token(prefix: str, payload: dict[str, Any], *, secret: str) -> str:
+    payload_raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_b64 = _b64url_encode(payload_raw)
+    signature = _sign_blob(prefix, payload_b64, secret=secret)
+    return f"{prefix}.{payload_b64}.{signature}"
+
+
+def _verify_signed_token(token: str, *, expected_prefix: str, secret: str) -> tuple[bool, dict[str, Any] | str]:
+    parts = _clean_text(token).split(".")
+    if len(parts) != 3:
+        return False, "invalid_format"
+    prefix, payload_b64, signature = parts
+    if prefix != expected_prefix:
+        return False, "invalid_prefix"
+    expected = _sign_blob(prefix, payload_b64, secret=secret)
+    if not hmac.compare_digest(expected, signature):
+        return False, "signature_mismatch"
+    try:
+        payload = json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+    except Exception:
+        return False, "invalid_payload"
+    if not isinstance(payload, dict):
+        return False, "invalid_payload"
+    return True, payload
+
+
+def _issue_auth_token_for_user(*, sub: str, email: str, name: str = "", picture: str = "") -> str:
+    now = int(time.time())
+    payload = {
+        "v": 1,
+        "typ": "session",
+        "sub": _clean_text(sub),
+        "email": _clean_text(email),
+        "name": _clean_text(name),
+        "picture": _clean_text(picture),
+        "iat": now,
+        "exp": now + _auth_token_ttl_seconds(),
+    }
+    return _issue_signed_token(AUTH_TOKEN_PREFIX, payload, secret=_require_auth_secret())
+
+
+def _verify_auth_token(token: str) -> tuple[bool, dict[str, Any] | str]:
+    secret = _require_auth_secret()
+    ok, parsed = _verify_signed_token(token, expected_prefix=AUTH_TOKEN_PREFIX, secret=secret)
+    if not ok:
+        return False, parsed
+    payload = parsed if isinstance(parsed, dict) else {}
+    if int(payload.get("v", 0)) != 1 or _clean_text(payload.get("typ")) != "session":
+        return False, "invalid_token_type"
+    if int(payload.get("exp", 0)) <= int(time.time()):
+        return False, "expired"
+    if not _clean_text(payload.get("sub")) or not _clean_text(payload.get("email")):
+        return False, "missing_identity_fields"
+    return True, payload
+
+
+def _issue_oauth_state_token(*, cli_session_id: str = "", return_to: str = "") -> str:
+    now = int(time.time())
+    payload = {
+        "v": 1,
+        "typ": "oauth_state",
+        "iat": now,
+        "exp": now + _auth_state_ttl_seconds(),
+        "nonce": secrets.token_urlsafe(18),
+        "cli_session_id": _clean_text(cli_session_id),
+        "return_to": _clean_text(return_to),
+    }
+    return _issue_signed_token(AUTH_STATE_PREFIX, payload, secret=_require_auth_secret())
+
+
+def _verify_oauth_state_token(state_token: str) -> tuple[bool, dict[str, Any] | str]:
+    secret = _require_auth_secret()
+    ok, parsed = _verify_signed_token(state_token, expected_prefix=AUTH_STATE_PREFIX, secret=secret)
+    if not ok:
+        return False, parsed
+    payload = parsed if isinstance(parsed, dict) else {}
+    if int(payload.get("v", 0)) != 1 or _clean_text(payload.get("typ")) != "oauth_state":
+        return False, "invalid_state_type"
+    if int(payload.get("exp", 0)) <= int(time.time()):
+        return False, "state_expired"
+    return True, payload
+
+
+def _extract_auth_token(raw_request: Request) -> str:
+    header = _clean_text(raw_request.headers.get("Authorization"))
+    if header.startswith("Bearer "):
+        token = _clean_text(header[len("Bearer "):])
+        if token:
+            return token
+    cookie_token = _clean_text(raw_request.cookies.get(AUTH_COOKIE_NAME))
+    return cookie_token
+
+
+def _resolve_auth_user(raw_request: Request, *, required: bool) -> dict[str, Any]:
+    if not _billing_auth_required() and required:
+        return {"sub": "", "email": "", "name": "", "picture": ""}
+
+    token = _extract_auth_token(raw_request)
+    if not token:
+        if required:
+            raise HTTPException(status_code=401, detail="auth_required")
+        return {"authenticated": False}
+
+    try:
+        ok, parsed = _verify_auth_token(token)
+    except HTTPException:
+        if required:
+            raise
+        return {"authenticated": False, "error": "auth_not_configured"}
+
+    if not ok:
+        if required:
+            raise HTTPException(status_code=401, detail=f"invalid_auth_token:{parsed}")
+        return {"authenticated": False, "error": str(parsed)}
+
+    user = parsed if isinstance(parsed, dict) else {}
+    user["authenticated"] = True
+    user["token"] = token
+    return user
+
+
+def _purchase_owned_by_user(purchase: dict[str, Any], user: dict[str, Any]) -> bool:
+    if not _billing_auth_required():
+        return True
+
+    user_sub = _clean_text(user.get("sub"))
+    user_email = _clean_text(user.get("email")).lower()
+    owner_sub = _clean_text(purchase.get("owner_sub"))
+    owner_email = _clean_text(purchase.get("owner_email")).lower()
+    purchase_email = _clean_text(purchase.get("email")).lower()
+
+    if owner_sub:
+        return owner_sub == user_sub
+    if owner_email:
+        return owner_email == user_email
+    return purchase_email == user_email
+
+
+def _safe_return_to(raw_value: str) -> str:
+    value = _clean_text(raw_value)
+    return value if value.startswith("/") else ""
+
+
+def _google_authorize_url(*, state_token: str, raw_request: Request) -> str:
+    if not _google_oauth_configured():
+        raise HTTPException(status_code=503, detail="google_oauth_not_configured")
+    params = {
+        "client_id": _google_client_id(),
+        "redirect_uri": _google_redirect_uri(),
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state_token,
+        "access_type": "offline",
+        "prompt": "select_account",
+    }
+    return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+
+
+def _exchange_google_code_for_access_token(code: str) -> str:
+    payload = {
+        "code": _clean_text(code),
+        "client_id": _google_client_id(),
+        "client_secret": _google_client_secret(),
+        "redirect_uri": _google_redirect_uri(),
+        "grant_type": "authorization_code",
+    }
+    try:
+        response = httpx.post(
+            "https://oauth2.googleapis.com/token",
+            data=payload,
+            headers={"content-type": "application/x-www-form-urlencoded"},
+            timeout=20,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"google_token_exchange_failed:{exc}") from exc
+
+    try:
+        data = response.json()
+    except Exception:
+        data = {"error": response.text}
+    if response.status_code >= 300:
+        raise HTTPException(status_code=502, detail=f"google_token_exchange_status_{response.status_code}")
+
+    access_token = _clean_text(data.get("access_token")) if isinstance(data, dict) else ""
+    if not access_token:
+        raise HTTPException(status_code=502, detail="google_token_exchange_missing_access_token")
+    return access_token
+
+
+def _fetch_google_user(access_token: str) -> dict[str, str]:
+    try:
+        response = httpx.get(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=20,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"google_userinfo_failed:{exc}") from exc
+
+    try:
+        data = response.json()
+    except Exception:
+        data = {}
+    if response.status_code >= 300 or not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="google_userinfo_unavailable")
+
+    sub = _clean_text(data.get("sub"))
+    email = _clean_text(data.get("email")).lower()
+    email_verified = bool(data.get("email_verified"))
+    if not sub or not email:
+        raise HTTPException(status_code=401, detail="google_identity_missing_fields")
+    if not email_verified:
+        raise HTTPException(status_code=401, detail="google_email_not_verified")
+
+    allowed_domains = _allowed_google_domains()
+    if allowed_domains:
+        domain = email.split("@", 1)[-1] if "@" in email else ""
+        if domain.lower() not in allowed_domains:
+            raise HTTPException(status_code=403, detail="google_account_domain_not_allowed")
+
+    return {
+        "sub": sub,
+        "email": email,
+        "name": _clean_text(data.get("name")),
+        "picture": _clean_text(data.get("picture")),
+    }
+
+
+def _set_auth_cookie(response: HTMLResponse, token: str, *, raw_request: Request):
+    response.set_cookie(
+        AUTH_COOKIE_NAME,
+        token,
+        max_age=_auth_token_ttl_seconds(),
+        httponly=True,
+        samesite="lax",
+        secure=_auth_cookie_secure(raw_request),
+        path="/",
+    )
+
+
+def _clear_auth_cookie(response: Any):
+    response.delete_cookie(AUTH_COOKIE_NAME, path="/")
+
+
+def _prune_cli_auth_sessions(state: dict[str, Any]):
+    sessions = state.get("auth_cli_sessions")
+    if not isinstance(sessions, dict):
+        state["auth_cli_sessions"] = {}
+        return
+
+    now = int(time.time())
+    to_delete: list[str] = []
+    for session_id, session in sessions.items():
+        if not isinstance(session, dict):
+            to_delete.append(str(session_id))
+            continue
+        expires_epoch = int(session.get("expires_epoch", 0))
+        status = _clean_text(session.get("status"))
+        completed_epoch = int(session.get("completed_epoch", 0))
+        if expires_epoch and now > expires_epoch:
+            to_delete.append(str(session_id))
+            continue
+        if status == "authenticated" and completed_epoch and now - completed_epoch > 600:
+            to_delete.append(str(session_id))
+    for session_id in to_delete:
+        sessions.pop(session_id, None)
 
 def _license_service_url() -> str:
     return os.environ.get("MAESTRO_LICENSE_URL", "http://127.0.0.1:8082").strip().rstrip("/")
@@ -665,6 +1047,10 @@ class CreateBillingPortalSessionRequest(BaseModel):
     return_url: str | None = None
 
 
+class CreateCliAuthSessionRequest(BaseModel):
+    return_to: str | None = None
+
+
 app = FastAPI(title="Maestro Solo Billing Service", docs_url=None, redoc_url=None)
 
 
@@ -674,12 +1060,189 @@ def healthz():
 
 
 @app.get("/upgrade")
-def upgrade_page():
-    return HTMLResponse(render_upgrade_page())
+def upgrade_page(raw_request: Request):
+    user = _resolve_auth_user(raw_request, required=False)
+    if _billing_auth_required() and not bool(user.get("authenticated")):
+        base_url = _request_base_url(raw_request)
+        login_url = f"{base_url}/v1/auth/google/start?{urlencode({'return_to': '/upgrade'})}"
+        return HTMLResponse(render_checkout_login_page(login_url=login_url))
+    return HTMLResponse(render_upgrade_page(authenticated_email=_clean_text(user.get("email"))))
+
+
+@app.get("/v1/auth/session")
+def auth_session(raw_request: Request):
+    user = _resolve_auth_user(raw_request, required=False)
+    if not bool(user.get("authenticated")):
+        return {"authenticated": False}
+    return {
+        "authenticated": True,
+        "sub": _clean_text(user.get("sub")),
+        "email": _clean_text(user.get("email")),
+        "name": _clean_text(user.get("name")),
+    }
+
+
+@app.post("/v1/auth/logout")
+def auth_logout():
+    response = JSONResponse({"ok": True})
+    _clear_auth_cookie(response)
+    return response
+
+
+@app.post("/v1/auth/cli/sessions")
+def create_cli_auth_session(request: CreateCliAuthSessionRequest, raw_request: Request):
+    if not _google_oauth_configured():
+        raise HTTPException(status_code=503, detail="google_oauth_not_configured")
+    _require_auth_secret()
+
+    state = _load_state()
+    _prune_cli_auth_sessions(state)
+    sessions = state.get("auth_cli_sessions")
+    if not isinstance(sessions, dict):
+        sessions = {}
+        state["auth_cli_sessions"] = sessions
+
+    session_id = f"auth_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}{secrets.token_hex(4)}"
+    poll_token = secrets.token_urlsafe(24)
+    expires_epoch = int(time.time()) + _auth_cli_session_ttl_seconds()
+    safe_return_to = _safe_return_to(_clean_text(request.return_to))
+    state_token = _issue_oauth_state_token(cli_session_id=session_id, return_to=safe_return_to)
+    authorize_url = _google_authorize_url(state_token=state_token, raw_request=raw_request)
+    base_url = _request_base_url(raw_request)
+
+    sessions[session_id] = {
+        "status": "pending",
+        "poll_token": poll_token,
+        "created_at": _now_iso(),
+        "expires_epoch": expires_epoch,
+        "return_to": safe_return_to,
+        "authorize_url": authorize_url,
+        "token": "",
+        "user": {},
+    }
+    _save_state(state)
+    return {
+        "session_id": session_id,
+        "poll_token": poll_token,
+        "authorize_url": authorize_url,
+        "poll_url": f"{base_url}/v1/auth/cli/sessions/{session_id}",
+        "expires_at": datetime.fromtimestamp(expires_epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+
+
+@app.get("/v1/auth/cli/sessions/{session_id}")
+def get_cli_auth_session(session_id: str, poll_token: str):
+    state = _load_state()
+    _prune_cli_auth_sessions(state)
+    sessions = state.get("auth_cli_sessions")
+    if not isinstance(sessions, dict):
+        raise HTTPException(status_code=404, detail="auth_session_not_found")
+    session = sessions.get(_clean_text(session_id))
+    if not isinstance(session, dict):
+        raise HTTPException(status_code=404, detail="auth_session_not_found")
+    if _clean_text(session.get("poll_token")) != _clean_text(poll_token):
+        raise HTTPException(status_code=403, detail="auth_session_poll_token_invalid")
+
+    status = _clean_text(session.get("status")) or "pending"
+    if status == "authenticated":
+        user = session.get("user") if isinstance(session.get("user"), dict) else {}
+        return {
+            "status": "authenticated",
+            "access_token": _clean_text(session.get("token")),
+            "sub": _clean_text(user.get("sub")),
+            "email": _clean_text(user.get("email")),
+            "name": _clean_text(user.get("name")),
+        }
+
+    expires_epoch = int(session.get("expires_epoch", 0))
+    if expires_epoch and int(time.time()) > expires_epoch:
+        session["status"] = "expired"
+        sessions[_clean_text(session_id)] = session
+        _save_state(state)
+        return {"status": "expired"}
+
+    return {"status": status}
+
+
+@app.get("/v1/auth/google/start")
+def auth_google_start(raw_request: Request, cli_session_id: str | None = None, return_to: str | None = None):
+    if not _google_oauth_configured():
+        raise HTTPException(status_code=503, detail="google_oauth_not_configured")
+    _require_auth_secret()
+
+    clean_cli_session_id = _clean_text(cli_session_id)
+    clean_return_to = _safe_return_to(_clean_text(return_to))
+
+    if clean_cli_session_id:
+        state = _load_state()
+        _prune_cli_auth_sessions(state)
+        sessions = state.get("auth_cli_sessions")
+        session = sessions.get(clean_cli_session_id) if isinstance(sessions, dict) else None
+        if not isinstance(session, dict):
+            raise HTTPException(status_code=404, detail="auth_session_not_found")
+        expires_epoch = int(session.get("expires_epoch", 0))
+        if expires_epoch and int(time.time()) > expires_epoch:
+            raise HTTPException(status_code=410, detail="auth_session_expired")
+        session_return = _safe_return_to(_clean_text(session.get("return_to")))
+        if session_return:
+            clean_return_to = session_return
+
+    state_token = _issue_oauth_state_token(
+        cli_session_id=clean_cli_session_id,
+        return_to=clean_return_to,
+    )
+    return RedirectResponse(url=_google_authorize_url(state_token=state_token, raw_request=raw_request), status_code=307)
+
+
+@app.get("/v1/auth/google/callback")
+def auth_google_callback(raw_request: Request, code: str = "", state: str = ""):
+    clean_code = _clean_text(code)
+    clean_state = _clean_text(state)
+    if not clean_code or not clean_state:
+        raise HTTPException(status_code=400, detail="google_callback_missing_code_or_state")
+
+    ok, parsed_state = _verify_oauth_state_token(clean_state)
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"google_callback_invalid_state:{parsed_state}")
+
+    state_payload = parsed_state if isinstance(parsed_state, dict) else {}
+    cli_session_id = _clean_text(state_payload.get("cli_session_id"))
+    return_to = _safe_return_to(_clean_text(state_payload.get("return_to")))
+
+    access_token = _exchange_google_code_for_access_token(clean_code)
+    user = _fetch_google_user(access_token)
+    session_token = _issue_auth_token_for_user(
+        sub=_clean_text(user.get("sub")),
+        email=_clean_text(user.get("email")),
+        name=_clean_text(user.get("name")),
+        picture=_clean_text(user.get("picture")),
+    )
+
+    if cli_session_id:
+        state_obj = _load_state()
+        _prune_cli_auth_sessions(state_obj)
+        sessions = state_obj.get("auth_cli_sessions")
+        session = sessions.get(cli_session_id) if isinstance(sessions, dict) else None
+        if isinstance(session, dict):
+            session["status"] = "authenticated"
+            session["completed_epoch"] = int(time.time())
+            session["token"] = session_token
+            session["user"] = user
+            sessions[cli_session_id] = session
+            _save_state(state_obj)
+        response = HTMLResponse(render_checkout_cli_auth_complete_page(email=_clean_text(user.get("email"))))
+        _set_auth_cookie(response, session_token, raw_request=raw_request)
+        return response
+
+    redirect_target = return_to or "/upgrade"
+    response = RedirectResponse(url=redirect_target, status_code=307)
+    _set_auth_cookie(response, session_token, raw_request=raw_request)
+    return response
 
 
 @app.post("/v1/solo/purchases")
 def create_purchase(request: CreatePurchaseRequest, raw_request: Request):
+    auth_user = _resolve_auth_user(raw_request, required=True)
     purchase_id = _purchase_id()
     base_url = _request_base_url(raw_request)
     mode = (_clean_text(request.mode) or "test").lower()
@@ -687,12 +1250,18 @@ def create_purchase(request: CreatePurchaseRequest, raw_request: Request):
         mode = "test"
     if mode == "live" and not _stripe_secret_key():
         raise HTTPException(status_code=503, detail="live_checkout_unavailable:stripe_secret_key_missing")
+    user_email = _clean_text(auth_user.get("email")).lower()
+    request_email = _clean_text(request.email).lower()
+    if _billing_auth_required() and request_email != user_email:
+        raise HTTPException(status_code=403, detail="email_mismatch_with_authenticated_user")
 
     purchase = {
         "purchase_id": purchase_id,
         "status": PURCHASE_PENDING,
         "plan_id": request.plan_id.strip(),
-        "email": request.email.strip(),
+        "email": request_email,
+        "owner_sub": _clean_text(auth_user.get("sub")),
+        "owner_email": user_email,
         "mode": mode,
         "success_url": _clean_text(request.success_url),
         "cancel_url": _clean_text(request.cancel_url),
@@ -739,18 +1308,27 @@ def create_purchase(request: CreatePurchaseRequest, raw_request: Request):
 
 
 @app.get("/v1/solo/purchases/{purchase_id}")
-def get_purchase(purchase_id: str):
+def get_purchase(purchase_id: str, raw_request: Request):
+    auth_user = _resolve_auth_user(raw_request, required=True)
     state = _load_state()
     purchase = state["purchases"].get(str(purchase_id).strip())
     if not isinstance(purchase, dict):
+        raise HTTPException(status_code=404, detail="purchase not found")
+    if not _purchase_owned_by_user(purchase, auth_user):
         raise HTTPException(status_code=404, detail="purchase not found")
     return _purchase_response(purchase)
 
 
 @app.post("/v1/solo/portal-sessions")
 def create_portal_session(request: CreateBillingPortalSessionRequest, raw_request: Request):
+    auth_user = _resolve_auth_user(raw_request, required=True)
     state = _load_state()
-    lookup_email = _clean_text(request.email)
+    user_email = _clean_text(auth_user.get("email")).lower()
+    lookup_email = _clean_text(request.email).lower()
+    if _billing_auth_required():
+        if lookup_email and lookup_email != user_email:
+            raise HTTPException(status_code=403, detail="email_mismatch_with_authenticated_user")
+        lookup_email = user_email
     resolved = _resolve_portal_purchase(
         state,
         purchase_id=_clean_text(request.purchase_id),
@@ -762,6 +1340,8 @@ def create_portal_session(request: CreateBillingPortalSessionRequest, raw_reques
     customer_id = ""
     if resolved is not None:
         purchase_id, purchase = resolved
+        if isinstance(purchase, dict) and not _purchase_owned_by_user(purchase, auth_user):
+            raise HTTPException(status_code=404, detail="purchase not found for portal session")
         provider = _clean_text(purchase.get("provider")).lower()
         customer_id = _clean_text(purchase.get("stripe_customer_id"))
         if not lookup_email:
@@ -808,11 +1388,17 @@ def create_portal_session(request: CreateBillingPortalSessionRequest, raw_reques
 
 
 @app.post("/v1/solo/dev/mark-paid")
-def mark_paid(request: MarkPaidRequest):
+def mark_paid(request: MarkPaidRequest, raw_request: Request):
+    if not _enable_dev_endpoints():
+        raise HTTPException(status_code=404, detail="not_found")
+    auth_user = _resolve_auth_user(raw_request, required=True)
+
     state = _load_state()
     purchase_id = request.purchase_id.strip()
     purchase = state["purchases"].get(purchase_id)
     if not isinstance(purchase, dict):
+        raise HTTPException(status_code=404, detail="purchase not found")
+    if not _purchase_owned_by_user(purchase, auth_user):
         raise HTTPException(status_code=404, detail="purchase not found")
 
     status = _clean_text(purchase.get("status")).lower() or PURCHASE_PENDING

@@ -374,6 +374,19 @@ run_pro_purchase() {
     return 0
   fi
 
+  local billing_url="${MAESTRO_BILLING_URL:-}"
+  local -a auth_args=()
+  local -a purchase_args=()
+  if [[ -n "$billing_url" ]]; then
+    auth_args+=(--billing-url "$billing_url")
+    purchase_args+=(--billing-url "$billing_url")
+  fi
+
+  log "Starting Google sign-in for secure billing access..."
+  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+    "$PYTHON_BIN" -m maestro_solo.cli auth login "${auth_args[@]}" \
+    || fatal "Authentication failed. Re-run installer or run 'maestro-solo auth login' manually."
+
   log "Pro flow selected: purchase is required before launch."
   prompt_email
   log "Starting secure checkout for $PURCHASE_EMAIL"
@@ -382,6 +395,7 @@ run_pro_purchase() {
       --email "$PURCHASE_EMAIL" \
       --plan "$PRO_PLAN_ID" \
       --mode live \
+      "${purchase_args[@]}" \
     || fatal "Pro purchase failed. Re-run installer or run 'maestro-solo purchase --email $PURCHASE_EMAIL' manually."
 }
 

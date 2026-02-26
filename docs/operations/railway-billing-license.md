@@ -52,6 +52,11 @@ Set in both services:
 Set in billing service:
 
 - `MAESTRO_LICENSE_URL` (public or private URL for license service)
+- `MAESTRO_BILLING_REQUIRE_AUTH=1`
+- `MAESTRO_AUTH_JWT_SECRET` (long random secret for billing auth sessions)
+- `MAESTRO_GOOGLE_CLIENT_ID`
+- `MAESTRO_GOOGLE_CLIENT_SECRET`
+- `MAESTRO_GOOGLE_REDIRECT_URI` (`https://<your-billing-domain>/v1/auth/google/callback`)
 - `MAESTRO_STRIPE_SECRET_KEY`
 - `MAESTRO_STRIPE_WEBHOOK_SECRET`
 - `MAESTRO_STRIPE_PRICE_ID_SOLO_MONTHLY`
@@ -62,6 +67,8 @@ Optional:
 - `MAESTRO_STRIPE_PRICE_ID_<MODE>_<PLAN>` overrides
 - `MAESTRO_STRIPE_WEBHOOK_TOLERANCE_SECONDS` (default 300)
 - `MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL` (default `<billing-base-url>/upgrade`)
+- `MAESTRO_AUTH_ALLOWED_DOMAINS` (comma-separated Google Workspace domain allow-list)
+- `MAESTRO_ENABLE_DEV_ENDPOINTS=0` (keep disabled in production)
 
 Set in license service:
 
@@ -106,6 +113,7 @@ Copy Stripe webhook signing secret into:
 1. Run:
 
 ```bash
+maestro-solo auth login --billing-url https://<your-billing-domain>
 maestro-solo purchase --email you@example.com --plan solo_monthly --mode live --billing-url https://<your-billing-domain>
 ```
 

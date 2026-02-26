@@ -55,6 +55,13 @@ Fleet transition state path: `~/.maestro/install.json`
 - `MAESTRO_LICENSE_URL`
 - `MAESTRO_INTERNAL_TOKEN` (service-to-service auth for local billing/license test flow)
 - `MAESTRO_DATABASE_URL` (shared persistent state DB for billing/license services)
+- `MAESTRO_BILLING_REQUIRE_AUTH` (default `1`, require user auth for billing endpoints)
+- `MAESTRO_AUTH_JWT_SECRET` (required signing key for auth sessions)
+- `MAESTRO_GOOGLE_CLIENT_ID`
+- `MAESTRO_GOOGLE_CLIENT_SECRET`
+- `MAESTRO_GOOGLE_REDIRECT_URI`
+- `MAESTRO_AUTH_ALLOWED_DOMAINS` (optional domain allow-list)
+- `MAESTRO_ENABLE_DEV_ENDPOINTS` (default `0`; keep disabled in production)
 - `MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL` (optional Stripe Customer Portal return URL)
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`

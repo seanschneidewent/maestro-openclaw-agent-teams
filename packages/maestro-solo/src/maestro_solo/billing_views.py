@@ -6,7 +6,10 @@ import html
 import json
 
 
-def render_upgrade_page() -> str:
+def render_upgrade_page(*, authenticated_email: str = "") -> str:
+    safe_email = html.escape(authenticated_email)
+    email_json = json.dumps(authenticated_email)
+    signed_in_display = "block" if authenticated_email else "none"
     return """<!doctype html>
 <html>
   <head>
@@ -122,6 +125,7 @@ def render_upgrade_page() -> str:
       <div class="eyebrow">Maestro Solo Pro</div>
       <h1>Upgrade to Pro</h1>
       <p>Enter your email, continue to secure Stripe checkout, and Pro capabilities are provisioned automatically after payment.</p>
+      <p class="note" id="signed-in-note" style="display:""" + signed_in_display + """;">Signed in as <strong id="signed-in-email">""" + safe_email + """</strong>.</p>
       <form id="upgrade-form">
         <label>
           Email
@@ -144,6 +148,19 @@ def render_upgrade_page() -> str:
       const plan = document.getElementById("plan");
       const submit = document.getElementById("submit");
       const error = document.getElementById("error");
+      const signedIn = document.getElementById("signed-in-email");
+      const signedInNote = document.getElementById("signed-in-note");
+      const authEmail = """ + email_json + """;
+
+      if (authEmail && !email.value.trim()) {
+        email.value = authEmail;
+      }
+      if (authEmail) {
+        signedIn.textContent = authEmail;
+        signedInNote.style.display = "block";
+      } else {
+        signedInNote.style.display = "none";
+      }
 
       function showError(message) {
         error.textContent = message || "Unable to start checkout.";
@@ -160,6 +177,7 @@ def render_upgrade_page() -> str:
           const res = await fetch("/v1/solo/purchases", {
             method: "POST",
             headers: { "content-type": "application/json" },
+            credentials: "same-origin",
             body: JSON.stringify({
               email: email.value.trim(),
               plan_id: plan.value,
@@ -168,6 +186,9 @@ def render_upgrade_page() -> str:
           });
           const data = await res.json();
           if (!res.ok) {
+            if (res.status === 401) {
+              throw new Error("auth_required: sign in with Google first.");
+            }
             throw new Error((data && data.detail) || "purchase_create_failed");
           }
           if (!data.checkout_url) {
@@ -181,6 +202,59 @@ def render_upgrade_page() -> str:
         }
       });
     </script>
+  </body>
+</html>"""
+
+
+def render_checkout_login_page(*, login_url: str) -> str:
+    safe_url = html.escape(login_url, quote=True)
+    return f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in to Maestro</title>
+    <style>
+      body {{ font-family: "Avenir Next", "Segoe UI", sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: linear-gradient(145deg,#f7efe4,#dce9f7); color: #152535; padding: 18px; }}
+      .card {{ width: min(520px, 100%); background: #fff; border: 1px solid #d6e1ec; border-radius: 16px; box-shadow: 0 18px 48px rgba(22,37,53,0.12); padding: 24px; }}
+      h1 {{ margin: 0 0 10px; }}
+      p {{ color: #4b6174; line-height: 1.45; }}
+      a.button {{ display: inline-block; margin-top: 10px; text-decoration: none; color: #fff; background: #1a7fdd; padding: 11px 15px; border-radius: 10px; font-weight: 700; }}
+      a.button:hover {{ background: #166ec0; }}
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Sign in with Google</h1>
+      <p>Use your Google account to continue to Maestro Solo Pro checkout.</p>
+      <a class="button" href="{safe_url}">Continue with Google</a>
+    </main>
+  </body>
+</html>"""
+
+
+def render_checkout_cli_auth_complete_page(*, email: str) -> str:
+    safe_email = html.escape(email)
+    return f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Authentication Complete</title>
+    <style>
+      body {{ font-family: "Avenir Next", "Segoe UI", sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f4f7fb; color: #152536; padding: 18px; }}
+      .card {{ width: min(560px, 100%); background: #fff; border: 1px solid #d5dfeb; border-radius: 14px; padding: 22px; }}
+      .pill {{ display: inline-block; background: #e8f7ee; color: #1f6a3f; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 5px 10px; }}
+      p {{ color: #4c6073; }}
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <div class="pill">Success. You can close this tab.</div>
+      <h2>Signed in to Maestro</h2>
+      <p>Authenticated as <strong>{safe_email or "your Google account"}</strong>.</p>
+      <p>Return to your terminal to continue.</p>
+    </main>
   </body>
 </html>"""
 
@@ -225,7 +299,9 @@ def render_checkout_success_page(purchase_id: str) -> str:
           return;
         }}
         try {{
-          const res = await fetch("/v1/solo/purchases/" + encodeURIComponent(purchaseId));
+          const res = await fetch("/v1/solo/purchases/" + encodeURIComponent(purchaseId), {{
+            credentials: "same-origin"
+          }});
           const data = await res.json();
           const state = data.status || "unknown";
           if (state === "licensed") {{
@@ -307,6 +383,7 @@ def render_checkout_dev_page(purchase_id: str) -> str:
         const res = await fetch('/v1/solo/dev/mark-paid', {{
           method: 'POST',
           headers: {{ 'content-type': 'application/json' }},
+          credentials: 'same-origin',
           body: JSON.stringify({{ purchase_id: purchaseId }})
         }});
         const data = await res.json();

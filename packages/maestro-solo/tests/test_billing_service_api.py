@@ -16,6 +16,8 @@ from maestro_solo.solo_license import issue_solo_license
 @pytest.fixture(autouse=True)
 def _clear_database_url(monkeypatch):
     monkeypatch.delenv("MAESTRO_DATABASE_URL", raising=False)
+    monkeypatch.setenv("MAESTRO_BILLING_REQUIRE_AUTH", "0")
+    monkeypatch.setenv("MAESTRO_ENABLE_DEV_ENDPOINTS", "1")
 
 
 def _stripe_signature(payload: bytes, *, secret: str, timestamp: int | None = None) -> str:

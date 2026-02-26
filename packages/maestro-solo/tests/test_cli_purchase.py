@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from argparse import Namespace
 
+import pytest
+
 from maestro_solo import cli
+
+
+@pytest.fixture(autouse=True)
+def _auth_headers(monkeypatch):
+    monkeypatch.setattr(cli, "_auth_headers", lambda required=False: {"Authorization": "Bearer test-token"})
 
 
 def _purchase_args(**overrides):
@@ -79,7 +86,7 @@ def test_purchase_ignores_null_entitlement_token(monkeypatch):
 def test_purchase_does_not_send_localhost_success_or_cancel_urls_by_default(monkeypatch):
     captured: dict[str, dict] = {}
 
-    def _fake_post(_url, payload, timeout=20):
+    def _fake_post(_url, payload, timeout=20, headers=None):
         captured["payload"] = dict(payload)
         return True, {
             "purchase_id": "pur_test_002",
@@ -137,7 +144,7 @@ def test_unsubscribe_uses_local_purchase_context(monkeypatch):
     )
     captured: dict[str, object] = {}
 
-    def _fake_post(url, payload, timeout=20):
+    def _fake_post(url, payload, timeout=20, headers=None):
         captured["url"] = url
         captured["payload"] = dict(payload)
         return True, {

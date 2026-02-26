@@ -20,6 +20,7 @@ curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-a
 
 Pro flow prompts for billing email, opens Stripe Checkout, waits for license provisioning, then starts runtime.
 If setup already exists, installer runs a fast `doctor --fix` preflight and skips re-entering setup values.
+Pro flow now runs Google sign-in (`maestro-solo auth login`) before checkout when needed.
 
 Advanced channel override (optional):
 
