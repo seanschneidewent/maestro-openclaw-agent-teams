@@ -368,7 +368,8 @@ run_setup_or_preflight() {
 run_pro_auth() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   if [[ "$INSTALL_FLOW" != "pro" ]]; then
-    log "Free flow selected. Billing auth check is skipped."
+    log "Free flow: billing sign-in is not required."
+    log "Optional later: maestro-solo auth login"
     return 0
   fi
 
@@ -434,7 +435,8 @@ PY
 run_pro_purchase() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   if [[ "$INSTALL_FLOW" != "pro" ]]; then
-    log "Free flow selected. Purchase stage is skipped."
+    log "Free flow: no payment required."
+    log "Upgrade anytime: maestro-solo purchase --email you@example.com --plan $PRO_PLAN_ID --mode live"
     return 0
   fi
 
