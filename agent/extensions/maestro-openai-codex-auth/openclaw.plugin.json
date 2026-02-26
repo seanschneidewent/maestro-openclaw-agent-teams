@@ -1,0 +1,11 @@
+{
+  "id": "maestro-openai-codex-auth",
+  "name": "Maestro OpenAI Codex Auth",
+  "description": "OpenAI Codex OAuth provider plugin used by Maestro quick setup.",
+  "providers": ["openai-codex"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

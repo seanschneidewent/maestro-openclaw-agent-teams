@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import maestro_solo.quick_setup as quick_setup
@@ -47,6 +48,11 @@ def test_openai_oauth_step_does_not_fallback_to_onboard(monkeypatch, tmp_path):
     calls: list[list[str]] = []
 
     monkeypatch.setattr(quick_setup, "_openclaw_oauth_profile_exists", lambda _provider: False)
+    monkeypatch.setattr(
+        quick_setup.QuickSetup,
+        "_ensure_openai_oauth_provider_plugin",
+        lambda self: True,
+    )
 
     def _fake_run(args: list[str], *, timeout: int = 0) -> int:
         calls.append(list(args))
@@ -57,6 +63,37 @@ def test_openai_oauth_step_does_not_fallback_to_onboard(monkeypatch, tmp_path):
     runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
     assert runner._openai_oauth_step() is False
     assert calls == [["openclaw", "models", "auth", "login", "--provider", "openai-codex"]]
+
+
+def test_openai_oauth_plugin_bootstrap_stages_plugin_and_config(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    npm_calls: list[tuple[list[str], Path]] = []
+
+    def _fake_run_in_dir(args: list[str], *, cwd: Path, timeout: int = 120, capture: bool = True):
+        npm_calls.append((list(args), Path(cwd)))
+        marker = Path(cwd) / "node_modules" / "@mariozechner" / "pi-ai"
+        marker.mkdir(parents=True, exist_ok=True)
+        (marker / "package.json").write_text("{}", encoding="utf-8")
+        return True, ""
+
+    monkeypatch.setattr(quick_setup.shutil, "which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None)
+    monkeypatch.setattr(quick_setup, "_run_command_in_dir", _fake_run_in_dir)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    assert runner._ensure_openai_oauth_provider_plugin() is True
+
+    config_path = Path(tmp_path / "home" / ".openclaw" / "openclaw.json")
+    assert config_path.exists()
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    plugins = config.get("plugins", {})
+    entries = plugins.get("entries", {})
+    assert entries.get("maestro-openai-codex-auth", {}).get("enabled") is True
+    assert "maestro-openai-codex-auth" in plugins.get("allow", [])
+    assert npm_calls and npm_calls[0][0][:2] == ["npm", "install"]
+
+    npm_calls.clear()
+    assert runner._ensure_openai_oauth_provider_plugin() is True
+    assert npm_calls == []
 
 
 def test_tailscale_step_defers_when_not_installed_without_prompt(monkeypatch, tmp_path):

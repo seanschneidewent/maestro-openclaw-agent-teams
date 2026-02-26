@@ -37,6 +37,8 @@ console = Console(force_terminal=True if platform.system() == "Windows" else Non
 
 NATIVE_PLUGIN_ID = "maestro-native-tools"
 NATIVE_PLUGIN_DENY_TOOLS = ["browser", "web_search", "web_fetch", "canvas", "nodes"]
+OPENAI_OAUTH_PLUGIN_ID = "maestro-openai-codex-auth"
+OPENAI_OAUTH_PROVIDER_ID = "openai-codex"
 
 
 def _success(text: str):
@@ -63,6 +65,26 @@ def _run_command(args: list[str], *, timeout: int = 120, capture: bool = True) -
             capture_output=capture,
             text=True,
             timeout=timeout,
+        )
+    except Exception as exc:
+        return False, str(exc)
+
+    if capture:
+        output = (result.stdout or "").strip() or (result.stderr or "").strip()
+    else:
+        output = ""
+    return result.returncode == 0, output
+
+
+def _run_command_in_dir(args: list[str], *, cwd: Path, timeout: int = 120, capture: bool = True) -> tuple[bool, str]:
+    try:
+        result = subprocess.run(
+            args,
+            check=False,
+            capture_output=capture,
+            text=True,
+            timeout=timeout,
+            cwd=str(cwd),
         )
     except Exception as exc:
         return False, str(exc)
@@ -452,23 +474,117 @@ class QuickSetup:
             width=72,
         ))
 
-        if _openclaw_oauth_profile_exists("openai-codex"):
+        if _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID):
             _success("Existing OpenAI OAuth profile found")
             return True
 
+        if not self._ensure_openai_oauth_provider_plugin():
+            _error("OpenAI OAuth provider bootstrap failed.")
+            return False
+
         _info("Starting OAuth login: openclaw models auth login --provider openai-codex")
-        rc = _run_interactive_command(["openclaw", "models", "auth", "login", "--provider", "openai-codex"])
-        if rc == 0 and _openclaw_oauth_profile_exists("openai-codex"):
+        rc = _run_interactive_command(["openclaw", "models", "auth", "login", "--provider", OPENAI_OAUTH_PROVIDER_ID])
+        if rc == 0 and _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID):
             _success("OpenAI OAuth configured")
             return True
 
         _warning("OAuth login command did not complete.")
-        if _openclaw_oauth_profile_exists("openai-codex"):
+        if _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID):
             _success("OpenAI OAuth configured")
             return True
         _info("Run this command and then rerun Maestro setup: openclaw models auth login --provider openai-codex")
         _error("OpenAI OAuth is required and is not configured.")
         return False
+
+    def _locate_extension_source(self, extension_id: str) -> Path | None:
+        module_dir = Path(__file__).resolve().parent
+        repo_root = _discover_repo_root()
+        candidate_dirs = [
+            module_dir / "agent",
+            repo_root / "agent",
+            repo_root,
+            module_dir,
+        ]
+
+        for base in candidate_dirs:
+            candidate = base / "extensions" / extension_id
+            if candidate.exists() and candidate.is_dir():
+                return candidate
+        return None
+
+    def _ensure_openai_oauth_provider_plugin(self) -> bool:
+        source_dir = self._locate_extension_source(OPENAI_OAUTH_PLUGIN_ID)
+        if source_dir is None:
+            _warning("Could not locate Maestro OpenAI OAuth plugin files.")
+            return False
+
+        config_dir = Path.home() / ".openclaw"
+        extensions_dir = config_dir / "extensions"
+        extension_dst = extensions_dir / OPENAI_OAUTH_PLUGIN_ID
+        try:
+            extension_dst.mkdir(parents=True, exist_ok=True)
+            for item in source_dir.iterdir():
+                destination = extension_dst / item.name
+                if item.is_dir():
+                    shutil.copytree(item, destination, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, destination)
+        except Exception as exc:
+            _warning(f"Failed to stage OpenAI OAuth plugin files: {exc}")
+            return False
+
+        package_json = extension_dst / "package.json"
+        dependency_marker = extension_dst / "node_modules" / "@mariozechner" / "pi-ai" / "package.json"
+        if package_json.exists() and not dependency_marker.exists():
+            if shutil.which("npm") is None:
+                _warning("npm is required to install OpenAI OAuth plugin dependency.")
+                return False
+            _info("Installing OpenAI OAuth provider dependency...")
+            ok_install, install_out = _run_command_in_dir(
+                ["npm", "install", "--no-audit", "--no-fund", "--silent"],
+                cwd=extension_dst,
+                timeout=600,
+            )
+            if not ok_install:
+                _warning(f"OpenAI OAuth dependency install failed: {install_out}")
+                return False
+
+        config_file = config_dir / "openclaw.json"
+        config: dict[str, Any] = {}
+        if config_file.exists():
+            try:
+                loaded = json.loads(config_file.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    config = loaded
+            except Exception:
+                config = {}
+
+        plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+        entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
+        plugin_entry = entries.get(OPENAI_OAUTH_PLUGIN_ID) if isinstance(entries.get(OPENAI_OAUTH_PLUGIN_ID), dict) else {}
+        plugin_entry["enabled"] = True
+        entries[OPENAI_OAUTH_PLUGIN_ID] = plugin_entry
+        plugins["entries"] = entries
+
+        allow = plugins.get("allow")
+        if isinstance(allow, list):
+            normalized_allow = [str(item).strip() for item in allow if str(item).strip()]
+            if OPENAI_OAUTH_PLUGIN_ID not in normalized_allow:
+                normalized_allow.append(OPENAI_OAUTH_PLUGIN_ID)
+            plugins["allow"] = normalized_allow
+        else:
+            plugins["allow"] = [OPENAI_OAUTH_PLUGIN_ID]
+        config["plugins"] = plugins
+
+        try:
+            config_dir.mkdir(parents=True, exist_ok=True)
+            config_file.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        except Exception as exc:
+            _warning(f"Failed to persist OpenClaw plugin config: {exc}")
+            return False
+
+        _success("OpenAI OAuth provider plugin ready")
+        return True
 
     def _gemini_required_step(self) -> bool:
         console.print()
@@ -815,21 +931,7 @@ class QuickSetup:
         _success("Maestro SKILL.md synced")
 
     def _seed_native_extension(self):
-        module_dir = Path(__file__).resolve().parent
-        repo_root = _discover_repo_root()
-        candidate_dirs = [
-            module_dir / "agent",
-            repo_root / "agent",
-            repo_root,
-            module_dir,
-        ]
-
-        extension_src: Path | None = None
-        for base in candidate_dirs:
-            candidate = base / "extensions" / NATIVE_PLUGIN_ID
-            if candidate.exists() and candidate.is_dir():
-                extension_src = candidate
-                break
+        extension_src = self._locate_extension_source(NATIVE_PLUGIN_ID)
 
         if extension_src is None:
             _warning("Could not find Maestro native extension files.")
