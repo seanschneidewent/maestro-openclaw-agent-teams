@@ -55,3 +55,11 @@ def test_parser_unsubscribe_command():
     args = parser.parse_args(["unsubscribe", "--email", "owner@example.com"])
     assert args.command == "unsubscribe"
     assert args.email == "owner@example.com"
+
+
+def test_parser_purchase_preview_flag():
+    parser = build_parser()
+    args = parser.parse_args(["purchase", "--email", "owner@example.com", "--preview"])
+    assert args.command == "purchase"
+    assert args.email == "owner@example.com"
+    assert args.preview is True

@@ -226,7 +226,24 @@ def _cmd_auth(args: argparse.Namespace) -> int:
     if action == "status":
         headers = _auth_headers(required=False)
         if not headers:
-            console.print("[yellow]Auth status: not signed in.[/]")
+            payload = {
+                "authenticated": False,
+                "email": "",
+                "sub": "",
+                "detail": "not_signed_in",
+            }
+            if bool(getattr(args, "json", False)):
+                _print_json(payload)
+                return 0
+            console.print(Panel(
+                "\n".join([
+                    "Not signed in.",
+                    "Google sign-in is optional for Free.",
+                    "Google sign-in is required before Pro purchase.",
+                ]),
+                border_style="yellow",
+                title="[bold yellow]Maestro Auth[/]",
+            ))
             return 0
         ok, payload = _http_get_json(f"{billing}/v1/auth/session", timeout=20, headers=headers)
         if not ok or not bool(payload.get("authenticated")):
@@ -367,11 +384,6 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
 
     billing = _billing_url(args.billing_url)
     payload = _build_purchase_payload(args, email=email)
-    try:
-        headers = _auth_headers(required=True)
-    except RuntimeError as exc:
-        console.print(f"[red]{exc}[/]")
-        return 1
 
     console.print(Panel(
         "\n".join([
@@ -383,6 +395,23 @@ def _cmd_purchase(args: argparse.Namespace) -> int:
         border_style=CYAN,
         title=f"[bold {BRIGHT_CYAN}]Maestro Solo Purchase[/]",
     ))
+
+    if bool(getattr(args, "preview", False)):
+        console.print(Panel(
+            "\n".join([
+                "Preview mode only. No checkout was started.",
+                "When ready, run purchase without --preview to open secure checkout.",
+            ]),
+            border_style="yellow",
+            title="[bold yellow]Purchase Preview[/]",
+        ))
+        return 0
+
+    try:
+        headers = _auth_headers(required=True)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/]")
+        return 1
 
     ok, create = _http_post_json(f"{billing}/v1/solo/purchases", payload, timeout=20, headers=headers)
     if not ok:
@@ -840,6 +869,7 @@ def build_parser() -> argparse.ArgumentParser:
     purchase.add_argument("--timeout-seconds", type=int, default=300, help=argparse.SUPPRESS)
     purchase.add_argument("--no-open", action="store_true", help=argparse.SUPPRESS)
     purchase.add_argument("--non-interactive", action="store_true", help=argparse.SUPPRESS)
+    purchase.add_argument("--preview", action="store_true", help=argparse.SUPPRESS)
 
     unsubscribe = sub.add_parser("unsubscribe", help="Open Stripe billing portal to cancel/manage subscription")
     unsubscribe.add_argument("--purchase-id", default="", help="Override purchase ID (otherwise inferred from local license)")

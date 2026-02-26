@@ -83,6 +83,26 @@ def test_purchase_ignores_null_entitlement_token(monkeypatch):
     assert save_entitlement_calls["count"] == 0
 
 
+def test_purchase_preview_does_not_require_auth_or_create_checkout(monkeypatch):
+    calls = {"post": 0, "auth": 0}
+
+    def _fail_auth(required=False):
+        calls["auth"] += 1
+        raise RuntimeError("auth_should_not_be_called")
+
+    def _post(*_args, **_kwargs):
+        calls["post"] += 1
+        return True, {}
+
+    monkeypatch.setattr(cli, "_auth_headers", _fail_auth)
+    monkeypatch.setattr(cli, "_http_post_json", _post)
+
+    code = cli._cmd_purchase(_purchase_args(mode="live", preview=True))
+    assert code == 0
+    assert calls["auth"] == 0
+    assert calls["post"] == 0
+
+
 def test_purchase_does_not_send_localhost_success_or_cancel_urls_by_default(monkeypatch):
     captured: dict[str, dict] = {}
 

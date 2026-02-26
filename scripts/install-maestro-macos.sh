@@ -367,16 +367,18 @@ run_setup_or_preflight() {
 
 run_pro_auth() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  if [[ "$INSTALL_FLOW" != "pro" ]]; then
-    log "Free flow: billing sign-in is not required."
-    log "Optional later: maestro-solo auth login"
-    return 0
-  fi
-
   local billing_url="${MAESTRO_BILLING_URL:-}"
   local -a auth_args=()
   if [[ -n "$billing_url" ]]; then
     auth_args+=(--billing-url "$billing_url")
+  fi
+
+  if [[ "$INSTALL_FLOW" != "pro" ]]; then
+    log "Free flow: showing billing auth status."
+    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+      "$PYTHON_BIN" -m maestro_solo.cli auth status "${auth_args[@]}" || true
+    log "Optional later: maestro-solo auth login"
+    return 0
   fi
 
   log "Checking billing auth session..."
@@ -434,8 +436,34 @@ PY
 
 run_pro_purchase() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
+  local billing_url="${MAESTRO_BILLING_URL:-}"
+  local -a purchase_args=()
+  if [[ -n "$billing_url" ]]; then
+    purchase_args+=(--billing-url "$billing_url")
+  fi
+
   if [[ "$INSTALL_FLOW" != "pro" ]]; then
     log "Free flow: no payment required."
+    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+      "$PYTHON_BIN" -m maestro_solo.cli entitlements status || true
+
+    local preview_email="$PURCHASE_EMAIL"
+    preview_email="$(printf '%s' "$preview_email" | xargs)"
+    if [[ -z "$preview_email" ]]; then
+      preview_email="you@example.com"
+    fi
+
+    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+      "$PYTHON_BIN" -m maestro_solo.cli purchase \
+        --email "$preview_email" \
+        --plan "$PRO_PLAN_ID" \
+        --mode live \
+        --preview \
+        --no-open \
+        --non-interactive \
+        "${purchase_args[@]}" \
+      || true
+
     log "Upgrade anytime: maestro-solo purchase --email you@example.com --plan $PRO_PLAN_ID --mode live"
     return 0
   fi
@@ -447,12 +475,6 @@ run_pro_purchase() {
   if should_skip_pro_purchase; then
     log "Purchase stage complete: active Pro entitlement already exists."
     return 0
-  fi
-
-  local billing_url="${MAESTRO_BILLING_URL:-}"
-  local -a purchase_args=()
-  if [[ -n "$billing_url" ]]; then
-    purchase_args+=(--billing-url "$billing_url")
   fi
 
   log "Pro flow selected: purchase is required before launch."
