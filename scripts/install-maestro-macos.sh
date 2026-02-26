@@ -35,6 +35,8 @@ INSTALL_CHANNEL=""
 INSTALL_FLOW=""
 PYTHON_BIN=""
 PRO_PURCHASE_SKIPPED="0"
+STAGE_STEP="0"
+STAGE_TOTAL="4"
 
 log() {
   printf '[maestro-install] %s\n' "$*"
@@ -47,6 +49,12 @@ warn() {
 fatal() {
   printf '[maestro-install] ERROR: %s\n' "$*" >&2
   exit 1
+}
+
+stage() {
+  local title="$1"
+  STAGE_STEP="$((STAGE_STEP + 1))"
+  printf '\n[maestro-install] ===== Step %s/%s: %s =====\n' "$STAGE_STEP" "$STAGE_TOTAL" "$title"
 }
 
 prompt_yes_no() {
@@ -335,14 +343,40 @@ run_preflight_checks() {
 
 run_setup_or_preflight() {
   if has_existing_setup; then
-    log "Existing Maestro setup detected. Skipping interactive setup."
+    log "Existing Maestro setup detected. Reusing saved setup data."
     if run_preflight_checks; then
-      log "Preflight checks passed."
+      log "Setup checks passed."
       return 0
     fi
     warn "Preflight checks failed. Falling back to interactive quick setup."
   fi
   run_quick_setup
+}
+
+run_pro_auth() {
+  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
+  if [[ "$INSTALL_FLOW" != "pro" ]]; then
+    log "Free flow selected. Billing auth check is skipped."
+    return 0
+  fi
+
+  local billing_url="${MAESTRO_BILLING_URL:-}"
+  local -a auth_args=()
+  if [[ -n "$billing_url" ]]; then
+    auth_args+=(--billing-url "$billing_url")
+  fi
+
+  log "Checking billing auth session..."
+  if MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+    "$PYTHON_BIN" -m maestro_solo.cli auth status "${auth_args[@]}"; then
+    log "Billing auth already active."
+    return 0
+  fi
+
+  log "No active billing auth session. Starting Google sign-in..."
+  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+    "$PYTHON_BIN" -m maestro_solo.cli auth login "${auth_args[@]}" \
+    || fatal "Authentication failed. Re-run installer or run 'maestro-solo auth login' manually."
 }
 
 should_skip_pro_purchase() {
@@ -388,24 +422,24 @@ PY
 run_pro_purchase() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   if [[ "$INSTALL_FLOW" != "pro" ]]; then
+    log "Free flow selected. Purchase stage is skipped."
     return 0
   fi
+
+  log "Checking entitlement status before purchase..."
+  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+    "$PYTHON_BIN" -m maestro_solo.cli entitlements status || true
+
   if should_skip_pro_purchase; then
+    log "Purchase stage complete: active Pro entitlement already exists."
     return 0
   fi
 
   local billing_url="${MAESTRO_BILLING_URL:-}"
-  local -a auth_args=()
   local -a purchase_args=()
   if [[ -n "$billing_url" ]]; then
-    auth_args+=(--billing-url "$billing_url")
     purchase_args+=(--billing-url "$billing_url")
   fi
-
-  log "Starting Google sign-in for secure billing access..."
-  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-    "$PYTHON_BIN" -m maestro_solo.cli auth login "${auth_args[@]}" \
-    || fatal "Authentication failed. Re-run installer or run 'maestro-solo auth login' manually."
 
   log "Pro flow selected: purchase is required before launch."
   prompt_email
@@ -437,6 +471,7 @@ main() {
   normalize_channel
   normalize_flow
   resolve_auto_channel
+  stage "Setup"
   ensure_macos
   ensure_homebrew
   ensure_python
@@ -446,7 +481,11 @@ main() {
   install_maestro_packages
   persist_install_channel
   run_setup_or_preflight
+  stage "Auth"
+  run_pro_auth
+  stage "Purchase"
   run_pro_purchase
+  stage "Up"
   start_runtime
 }
 
