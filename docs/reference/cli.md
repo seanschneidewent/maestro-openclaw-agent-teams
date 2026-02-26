@@ -6,6 +6,7 @@
 - `maestro-solo setup --quick [--company-name "..."] [--replay]`
 - `maestro-solo auth status|login|logout`
 - `maestro-solo purchase [--preview]`
+- `maestro-solo unsubscribe`
 - `maestro-solo status [--remote-verify]`
 - `maestro-solo up --tui`
 - `maestro-solo ingest <folder> [--dpi N] [--project-name "..."] [--store ...]`
@@ -44,4 +45,5 @@
 - `setup --quick` is a macOS fast path designed for one-command install/bootstrap and requires Telegram configuration.
 - `setup --quick --replay` re-renders the full setup journey while reusing existing configuration.
 - `purchase --preview` renders purchase UX without creating checkout sessions.
+- `journey` is an internal installer orchestrator used by `/free` and `/pro` launcher scripts.
 - `maestro-solo purchase` and `maestro-solo unsubscribe` require a valid billing auth session (`maestro-solo auth login`).

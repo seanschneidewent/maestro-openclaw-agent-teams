@@ -7,12 +7,15 @@ Validate that payment provisions Pro entitlement data (license + optional signed
 ## Customer Paths
 
 1. Free install path:
-   - installer runs setup and starts core runtime
+   - installer runs 4-stage journey (setup/auth/purchase/up)
+   - auth stage shows sign-in status
+   - purchase stage shows preview only (no checkout)
    - user upgrades later with `maestro-solo purchase --email you@example.com --plan solo_monthly --mode live`
 2. Pro install path:
-   - installer runs setup
-   - installer runs purchase immediately
-   - runtime starts already licensed
+   - installer runs setup + auth + purchase + up in one terminal
+   - auth stage triggers `maestro-solo auth login` when needed
+   - purchase stage opens checkout unless Pro entitlement is already active
+   - runtime starts with Pro capabilities once licensed
 
 ## Local Services
 
@@ -55,7 +58,13 @@ maestro-solo auth login
 ```
 
 ```bash
-maestro-solo purchase --email you@example.com
+maestro-solo purchase --email you@example.com --plan solo_monthly --mode live
+```
+
+Preview only (no checkout session created):
+
+```bash
+maestro-solo purchase --email you@example.com --plan solo_monthly --mode live --preview
 ```
 
 What happens:
@@ -71,6 +80,8 @@ What happens:
 6. On paid events, billing calls license service.
 7. CLI stores license under `~/.maestro-solo/license.json`.
 8. If billing returns `entitlement_token`, CLI stores it under `~/.maestro-solo/entitlement.json`.
+
+Purchase is skipped when an active Pro entitlement is already present locally (unless `MAESTRO_FORCE_PRO_PURCHASE=1`).
 
 Important:
 

@@ -168,6 +168,20 @@ What it validates:
 - Railway vars are pinned to the current git commit for installer scripts and to the release wheel URLs.
 - `/free` and `/pro` launcher output contains the exact pinned commit + wheel URLs.
 
+Manual smoke after release:
+
+```bash
+curl -fsSL https://<your-billing-domain>/free | bash
+curl -fsSL https://<your-billing-domain>/pro | bash
+```
+
+Both commands should render all four installer stages in one terminal:
+
+- `Step 1/4: Setup`
+- `Step 2/4: Auth`
+- `Step 3/4: Purchase`
+- `Step 4/4: Up`
+
 ## Fast Setup Checklist
 
 1. Create Railway Postgres service `maestro-solo-db`.

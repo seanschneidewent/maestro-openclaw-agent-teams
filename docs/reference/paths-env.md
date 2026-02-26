@@ -47,8 +47,10 @@ Fleet transition state path: `~/.maestro/install.json`
 - `MAESTRO_SOLO_HOME`
 - `MAESTRO_INSTALL_FLOW` (`free` or `pro`, installer orchestration)
 - `MAESTRO_INSTALL_CHANNEL` (`auto`, `core`, `pro`)
+- `MAESTRO_SETUP_REPLAY` (`1` default; set `0` to disable setup replay in installer journey)
 - `MAESTRO_PURCHASE_EMAIL` (optional installer email preset for Pro flow)
 - `MAESTRO_PRO_PLAN_ID` (optional installer plan override, default `solo_monthly`)
+- `MAESTRO_FORCE_PRO_PURCHASE` (set `1` to force checkout even when Pro entitlement is already active)
 - `MAESTRO_TIER` (runtime gate; `pro` enables workspace routes)
 - `MAESTRO_ALLOW_PRO_ON_CORE_CHANNEL` (default `1`, allows paid Pro upgrade even on core distribution channel)
 - `MAESTRO_BILLING_URL`

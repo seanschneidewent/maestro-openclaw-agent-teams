@@ -6,13 +6,13 @@ Provision a personal Maestro runtime and start either Free/Core mode or Pro mode
 
 ## Fast Path (macOS)
 
-Free install (setup -> up):
+Free install (single terminal journey: setup -> auth -> purchase preview -> up):
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash
 ```
 
-Pro install (setup -> purchase -> up):
+Pro install (single terminal journey: setup -> auth -> purchase -> up):
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash
@@ -23,10 +23,12 @@ Installer behavior:
 1. Installs prerequisites (brew/python/node/openclaw) if missing.
 2. Creates `~/.maestro/venv-maestro-solo`.
 3. Installs Solo private wheel spec.
-4. Runs `maestro-solo setup --quick`.
-5. Pro flow only: runs `maestro-solo auth login`.
-6. Pro flow only: runs `maestro-solo purchase --mode live`.
-7. Starts `maestro-solo up --tui`.
+4. Runs `maestro-solo journey` (internal installer orchestrator) with 4 visible stages:
+   - Setup
+   - Auth
+   - Purchase
+   - Up
+5. Starts `maestro-solo up --tui` from stage 4.
 
 Branded domain option:
 
@@ -37,23 +39,24 @@ curl -fsSL https://get.maestro.run/pro | bash
 
 Existing install behavior:
 
-- If setup is already complete, installer skips interactive setup.
-- It runs `maestro-solo doctor --fix --no-restart` as a preflight check.
-- It only falls back to interactive quick setup when preflight fails.
+- If setup is already complete, installer replays setup checks with `setup --quick --replay`.
+- Replay mode keeps the full setup TUI visible but auto-reuses existing values.
+- Installer falls back to `maestro-solo doctor --fix --no-restart` only when replay fails.
 
 Optional env overrides:
 
 - `MAESTRO_PURCHASE_EMAIL=person@example.com` for unattended Pro checkout launch.
 - `MAESTRO_PRO_PLAN_ID=solo_monthly` to override default Pro plan ID.
 - `MAESTRO_FORCE_PRO_PURCHASE=1` to force checkout even if Pro is already active locally.
+- `MAESTRO_SETUP_REPLAY=0` to disable replay mode and run fresh quick setup.
 - `MAESTRO_INSTALL_CHANNEL=core|pro` to override default auto-resolution (`free -> core`, `pro -> pro`).
 
 Quick setup prompts:
 
 - OpenAI OAuth (required)
 - Gemini API key (required)
-- Telegram pairing (optional but recommended)
-- Tailscale (optional)
+- Telegram pairing (required in quick setup)
+- Tailscale (optional, but strongly recommended for field access)
 
 Quick setup auto-creates a local trial license when no valid local license exists.
 
@@ -71,6 +74,12 @@ To upgrade an existing Free install:
 ```bash
 maestro-solo auth login
 maestro-solo purchase --email you@example.com --plan solo_monthly --mode live
+```
+
+To preview upgrade UX without creating checkout:
+
+```bash
+maestro-solo purchase --email you@example.com --plan solo_monthly --mode live --preview
 ```
 
 ## Result

@@ -4,21 +4,30 @@ Maestro is a **Solo-first** construction agent runtime with optional Fleet/enter
 
 ## Quickstart (Solo, macOS)
 
-Free one-liner (setup -> up):
+Free one-liner (single terminal journey: setup -> auth -> purchase preview -> up):
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash
 ```
 
-Pro one-liner (setup -> purchase -> up):
+Pro one-liner (single terminal journey: setup -> auth -> purchase -> up):
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash
 ```
 
-Pro flow prompts for billing email, opens Stripe Checkout, waits for license provisioning, then starts runtime.
-If setup already exists, installer runs a fast `doctor --fix` preflight and skips re-entering setup values.
-Pro flow now runs Google sign-in (`maestro-solo auth login`) before checkout when needed.
+Installer behavior:
+
+1. Installs prerequisites and Maestro wheels.
+2. Runs a 4-stage TUI journey in one terminal: Setup, Auth, Purchase, Up.
+3. Reuses existing setup values and replays setup checks when already configured.
+4. Falls back to `maestro-solo doctor --fix --no-restart` only if setup replay fails.
+
+Flow differences:
+
+- Free flow shows Auth status and Purchase preview panels but does not start checkout.
+- Pro flow ensures Google sign-in, then opens Stripe Checkout unless Pro entitlement is already active.
+- Set `MAESTRO_FORCE_PRO_PURCHASE=1` to force checkout even when Pro is already active.
 
 Branding tip: point `get.maestro.run` (or your preferred domain) to the billing service and publish:
 
@@ -40,7 +49,7 @@ Notes:
 - `MAESTRO_*_PACKAGE_SPEC` supports whitespace or comma-separated pip args.
 - Pass both `maestro-engine` and `maestro-solo` wheel URLs unless your private index resolves dependencies.
 - Optional for unattended Pro installs: `MAESTRO_PURCHASE_EMAIL=person@example.com`.
-- Optional override to force a new checkout even when Pro is already active: `MAESTRO_FORCE_PRO_PURCHASE=1`.
+- Optional setup replay override: `MAESTRO_SETUP_REPLAY=0` (uses fresh setup instead of replay checks).
 - Local repo dev mode is still available via `MAESTRO_USE_LOCAL_REPO=1`.
 
 Open:

@@ -2,91 +2,83 @@
 
 ## Goal
 
-Run a fresh end-to-end validation from wheel install through Core startup and Pro purchase unlock.
+Run end-to-end validation for customer install UX and Pro billing unlock.
 
-## Sequence
+## Scope
 
-1. (macOS free flow) Run one command:
+Validate both production one-liners:
+
+- Free: `curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash`
+- Pro: `curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash`
+
+## Expected Installer Journey (Both Commands)
+
+Both commands must keep the user in one terminal and show all 4 stages:
+
+1. `===== Step 1/4: Setup =====`
+2. `===== Step 2/4: Auth =====`
+3. `===== Step 3/4: Purchase =====`
+4. `===== Step 4/4: Up =====`
+
+Expected stage behavior:
+
+- Free flow:
+  - Auth shows account status panel.
+  - Purchase shows preview panel (`--preview`) and upgrade command.
+  - Up starts Free runtime.
+- Pro flow:
+  - Auth ensures sign-in (`auth login`) if not already authenticated.
+  - Purchase opens Stripe checkout unless entitlement is already active.
+  - Up starts Pro runtime.
+
+## Existing-Machine Replay Validation
+
+Run either production command on a machine that already completed setup.
+
+Pass criteria:
+
+1. Setup stage runs replay (`setup --quick --replay`) and shows green checks.
+2. Existing user inputs (OAuth/Gemini/Telegram) are not re-entered.
+3. If replay fails, installer falls back to `doctor --fix --no-restart`.
+
+## Fresh-Machine Validation
+
+On a clean machine (or fresh user profile), run `/free` first.
+
+Pass criteria:
+
+1. Prerequisites auto-install prompts appear when missing (brew/python/node/openclaw).
+2. Setup quick flow collects required values (OpenAI OAuth, Gemini key, Telegram pairing).
+3. Auth and Purchase stages are still shown for Free flow.
+4. Runtime starts and serves Free route at `http://localhost:3000/`.
+
+Then run `/pro` on the same machine.
+
+Pass criteria:
+
+1. Setup stage replays checks instead of forcing full re-entry.
+2. Auth stage either confirms signed-in or starts Google login.
+3. Purchase stage opens Stripe checkout.
+4. After payment + webhook, local license activates and runtime resolves Pro route `/workspace`.
+
+## Manual Billing Flow Validation (CLI)
+
+Use these commands to validate billing and lifecycle behavior directly:
 
 ```bash
-curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash
-```
-
-Manual path:
-
-```bash
-pip install -e /absolute/path/to/repo/packages/maestro-engine -e /absolute/path/to/repo/packages/maestro-solo
-```
-
-2. Run setup:
-
-```bash
-maestro-solo setup
-```
-
-3. Verify status before purchase (should still run in Core):
-
-```bash
-maestro-solo status
-maestro-solo entitlements status
-```
-
-4. Start local payment services (separate terminals):
-
-```bash
-maestro-solo-license-service --port 8082
-maestro-solo-billing-service --port 8081
-```
-
-5. Complete purchase:
-
-```bash
-maestro-solo auth login --billing-url http://127.0.0.1:8081
-maestro-solo purchase --email you@example.com --plan solo_test_monthly --mode test --billing-url http://127.0.0.1:8081
-```
-
-6. Verify Pro entitlement after purchase:
-
-```bash
+maestro-solo auth login --billing-url https://maestro-billing-service-production.up.railway.app
+maestro-solo purchase --email you@example.com --plan solo_monthly --mode live --billing-url https://maestro-billing-service-production.up.railway.app
 maestro-solo status --remote-verify
 maestro-solo entitlements status
+maestro-solo unsubscribe --billing-url https://maestro-billing-service-production.up.railway.app
 ```
 
-7. Verify unsubscribe portal opens:
+## Final Pass Checklist
 
-```bash
-maestro-solo unsubscribe
-```
-
-8. Start runtime:
-
-```bash
-maestro-solo up --tui
-```
-
-9. Ingest plans:
-
-```bash
-maestro-solo ingest /abs/path/to/plans
-```
-
-10. Open workspace:
-
-`http://localhost:3000/workspace`
-
-11. Validate direct Pro installer path (setup -> purchase -> up):
-
-```bash
-curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash
-```
-
-## Pass Criteria
-
-1. Setup succeeds with valid model auth.
-2. Core install runs without source checkout and without editable installs.
-3. `maestro-solo up --tui` starts in Core mode before purchase.
-4. Core route `/` returns text-only status and upgrade command; `/workspace` is blocked in core mode.
-5. Purchase transitions to licensed and status resolves Pro tier.
-6. `maestro-solo unsubscribe` opens Stripe Customer Portal for self-serve cancellation.
-7. Workspace search/ingest flow works with no Fleet UI elements.
-8. Pro installer performs purchase inline and ends with active Pro workspace route.
+1. One-liner install works with no repo checkout and no editable installs.
+2. Installer always renders all 4 stages in one terminal session.
+3. Free flow never opens checkout automatically.
+4. Pro flow can complete checkout and receive license via webhook path.
+5. `maestro-solo status` shows expected tier and entitlement source.
+6. `maestro-solo unsubscribe` opens Stripe Customer Portal.
+7. Workspace behavior matches tier gating (`/` for Free, `/workspace` for Pro).
