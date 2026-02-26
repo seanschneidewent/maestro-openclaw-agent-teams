@@ -295,6 +295,7 @@ def test_installer_launcher_free_renders_script(monkeypatch):
     )
     assert response.status_code == 200
     assert "export MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_solo.whl'" in response.text
+    assert "export MAESTRO_INSTALL_AUTO='1'" in response.text
     assert "export MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
     assert "install-maestro-free-macos.sh" in response.text
 

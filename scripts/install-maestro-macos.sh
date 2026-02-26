@@ -9,6 +9,7 @@ INSTALL_FLOW_DEFAULT="free"
 PRO_PLAN_DEFAULT="solo_monthly"
 CORE_PACKAGE_SPEC_DEFAULT=""
 PRO_PACKAGE_SPEC_DEFAULT=""
+AUTO_APPROVE_DEFAULT="auto"
 
 # Avoid BASH_SOURCE array access to keep curl|bash + nounset behavior stable.
 SCRIPT_SOURCE="${0:-}"
@@ -31,9 +32,11 @@ PRO_PLAN_ID="${MAESTRO_PRO_PLAN_ID:-$PRO_PLAN_DEFAULT}"
 PURCHASE_EMAIL="${MAESTRO_PURCHASE_EMAIL:-}"
 USE_LOCAL_REPO="${MAESTRO_USE_LOCAL_REPO:-0}"
 FORCE_PRO_PURCHASE="${MAESTRO_FORCE_PRO_PURCHASE:-0}"
+AUTO_APPROVE_RAW="${MAESTRO_INSTALL_AUTO:-$AUTO_APPROVE_DEFAULT}"
 INSTALL_CHANNEL=""
 INSTALL_FLOW=""
 PYTHON_BIN=""
+AUTO_APPROVE="0"
 
 log() {
   printf '[maestro-install] %s\n' "$*"
@@ -52,6 +55,15 @@ prompt_yes_no() {
   local prompt="$1"
   local default="${2:-y}"
   local reply
+
+  if [[ "$AUTO_APPROVE" == "1" ]]; then
+    if [[ "$default" == "y" ]]; then
+      log "$prompt (auto-yes)"
+      return 0
+    fi
+    log "$prompt (auto-no)"
+    return 1
+  fi
 
   if [[ "$default" == "y" ]]; then
     read -r -p "$prompt [Y/n] " reply || true
@@ -101,6 +113,32 @@ normalize_flow() {
   esac
 }
 
+resolve_auto_approve() {
+  local clean
+  clean="$(printf '%s' "$AUTO_APPROVE_RAW" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$clean" in
+    1|true|yes|on)
+      AUTO_APPROVE="1"
+      ;;
+    0|false|no|off)
+      AUTO_APPROVE="0"
+      ;;
+    auto|"")
+      if [[ ! -t 0 || ! -t 1 ]]; then
+        AUTO_APPROVE="1"
+      else
+        AUTO_APPROVE="0"
+      fi
+      ;;
+    *)
+      fatal "Invalid MAESTRO_INSTALL_AUTO='$AUTO_APPROVE_RAW' (expected auto, true/false, or 1/0)."
+      ;;
+  esac
+  if [[ "$AUTO_APPROVE" == "1" ]]; then
+    log "Auto-approve mode enabled for prerequisite installation."
+  fi
+}
+
 resolve_auto_channel() {
   if [[ "$INSTALL_CHANNEL" != "auto" ]]; then
     return 0
@@ -139,7 +177,11 @@ ensure_homebrew() {
     fatal "Homebrew is required for automatic prerequisite installation."
   fi
 
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  if [[ "$AUTO_APPROVE" == "1" ]]; then
+    env NONINTERACTIVE=1 CI=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  else
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
   refresh_path_for_brew
 
   command -v brew >/dev/null 2>&1 || fatal "Homebrew install succeeded but brew is not on PATH. Open a new terminal and rerun."
@@ -293,6 +335,7 @@ run_install_journey() {
 main() {
   normalize_channel
   normalize_flow
+  resolve_auto_approve
   resolve_auto_channel
   ensure_macos
   ensure_homebrew

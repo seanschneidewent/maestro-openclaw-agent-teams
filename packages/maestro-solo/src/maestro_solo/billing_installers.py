@@ -56,6 +56,11 @@ def _installer_pro_package_spec() -> str:
     return _first_env_value("MAESTRO_INSTALLER_PRO_PACKAGE_SPEC", "MAESTRO_PRO_PACKAGE_SPEC")
 
 
+def _installer_auto_approve() -> str:
+    configured = _first_env_value("MAESTRO_INSTALLER_AUTO", "MAESTRO_INSTALL_AUTO")
+    return configured or "1"
+
+
 def build_installer_script(*, flow: str, billing_base_url: str) -> str:
     clean_flow = _clean_text(flow).lower()
     if clean_flow not in {"free", "pro"}:
@@ -75,6 +80,7 @@ def build_installer_script(*, flow: str, billing_base_url: str) -> str:
         env_assignments.append(("MAESTRO_CORE_PACKAGE_SPEC", core_spec))
     if clean_flow == "pro" and pro_spec:
         env_assignments.append(("MAESTRO_PRO_PACKAGE_SPEC", pro_spec))
+    env_assignments.append(("MAESTRO_INSTALL_AUTO", _installer_auto_approve()))
     env_assignments.append(("MAESTRO_INSTALL_BASE_URL", f"{script_base_url}/install-maestro-macos.sh"))
     if billing_base_url:
         env_assignments.append(("MAESTRO_BILLING_URL", billing_base_url))
