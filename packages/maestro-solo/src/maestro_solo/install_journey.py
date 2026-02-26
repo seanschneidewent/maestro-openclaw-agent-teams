@@ -54,6 +54,10 @@ def _is_truthy(value: str) -> bool:
     return clean in {"1", "true", "yes", "on"}
 
 
+def _auto_approve_enabled() -> bool:
+    return _is_truthy(os.environ.get("MAESTRO_INSTALL_AUTO", ""))
+
+
 def _load_json(path: Path) -> dict:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -172,6 +176,13 @@ def _resolve_pro_activation_choice(options: InstallJourneyOptions) -> bool:
         return False
 
     default_yes = options.intent == "pro"
+    if _auto_approve_enabled():
+        if default_yes:
+            _log("Auto-approve mode: activating Pro now.")
+        else:
+            _log("Auto-approve mode: continuing in core mode for now.")
+        return bool(default_yes)
+
     prompt = "Enable Pro now before first launch? (you can skip and upgrade later)"
     try:
         wants_pro = Confirm.ask(prompt, default=default_yes)

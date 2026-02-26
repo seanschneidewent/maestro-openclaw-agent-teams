@@ -50,6 +50,12 @@ Optional env overrides:
 - `MAESTRO_FORCE_PRO_PURCHASE=1` to force checkout even if Pro is already active locally.
 - `MAESTRO_SETUP_REPLAY=0` to disable replay mode and run fresh quick setup.
 - `MAESTRO_INSTALL_CHANNEL=core|pro` to override default auto-resolution (`free -> core`, `pro -> pro`).
+- `MAESTRO_OPENCLAW_PROFILE=<name>` to isolate into `~/.openclaw-<name>` (default: `maestro-solo`).
+- `MAESTRO_ALLOW_SHARED_OPENCLAW=1` to intentionally target shared `~/.openclaw` (unsafe, disabled by default).
+
+One-liner UX note:
+
+- Production launcher exports `MAESTRO_INSTALL_AUTO=1`; `/install` and `/pro` run Pro-first automatically without an extra yes/no Pro prompt.
 
 Quick setup prompts:
 
@@ -89,3 +95,4 @@ maestro-solo purchase --email you@example.com --plan solo_monthly --mode live --
 - Pro route is `/workspace`.
 - Field route (if Tailscale connected): `http://<tailscale-ip>:3000/` (Free) or `/workspace` (Pro).
 - Workspace awareness state is written to `<workspace>/AWARENESS.md` by `maestro-solo doctor --fix`.
+- Isolation validation runbook: [openclaw-isolation-test-plan.md](openclaw-isolation-test-plan.md).

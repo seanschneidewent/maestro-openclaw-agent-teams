@@ -12,6 +12,7 @@ CORE_PACKAGE_SPEC_DEFAULT=""
 PRO_PACKAGE_SPEC_DEFAULT=""
 AUTO_APPROVE_DEFAULT="auto"
 OPENCLAW_PROFILE_DEFAULT="maestro-solo"
+ALLOW_SHARED_OPENCLAW_DEFAULT="0"
 
 # Avoid BASH_SOURCE array access to keep curl|bash + nounset behavior stable.
 SCRIPT_SOURCE="${0:-}"
@@ -37,12 +38,14 @@ USE_LOCAL_REPO="${MAESTRO_USE_LOCAL_REPO:-0}"
 FORCE_PRO_PURCHASE="${MAESTRO_FORCE_PRO_PURCHASE:-0}"
 AUTO_APPROVE_RAW="${MAESTRO_INSTALL_AUTO:-$AUTO_APPROVE_DEFAULT}"
 OPENCLAW_PROFILE_RAW="${MAESTRO_OPENCLAW_PROFILE:-$OPENCLAW_PROFILE_DEFAULT}"
+ALLOW_SHARED_OPENCLAW_RAW="${MAESTRO_ALLOW_SHARED_OPENCLAW:-$ALLOW_SHARED_OPENCLAW_DEFAULT}"
 INSTALL_CHANNEL=""
 INSTALL_FLOW=""
 INSTALL_INTENT=""
 OPENCLAW_PROFILE=""
 PYTHON_BIN=""
 AUTO_APPROVE="0"
+ALLOW_SHARED_OPENCLAW="0"
 
 log() {
   printf '[maestro-install] %s\n' "$*"
@@ -139,7 +142,11 @@ normalize_openclaw_profile() {
   clean="$(printf '%s' "$OPENCLAW_PROFILE_RAW" | xargs)"
   case "$(printf '%s' "$clean" | tr '[:upper:]' '[:lower:]')" in
     ""|default|none|off|shared)
-      OPENCLAW_PROFILE=""
+      if [[ "$ALLOW_SHARED_OPENCLAW" == "1" ]]; then
+        OPENCLAW_PROFILE=""
+      else
+        fatal "Shared OpenClaw profile is disabled. Use MAESTRO_OPENCLAW_PROFILE=maestro-solo (default) or set MAESTRO_ALLOW_SHARED_OPENCLAW=1 to override."
+      fi
       ;;
     *)
       if [[ "$clean" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
@@ -147,6 +154,23 @@ normalize_openclaw_profile() {
       else
         fatal "Invalid MAESTRO_OPENCLAW_PROFILE='$OPENCLAW_PROFILE_RAW' (letters/numbers/._- only)."
       fi
+      ;;
+  esac
+}
+
+resolve_shared_openclaw_flag() {
+  local clean
+  clean="$(printf '%s' "$ALLOW_SHARED_OPENCLAW_RAW" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$clean" in
+    1|true|yes|on)
+      ALLOW_SHARED_OPENCLAW="1"
+      warn "Unsafe mode enabled: installer may modify shared ~/.openclaw state."
+      ;;
+    0|false|no|off|"")
+      ALLOW_SHARED_OPENCLAW="0"
+      ;;
+    *)
+      fatal "Invalid MAESTRO_ALLOW_SHARED_OPENCLAW='$ALLOW_SHARED_OPENCLAW_RAW' (expected true/false or 1/0)."
       ;;
   esac
 }
@@ -407,6 +431,7 @@ run_install_journey() {
     MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" \
     MAESTRO_SOLO_HOME="$SOLO_HOME" \
     MAESTRO_OPENCLAW_PROFILE="$OPENCLAW_PROFILE" \
+    MAESTRO_ALLOW_SHARED_OPENCLAW="$ALLOW_SHARED_OPENCLAW" \
     "$PYTHON_BIN" -m maestro_solo.cli "${journey_args[@]}"
 }
 
@@ -414,6 +439,7 @@ main() {
   normalize_channel
   normalize_flow
   normalize_intent
+  resolve_shared_openclaw_flag
   normalize_openclaw_profile
   resolve_auto_approve
   resolve_auto_channel

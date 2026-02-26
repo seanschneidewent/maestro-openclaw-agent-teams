@@ -263,11 +263,7 @@ class QuickSetup:
         self.model = "openai-codex/gpt-5.2"
         self.model_auth_method = "openclaw_oauth"
 
-        state_profile = str(state.get("openclaw_profile", "")).strip()
-        profile_default = DEFAULT_MAESTRO_OPENCLAW_PROFILE
-        if self.setup_completed and not state_profile and not str(os.environ.get("MAESTRO_OPENCLAW_PROFILE", "")).strip():
-            profile_default = ""
-        self.openclaw_profile = resolve_openclaw_profile(default=profile_default)
+        self.openclaw_profile = resolve_openclaw_profile(default=DEFAULT_MAESTRO_OPENCLAW_PROFILE)
         self.openclaw_root = openclaw_state_root(profile=self.openclaw_profile)
         self.openclaw_config_file = self.openclaw_root / "openclaw.json"
 
@@ -911,13 +907,13 @@ class QuickSetup:
             "botToken": self.telegram_token,
             "dmPolicy": "pairing",
             "groupPolicy": "allowlist",
-            "streaming": "partial",
+            "streamMode": "partial",
             "accounts": {
                 "maestro-solo-personal": {
                     "botToken": self.telegram_token,
                     "dmPolicy": "pairing",
                     "groupPolicy": "allowlist",
-                    "streaming": "partial",
+                    "streamMode": "partial",
                 }
             },
         }

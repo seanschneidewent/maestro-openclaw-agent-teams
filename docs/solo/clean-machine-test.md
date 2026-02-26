@@ -1,17 +1,18 @@
-# Solo Clean-Machine Test
+# Solo Install Validation Matrix
 
 ## Goal
 
-Run end-to-end validation for customer install UX and Pro billing unlock.
+Run end-to-end validation for customer install UX and Pro billing unlock across fresh and existing OpenClaw states.
 
 ## Scope
 
-Validate both production one-liners:
+Validate all production one-liners:
 
+- Install: `curl -fsSL https://maestro-billing-service-production.up.railway.app/install | bash`
 - Free: `curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash`
 - Pro: `curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash`
 
-## Expected Installer Journey (Both Commands)
+## Expected Installer Journey (All Commands)
 
 Both commands must keep the user in one terminal and show all 4 stages:
 
@@ -30,6 +31,68 @@ Expected stage behavior:
   - Auth ensures sign-in (`auth login`) if not already authenticated.
   - Purchase opens Stripe checkout unless entitlement is already active.
   - Up starts Pro runtime.
+
+## Scenario Matrix
+
+### S1: Fresh machine, no OpenClaw state
+
+- Preconditions:
+  - No `~/.openclaw*`
+  - No `~/.maestro*`
+- Commands:
+  - Run `/free`, then `/pro`.
+- Expected:
+  - Prerequisite install path works.
+  - Setup collects OAuth, Gemini, Telegram token, Telegram pairing.
+  - `~/.openclaw-maestro-solo/openclaw.json` is created.
+  - Shared `~/.openclaw` is not created/modified by Maestro flow.
+
+### S2: Existing shared OpenClaw (`~/.openclaw`) with user data
+
+- Preconditions:
+  - User already has OpenClaw agent/history in `~/.openclaw`.
+  - `~/.openclaw/openclaw.json` checksum captured before run.
+- Commands:
+  - Run `/install` and `/pro`.
+- Expected:
+  - Installer runs under profile `maestro-solo`.
+  - New state created in `~/.openclaw-maestro-solo`.
+  - Shared `~/.openclaw/openclaw.json` checksum unchanged.
+
+### S3: Existing Maestro isolated profile already configured
+
+- Preconditions:
+  - `~/.openclaw-maestro-solo/openclaw.json` exists with valid Gemini + Telegram.
+- Commands:
+  - Run `/install`.
+- Expected:
+  - Setup replay path used (`setup --quick --replay`).
+  - Required secrets reused (no re-entry).
+  - 4-stage journey still shown.
+
+### S4: Existing setup, replay intentionally disabled
+
+- Preconditions:
+  - Existing `~/.openclaw-maestro-solo` setup.
+- Commands:
+  - `MAESTRO_SETUP_REPLAY=0 curl -fsSL .../install | bash`
+- Expected:
+  - Full quick setup executes (not replay).
+  - Pairing step is required unless previously paired and accepted by OpenClaw runtime.
+
+### S5: Shared profile unsafe opt-in (negative safety test)
+
+- Commands:
+  - `MAESTRO_OPENCLAW_PROFILE=shared MAESTRO_INSTALL_AUTO=1 bash scripts/install-maestro-macos.sh`
+- Expected:
+  - Fails closed without `MAESTRO_ALLOW_SHARED_OPENCLAW=1`.
+
+### S6: Production launcher drift check
+
+- Commands:
+  - `bash scripts/verify-prod-installers.sh --billing-url https://maestro-billing-service-production.up.railway.app --expect-version <release>`
+- Expected:
+  - `/install`, `/free`, `/pro` all point at expected release tag/commit and correct install intent.
 
 ## Existing-Machine Replay Validation
 
@@ -82,3 +145,4 @@ maestro-solo unsubscribe --billing-url https://maestro-billing-service-productio
 5. `maestro-solo status` shows expected tier and entitlement source.
 6. `maestro-solo unsubscribe` opens Stripe Customer Portal.
 7. Workspace behavior matches tier gating (`/` for Free, `/workspace` for Pro).
+8. Shared `~/.openclaw` checksum is unchanged unless explicit unsafe opt-in was used.

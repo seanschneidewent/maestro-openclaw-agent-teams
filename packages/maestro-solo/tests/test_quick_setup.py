@@ -43,6 +43,16 @@ def test_company_name_reuses_saved_value_without_prompt(monkeypatch, tmp_path):
     assert runner.company_name == "Saved Co"
 
 
+def test_quick_setup_replay_stays_on_isolated_profile(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    save_install_state({"setup_completed": True})
+    monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=True)
+    assert runner.openclaw_profile == "maestro-solo"
+    assert runner.openclaw_root == Path(tmp_path / "home" / ".openclaw-maestro-solo")
+
+
 def test_openai_oauth_step_does_not_fallback_to_onboard(monkeypatch, tmp_path):
     _configure_env(monkeypatch, tmp_path)
     calls: list[list[str]] = []
@@ -147,11 +157,34 @@ def test_workspace_bootstrap_core_tier_does_not_reference_native_plugin(monkeypa
     assert "maestro-native-tools" not in entries
 
     telegram = config.get("channels", {}).get("telegram", {})
-    assert telegram.get("streaming") == "partial"
-    assert "streamMode" not in telegram
+    assert telegram.get("streamMode") == "partial"
+    assert "streaming" not in telegram
     account = telegram.get("accounts", {}).get("maestro-solo-personal", {})
-    assert account.get("streaming") == "partial"
-    assert "streamMode" not in account
+    assert account.get("streamMode") == "partial"
+    assert "streaming" not in account
+
+
+def test_workspace_bootstrap_does_not_write_shared_openclaw_config(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    runner.gemini_key = "GEMINI_KEY_FOR_TEST"
+    runner.telegram_token = "123456:abcDEF123_token"
+    runner.bot_username = "trace_bot"
+
+    monkeypatch.setattr(runner, "_refresh_entitlement", lambda: None)
+    monkeypatch.setattr(quick_setup, "has_capability", lambda _entitlement, _capability: False)
+    monkeypatch.setattr(runner, "_seed_workspace_files", lambda *, pro_enabled: None)
+    monkeypatch.setattr(runner, "_seed_workspace_skill", lambda: None)
+    monkeypatch.setattr(runner, "_seed_native_extension", lambda: None)
+    monkeypatch.setattr(runner, "_maybe_build_workspace_frontend", lambda: None)
+
+    assert runner._configure_openclaw_and_workspace_step() is True
+
+    isolated_config = Path(tmp_path / "home" / ".openclaw-maestro-solo" / "openclaw.json")
+    shared_config = Path(tmp_path / "home" / ".openclaw" / "openclaw.json")
+    assert isolated_config.exists()
+    assert not shared_config.exists()
 
 
 def test_tailscale_step_defers_when_not_installed_without_prompt(monkeypatch, tmp_path):

@@ -9,6 +9,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,11 @@ from .workspace_templates import (
 )
 from .entitlements import entitlement_label, has_capability, normalize_tier, resolve_effective_entitlement
 from .install_state import save_install_state
+from .openclaw_runtime import (
+    DEFAULT_MAESTRO_OPENCLAW_PROFILE,
+    openclaw_state_root,
+    resolve_openclaw_profile,
+)
 
 # Theme colors
 CYAN = "cyan"
@@ -96,6 +102,8 @@ class SetupWizard:
         self.is_windows = platform.system() == "Windows"
         self.entitlement = resolve_effective_entitlement()
         self.tier = normalize_tier(str(self.entitlement.get("tier", "core")))
+        self.openclaw_profile = resolve_openclaw_profile(default=DEFAULT_MAESTRO_OPENCLAW_PROFILE)
+        self.openclaw_root = openclaw_state_root(profile=self.openclaw_profile)
 
     def load_progress(self) -> Dict[str, Any]:
         if self.progress_file.exists():
@@ -110,10 +118,25 @@ class SetupWizard:
         with open(self.progress_file, 'w') as f:
             json.dump(self.progress, f, indent=2)
 
+    def _with_openclaw_profile(self, cmd: str) -> str:
+        text = str(cmd).strip()
+        if not text.lower().startswith("openclaw"):
+            return cmd
+        try:
+            parts = shlex.split(text)
+        except Exception:
+            return cmd
+        if "--profile" in parts[1:]:
+            return cmd
+        if self.openclaw_profile:
+            parts = [parts[0], "--profile", self.openclaw_profile, *parts[1:]]
+        return shlex.join(parts)
+
     def run_command(self, cmd: str, check: bool = True) -> subprocess.CompletedProcess:
+        resolved = self._with_openclaw_profile(cmd)
         try:
             result = subprocess.run(
-                cmd, shell=True, capture_output=True, text=True, check=check
+                resolved, shell=True, capture_output=True, text=True, check=check
             )
             return result
         except subprocess.CalledProcessError as e:
@@ -123,8 +146,9 @@ class SetupWizard:
 
     def run_interactive_command(self, cmd: str) -> int:
         """Run a command attached to the terminal (required for OAuth/device flows)."""
+        resolved = self._with_openclaw_profile(cmd)
         try:
-            result = subprocess.run(cmd, shell=True, check=False)
+            result = subprocess.run(resolved, shell=True, check=False)
             return int(result.returncode)
         except Exception:
             return 1
@@ -164,7 +188,7 @@ class SetupWizard:
                     return True
             return False
 
-        agents_root = Path.home() / ".openclaw" / "agents"
+        agents_root = self.openclaw_root / "agents"
         if not agents_root.exists():
             return False
 
@@ -943,11 +967,11 @@ class SetupWizard:
         """Step 7: Configure OpenClaw"""
         step_header(7, "Configuring OpenClaw")
 
-        config_dir = Path.home() / ".openclaw"
+        config_dir = self.openclaw_root
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / "openclaw.json"
 
-        workspace_path = str(Path.home() / ".openclaw" / "workspace-maestro-solo")
+        workspace_path = str(self.openclaw_root / "workspace-maestro-solo")
 
         if config_file.exists():
             with open(config_file, 'r') as f:
@@ -1052,6 +1076,7 @@ class SetupWizard:
         success("Created agent session directory")
 
         self.progress['openclaw_configured'] = True
+        self.progress['openclaw_profile'] = self.openclaw_profile
         self.progress['workspace'] = workspace_path
         self.save_progress()
         return True
@@ -1060,7 +1085,7 @@ class SetupWizard:
         """Step 8: Configure personal workspace"""
         step_header(8, "Personal Workspace")
 
-        default_workspace = Path.home() / ".openclaw" / "workspace-maestro-solo"
+        default_workspace = self.openclaw_root / "workspace-maestro-solo"
 
         workspace_input = Prompt.ask(
             f"  [{CYAN}]Workspace directory[/]",
@@ -1077,7 +1102,7 @@ class SetupWizard:
         frontend_enabled = has_capability(self.entitlement, "workspace_frontend")
 
         # Keep OpenClaw agent workspace aligned with the selected Solo workspace.
-        config_file = Path.home() / ".openclaw" / "openclaw.json"
+        config_file = self.openclaw_root / "openclaw.json"
         config = {}
         if config_file.exists():
             try:
@@ -1248,6 +1273,7 @@ class SetupWizard:
             "store_root": str(knowledge_store.resolve()),
             "active_project_slug": "",
             "active_project_name": "",
+            "openclaw_profile": self.openclaw_profile,
             "tier": self.tier,
             "entitlement_source": str(self.entitlement.get("source", "")),
             "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1366,6 +1392,7 @@ class SetupWizard:
         rows.append(f"[bold white]Company:[/]     {company_name}")
         rows.append(f"[bold white]Tier:[/]        {self.tier}")
         rows.append(f"[bold white]Agent:[/]       maestro-solo-personal (default)")
+        rows.append(f"[bold white]Profile:[/]     {self.openclaw_profile}")
         rows.append(f"[bold white]Provider:[/]    {self.progress.get('provider', 'N/A').title()}")
         rows.append(f"[bold white]Model:[/]       {self.progress.get('model', 'N/A')}")
         if self.progress.get('bot_username'):

@@ -101,6 +101,7 @@ def test_journey_replay_falls_back_to_preflight_when_setup_replay_fails(monkeypa
 
 def test_journey_install_intent_pro_can_be_skipped(monkeypatch):
     calls: list[list[str]] = []
+    monkeypatch.delenv("MAESTRO_INSTALL_AUTO", raising=False)
     monkeypatch.setattr("maestro_solo.install_journey._has_existing_setup", lambda _solo_home: False)
     monkeypatch.setattr("maestro_solo.install_journey._resolve_purchase_email", lambda **_: "you@example.com")
     monkeypatch.setattr("maestro_solo.install_journey.Confirm.ask", lambda *_args, **_kwargs: False)
@@ -120,10 +121,36 @@ def test_journey_install_intent_pro_can_be_skipped(monkeypatch):
 
 def test_journey_install_intent_pro_runs_pro_path_when_confirmed(monkeypatch):
     calls: list[list[str]] = []
+    monkeypatch.delenv("MAESTRO_INSTALL_AUTO", raising=False)
     monkeypatch.setattr("maestro_solo.install_journey._has_existing_setup", lambda _solo_home: False)
     monkeypatch.setattr("maestro_solo.install_journey._pro_entitlement_active", lambda: (False, "", ""))
     monkeypatch.setattr("maestro_solo.install_journey._resolve_purchase_email", lambda **_: "buyer@example.com")
     monkeypatch.setattr("maestro_solo.install_journey.Confirm.ask", lambda *_args, **_kwargs: True)
+
+    def _fake_run(args: list[str], *, options: InstallJourneyOptions) -> int:
+        calls.append(list(args))
+        return 0
+
+    monkeypatch.setattr("maestro_solo.install_journey._run_cli_stream", _fake_run)
+
+    code = run_install_journey(_opts(flow="install", intent="pro", channel="pro"))
+    assert code == 0
+    assert ["auth", "login", "--billing-url", "https://billing.example.com"] in calls
+    real_calls = [cmd for cmd in calls if cmd and cmd[0] == "purchase" and "--preview" not in cmd]
+    assert len(real_calls) == 1
+
+
+def test_journey_install_intent_pro_auto_approve_skips_prompt(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setenv("MAESTRO_INSTALL_AUTO", "1")
+    monkeypatch.setattr("maestro_solo.install_journey._has_existing_setup", lambda _solo_home: False)
+    monkeypatch.setattr("maestro_solo.install_journey._pro_entitlement_active", lambda: (False, "", ""))
+    monkeypatch.setattr("maestro_solo.install_journey._resolve_purchase_email", lambda **_: "buyer@example.com")
+
+    def _should_not_prompt(*_args, **_kwargs):
+        raise AssertionError("Confirm.ask should not run when MAESTRO_INSTALL_AUTO=1")
+
+    monkeypatch.setattr("maestro_solo.install_journey.Confirm.ask", _should_not_prompt)
 
     def _fake_run(args: list[str], *, options: InstallJourneyOptions) -> int:
         calls.append(list(args))

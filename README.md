@@ -16,7 +16,7 @@ Free-preselected one-liner (skips Pro activation by default, still upgradeable l
 curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash
 ```
 
-Pro-preselected one-liner (asks to activate Pro before first launch):
+Pro-preselected one-liner:
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash
@@ -31,7 +31,7 @@ Installer behavior:
 
 Flow differences:
 
-- `/install` and `/pro` default to Pro-first and ask before checkout.
+- `/install` and `/pro` default to Pro-first.
 - `/free` defaults to core-first and shows upgrade preview without checkout.
 - Set `MAESTRO_FORCE_PRO_PURCHASE=1` to force checkout even when Pro is already active.
 - Maestro isolates OpenClaw setup under profile `maestro-solo` by default.
@@ -57,6 +57,7 @@ Notes:
 - Pass both `maestro-engine` and `maestro-solo` wheel URLs unless your private index resolves dependencies.
 - Optional for unattended Pro installs: `MAESTRO_PURCHASE_EMAIL=person@example.com`.
 - Optional setup replay override: `MAESTRO_SETUP_REPLAY=0` (uses fresh setup instead of replay checks).
+- OpenClaw state is isolated by default under `~/.openclaw-maestro-solo`; shared `~/.openclaw` is blocked unless `MAESTRO_ALLOW_SHARED_OPENCLAW=1`.
 - Local repo dev mode is still available via `MAESTRO_USE_LOCAL_REPO=1`.
 
 Open:

@@ -22,8 +22,9 @@ Fleet transition state path: `~/.maestro/install.json`
 
 ## Key Paths
 
-- OpenClaw config: `~/.openclaw/openclaw.json`
-- Solo workspace root: usually `~/.openclaw/workspace-maestro-solo`
+- OpenClaw config (isolated default): `~/.openclaw-maestro-solo/openclaw.json`
+- OpenClaw shared config (left untouched by default): `~/.openclaw/openclaw.json`
+- Solo workspace root: usually `~/.openclaw-maestro-solo/workspace-maestro-solo`
 - Store root: `<workspace>/knowledge_store` unless overridden
 - Fleet registry: `<store_root>/.command_center/fleet_registry.json`
 
@@ -45,6 +46,8 @@ Fleet transition state path: `~/.maestro/install.json`
 - `MAESTRO_STORE`
 - `MAESTRO_AGENT_ROLE` (`project` in Solo, `company` in Fleet commander workspace)
 - `MAESTRO_SOLO_HOME`
+- `MAESTRO_OPENCLAW_PROFILE` (default `maestro-solo`; creates `~/.openclaw-<profile>`)
+- `MAESTRO_ALLOW_SHARED_OPENCLAW` (default `0`; set `1` only to intentionally target shared `~/.openclaw`)
 - `MAESTRO_INSTALL_FLOW` (`free` or `pro`, installer orchestration)
 - `MAESTRO_INSTALL_CHANNEL` (`auto`, `core`, `pro`)
 - `MAESTRO_SETUP_REPLAY` (`1` default; set `0` to disable setup replay in installer journey)
