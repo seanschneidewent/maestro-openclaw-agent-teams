@@ -22,9 +22,11 @@ PRO_PACKAGE_SPEC="${MAESTRO_PRO_PACKAGE_SPEC:-$PRO_PACKAGE_SPEC_DEFAULT}"
 PRO_PLAN_ID="${MAESTRO_PRO_PLAN_ID:-$PRO_PLAN_DEFAULT}"
 PURCHASE_EMAIL="${MAESTRO_PURCHASE_EMAIL:-}"
 USE_LOCAL_REPO="${MAESTRO_USE_LOCAL_REPO:-0}"
+FORCE_PRO_PURCHASE="${MAESTRO_FORCE_PRO_PURCHASE:-0}"
 INSTALL_CHANNEL=""
 INSTALL_FLOW=""
 PYTHON_BIN=""
+PRO_PURCHASE_SKIPPED="0"
 
 log() {
   printf '[maestro-install] %s\n' "$*"
@@ -57,6 +59,15 @@ prompt_yes_no() {
 
   case "$reply_lower" in
     y|yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_truthy() {
+  local value
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$value" in
+    1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -314,9 +325,52 @@ run_setup_or_preflight() {
   run_quick_setup
 }
 
+should_skip_pro_purchase() {
+  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
+  if is_truthy "$FORCE_PRO_PURCHASE"; then
+    return 1
+  fi
+
+  local entitlement_check=""
+  entitlement_check="$(
+    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" - <<'PY'
+from maestro_solo.entitlements import normalize_tier, resolve_effective_entitlement
+
+state = resolve_effective_entitlement()
+tier = normalize_tier(str(state.get("tier", "core")))
+source = str(state.get("source", "")).strip()
+expires_at = str(state.get("expires_at", "")).strip()
+stale = bool(state.get("stale"))
+
+if tier == "pro" and not stale:
+    print(f"yes|{source}|{expires_at}")
+else:
+    print(f"no|{source}|{expires_at}")
+PY
+  )"
+
+  if [[ "$entitlement_check" == yes\|* ]]; then
+    local details
+    details="${entitlement_check#yes|}"
+    local source="${details%%|*}"
+    local expires_at="${details#*|}"
+    if [[ -n "$expires_at" ]]; then
+      log "Active Pro entitlement detected (source=$source expires_at=$expires_at). Skipping purchase."
+    else
+      log "Active Pro entitlement detected (source=$source). Skipping purchase."
+    fi
+    PRO_PURCHASE_SKIPPED="1"
+    return 0
+  fi
+  return 1
+}
+
 run_pro_purchase() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   if [[ "$INSTALL_FLOW" != "pro" ]]; then
+    return 0
+  fi
+  if should_skip_pro_purchase; then
     return 0
   fi
 
@@ -334,7 +388,11 @@ run_pro_purchase() {
 start_runtime() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   if [[ "$INSTALL_FLOW" == "pro" ]]; then
-    log "Purchase complete. Starting Maestro Pro runtime..."
+    if [[ "$PRO_PURCHASE_SKIPPED" == "1" ]]; then
+      log "Pro already active. Starting Maestro Pro runtime..."
+    else
+      log "Purchase complete. Starting Maestro Pro runtime..."
+    fi
   else
     log "Starting Maestro Free runtime..."
   fi

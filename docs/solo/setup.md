@@ -39,6 +39,7 @@ Optional env overrides:
 
 - `MAESTRO_PURCHASE_EMAIL=person@example.com` for unattended Pro checkout launch.
 - `MAESTRO_PRO_PLAN_ID=solo_monthly` to override default Pro plan ID.
+- `MAESTRO_FORCE_PRO_PURCHASE=1` to force checkout even if Pro is already active locally.
 
 Quick setup prompts:
 

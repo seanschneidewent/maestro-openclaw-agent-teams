@@ -34,6 +34,7 @@ Notes:
 - `MAESTRO_*_PACKAGE_SPEC` supports whitespace or comma-separated pip args.
 - Pass both `maestro-engine` and `maestro-solo` wheel URLs unless your private index resolves dependencies.
 - Optional for unattended Pro installs: `MAESTRO_PURCHASE_EMAIL=person@example.com`.
+- Optional override to force a new checkout even when Pro is already active: `MAESTRO_FORCE_PRO_PURCHASE=1`.
 - Local repo dev mode is still available via `MAESTRO_USE_LOCAL_REPO=1`.
 
 Open:
