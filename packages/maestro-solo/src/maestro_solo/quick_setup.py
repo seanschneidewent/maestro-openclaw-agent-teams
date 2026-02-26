@@ -699,20 +699,41 @@ class QuickSetup:
         return ("gateway service" in lowered and "running" in lowered), out
 
     def _ensure_gateway_running_for_pairing(self) -> bool:
+        def _wait_for_running(attempts: int) -> tuple[bool, str]:
+            last = ""
+            for _ in range(attempts):
+                running_now, status_out = self._gateway_running()
+                last = status_out
+                if running_now:
+                    return True, last
+                time.sleep(2)
+            return False, last
+
         _info("Starting OpenClaw gateway...")
         start_rc = _run_interactive_command(["openclaw", "gateway", "start"])
-        if start_rc != 0:
-            _warning("Gateway start returned non-zero; trying restart.")
-            _ = _run_interactive_command(["openclaw", "gateway", "restart"])
+        running, last_status = _wait_for_running(4)
+        if running:
+            _success("OpenClaw gateway is running")
+            return True
 
-        last_status = ""
-        for _ in range(4):
-            running, status_out = self._gateway_running()
-            last_status = status_out
-            if running:
-                _success("OpenClaw gateway is running")
-                return True
-            time.sleep(2)
+        if start_rc != 0:
+            _warning("Gateway start returned non-zero; installing gateway service.")
+        else:
+            _warning("Gateway did not become reachable; installing gateway service.")
+
+        install_rc = _run_interactive_command(["openclaw", "gateway", "install", "--force"])
+        if install_rc != 0:
+            _warning("Gateway install returned non-zero; continuing with restart attempts.")
+
+        restart_rc = _run_interactive_command(["openclaw", "gateway", "restart"])
+        if restart_rc != 0:
+            _warning("Gateway restart returned non-zero; trying service start once more.")
+            _ = _run_interactive_command(["openclaw", "gateway", "start"])
+
+        running, last_status = _wait_for_running(6)
+        if running:
+            _success("OpenClaw gateway is running")
+            return True
 
         _error("OpenClaw gateway is not running. Telegram pairing cannot continue.")
         if last_status:

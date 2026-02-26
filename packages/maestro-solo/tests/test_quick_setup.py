@@ -168,4 +168,9 @@ def test_pairing_fails_fast_when_gateway_is_not_running(monkeypatch, tmp_path):
     runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
     runner.bot_username = "trace_bot"
     assert runner._pair_telegram_required_step() is False
-    assert calls[:2] == [["openclaw", "gateway", "start"], ["openclaw", "gateway", "restart"]]
+    assert calls[:4] == [
+        ["openclaw", "gateway", "start"],
+        ["openclaw", "gateway", "install", "--force"],
+        ["openclaw", "gateway", "restart"],
+        ["openclaw", "gateway", "start"],
+    ]
