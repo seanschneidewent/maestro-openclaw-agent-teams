@@ -66,6 +66,8 @@ Set in billing service:
 - `MAESTRO_STRIPE_WEBHOOK_SECRET`
 - `MAESTRO_STRIPE_PRICE_ID_SOLO_MONTHLY`
 - `MAESTRO_STRIPE_PRICE_ID_SOLO_YEARLY`
+- `MAESTRO_INSTALLER_CORE_PACKAGE_SPEC` (private wheel pip args for Free launcher)
+- `MAESTRO_INSTALLER_PRO_PACKAGE_SPEC` (private wheel pip args for Pro launcher)
 
 Optional:
 
@@ -74,6 +76,8 @@ Optional:
 - `MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL` (default `<billing-base-url>/upgrade`)
 - `MAESTRO_AUTH_ALLOWED_DOMAINS` (comma-separated Google Workspace domain allow-list)
 - `MAESTRO_ENABLE_DEV_ENDPOINTS=0` (keep disabled in production)
+- `MAESTRO_INSTALLER_SCRIPT_BASE_URL` (override script source for `/free` and `/pro` launchers)
+- `MAESTRO_INSTALLER_FREE_SCRIPT_URL` / `MAESTRO_INSTALLER_PRO_SCRIPT_URL` (explicit launcher script URLs)
 
 Set in license service:
 
@@ -132,6 +136,22 @@ maestro-solo unsubscribe --billing-url https://<your-billing-domain>
 ```
 
 This should open Stripe Customer Portal for cancel/manage actions.
+
+## Installer One-Liners
+
+Billing service now exposes clean installer launchers:
+
+```bash
+curl -fsSL https://<your-billing-domain>/free | bash
+curl -fsSL https://<your-billing-domain>/pro | bash
+```
+
+Recommended branded UX:
+
+- Point a custom domain (for example `get.maestro.run`) to billing service.
+- Publish:
+  - `curl -fsSL https://get.maestro.run/free | bash`
+  - `curl -fsSL https://get.maestro.run/pro | bash`
 
 ## Fast Setup Checklist
 

@@ -9,8 +9,7 @@ Run a fresh end-to-end validation from wheel install through Core startup and Pr
 1. (macOS free flow) Run one command:
 
 ```bash
-MAESTRO_CORE_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-free-macos.sh | bash
+curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash
 ```
 
 Manual path:
@@ -78,8 +77,7 @@ maestro-solo ingest /abs/path/to/plans
 11. Validate direct Pro installer path (setup -> purchase -> up):
 
 ```bash
-MAESTRO_PRO_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-pro-macos.sh | bash
+curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash
 ```
 
 ## Pass Criteria

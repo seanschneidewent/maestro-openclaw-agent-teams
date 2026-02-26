@@ -272,6 +272,50 @@ def test_upgrade_page_renders():
     assert "Continue to Secure Checkout" in response.text
 
 
+def test_installer_launcher_free_requires_package_spec(monkeypatch):
+    monkeypatch.delenv("MAESTRO_INSTALLER_CORE_PACKAGE_SPEC", raising=False)
+    monkeypatch.delenv("MAESTRO_CORE_PACKAGE_SPEC", raising=False)
+
+    client = TestClient(billing_service.app)
+    response = client.get("/free")
+    assert response.status_code == 503
+    assert "missing_core_package_spec" in str(response.json().get("detail", ""))
+
+
+def test_installer_launcher_free_renders_script(monkeypatch):
+    monkeypatch.setenv(
+        "MAESTRO_INSTALLER_CORE_PACKAGE_SPEC",
+        "https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_solo.whl",
+    )
+
+    client = TestClient(billing_service.app)
+    response = client.get(
+        "/install/free",
+        headers={"x-forwarded-proto": "https", "x-forwarded-host": "get.maestro.run"},
+    )
+    assert response.status_code == 200
+    assert "MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_solo.whl'" in response.text
+    assert "MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
+    assert "install-maestro-free-macos.sh" in response.text
+
+
+def test_installer_launcher_pro_renders_script_with_pro_or_core_spec(monkeypatch):
+    monkeypatch.delenv("MAESTRO_INSTALLER_PRO_PACKAGE_SPEC", raising=False)
+    monkeypatch.setenv("MAESTRO_INSTALLER_CORE_PACKAGE_SPEC", "https://downloads.example.com/maestro_core_bundle.whl")
+
+    client = TestClient(billing_service.app)
+    response = client.get("/pro")
+    assert response.status_code == 200
+    assert "MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_core_bundle.whl'" in response.text
+    assert "install-maestro-pro-macos.sh" in response.text
+
+    monkeypatch.delenv("MAESTRO_INSTALLER_CORE_PACKAGE_SPEC", raising=False)
+    monkeypatch.delenv("MAESTRO_CORE_PACKAGE_SPEC", raising=False)
+    second = client.get("/pro")
+    assert second.status_code == 503
+    assert "missing_pro_or_core_package_spec" in str(second.json().get("detail", ""))
+
+
 def test_checkout_success_and_cancel_pages_render():
     client = TestClient(billing_service.app)
 

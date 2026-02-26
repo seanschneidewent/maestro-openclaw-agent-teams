@@ -63,6 +63,11 @@ Fleet transition state path: `~/.maestro/install.json`
 - `MAESTRO_AUTH_ALLOWED_DOMAINS` (optional domain allow-list)
 - `MAESTRO_ENABLE_DEV_ENDPOINTS` (default `0`; keep disabled in production)
 - `MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL` (optional Stripe Customer Portal return URL)
+- `MAESTRO_INSTALLER_CORE_PACKAGE_SPEC` (billing launcher package spec for `/free`)
+- `MAESTRO_INSTALLER_PRO_PACKAGE_SPEC` (billing launcher package spec for `/pro`)
+- `MAESTRO_INSTALLER_SCRIPT_BASE_URL` (optional script source override for launcher endpoints)
+- `MAESTRO_INSTALLER_FREE_SCRIPT_URL`
+- `MAESTRO_INSTALLER_PRO_SCRIPT_URL`
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 - `ANTHROPIC_API_KEY`

@@ -7,27 +7,32 @@ Maestro is a **Solo-first** construction agent runtime with optional Fleet/enter
 Free one-liner (setup -> up):
 
 ```bash
-MAESTRO_CORE_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-free-macos.sh | bash
+curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash
 ```
 
 Pro one-liner (setup -> purchase -> up):
 
 ```bash
-MAESTRO_PRO_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-pro-macos.sh | bash
+curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash
 ```
 
 Pro flow prompts for billing email, opens Stripe Checkout, waits for license provisioning, then starts runtime.
 If setup already exists, installer runs a fast `doctor --fix` preflight and skips re-entering setup values.
 Pro flow now runs Google sign-in (`maestro-solo auth login`) before checkout when needed.
 
+Branding tip: point `get.maestro.run` (or your preferred domain) to the billing service and publish:
+
+```bash
+curl -fsSL https://get.maestro.run/free | bash
+curl -fsSL https://get.maestro.run/pro | bash
+```
+
 Advanced channel override (optional):
 
 ```bash
 MAESTRO_INSTALL_CHANNEL=pro \
 MAESTRO_PRO_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-pro-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/refs/heads/main/scripts/install-maestro-pro-macos.sh | bash
 ```
 
 Notes:

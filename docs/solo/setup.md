@@ -9,15 +9,13 @@ Provision a personal Maestro runtime and start either Free/Core mode or Pro mode
 Free install (setup -> up):
 
 ```bash
-MAESTRO_CORE_PACKAGE_SPEC="<private-wheel-urls>" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-free-macos.sh | bash
+curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash
 ```
 
 Pro install (setup -> purchase -> up):
 
 ```bash
-MAESTRO_PRO_PACKAGE_SPEC="<private-wheel-urls>" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-pro-macos.sh | bash
+curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash
 ```
 
 Installer behavior:
@@ -29,6 +27,13 @@ Installer behavior:
 5. Pro flow only: runs `maestro-solo auth login`.
 6. Pro flow only: runs `maestro-solo purchase --mode live`.
 7. Starts `maestro-solo up --tui`.
+
+Branded domain option:
+
+```bash
+curl -fsSL https://get.maestro.run/free | bash
+curl -fsSL https://get.maestro.run/pro | bash
+```
 
 Existing install behavior:
 
