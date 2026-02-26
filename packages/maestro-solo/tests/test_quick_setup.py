@@ -58,3 +58,44 @@ def test_openai_oauth_step_does_not_fallback_to_onboard(monkeypatch, tmp_path):
     assert runner._openai_oauth_step() is False
     assert calls == [["openclaw", "models", "auth", "login", "--provider", "openai-codex"]]
 
+
+def test_tailscale_step_defers_when_not_installed_without_prompt(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+
+    def _should_not_prompt(*args, **kwargs):
+        raise AssertionError("Confirm.ask should not be called during quick setup tailscale deferral")
+
+    monkeypatch.setattr(quick_setup.Confirm, "ask", _should_not_prompt)
+    monkeypatch.setattr(quick_setup.shutil, "which", lambda _cmd: None)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    assert runner._tailscale_optional_step() is True
+    assert "tailscale" in runner.pending_optional_setup
+
+
+def test_pairing_fails_fast_when_gateway_is_not_running(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(quick_setup.time, "sleep", lambda _seconds: None)
+
+    def _fake_interactive(args: list[str], *, timeout: int = 0) -> int:
+        calls.append(list(args))
+        return 1
+
+    def _fake_command(args: list[str], *, timeout: int = 120, capture: bool = True):
+        if args[:2] == ["openclaw", "status"]:
+            return True, "gateway service stopped"
+        return False, "not-running"
+
+    def _should_not_ask(*args, **kwargs):
+        raise AssertionError("Prompt.ask should not be called when gateway health checks fail")
+
+    monkeypatch.setattr(quick_setup, "_run_interactive_command", _fake_interactive)
+    monkeypatch.setattr(quick_setup, "_run_command", _fake_command)
+    monkeypatch.setattr(quick_setup.Prompt, "ask", _should_not_ask)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    runner.bot_username = "trace_bot"
+    assert runner._pair_telegram_required_step() is False
+    assert calls[:2] == [["openclaw", "gateway", "start"], ["openclaw", "gateway", "restart"]]

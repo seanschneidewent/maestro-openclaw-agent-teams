@@ -240,8 +240,6 @@ class QuickSetup:
             return 1
         if not self._telegram_required_step():
             return 1
-        if not self._tailscale_optional_step():
-            return 1
         if not self._configure_openclaw_and_workspace_step():
             return 1
         if not self._pair_telegram_required_step():
@@ -249,6 +247,8 @@ class QuickSetup:
         if not self._trial_license_step():
             return 1
         if not self._doctor_fix_step():
+            return 1
+        if not self._tailscale_optional_step():
             return 1
         self._save_install_state()
         self._summary()
@@ -542,82 +542,20 @@ class QuickSetup:
 
     def _tailscale_optional_step(self) -> bool:
         console.print()
-        if self.replay_existing:
-            _info("Replay mode: checking Tailscale status without prompts.")
-            if shutil.which("tailscale") is None:
-                _warning("Tailscale not installed. Keeping field access deferred.")
-                if "tailscale" not in self.pending_optional_setup:
-                    self.pending_optional_setup.append("tailscale")
-                return True
-
-            ok, status = _run_command(["tailscale", "status"], timeout=10)
-            if not ok or "logged out" in status.lower():
-                _warning("Tailscale not connected. Keeping field access deferred.")
-                if "tailscale" not in self.pending_optional_setup:
-                    self.pending_optional_setup.append("tailscale")
-                return True
-
-            ok_ip, out_ip = _run_command(["tailscale", "ip", "-4"], timeout=10)
-            if not ok_ip:
-                _warning("Could not resolve Tailscale IPv4. Keeping field access deferred.")
-                if "tailscale" not in self.pending_optional_setup:
-                    self.pending_optional_setup.append("tailscale")
-                return True
-
-            self.tailscale_ip = str(out_ip.splitlines()[0]).strip()
-            if not self.tailscale_ip:
-                _warning("Tailscale IPv4 is empty. Keeping field access deferred.")
-                if "tailscale" not in self.pending_optional_setup:
-                    self.pending_optional_setup.append("tailscale")
-                return True
-
-            _success(f"Tailscale ready: {self.tailscale_ip}")
-            if "tailscale" in self.pending_optional_setup:
-                self.pending_optional_setup.remove("tailscale")
-            return True
-
-        configure_now = Confirm.ask(
-            f"  [{CYAN}]Configure Tailscale now for field access?[/]",
-            default=False,
-            console=console,
-        )
-        if not configure_now:
-            _info("Deferring Tailscale setup.")
+        if shutil.which("tailscale") is None:
+            _info("Tailscale not installed; field access setup deferred (optional).")
+            _info("Later: brew install --cask tailscale && tailscale up")
             if "tailscale" not in self.pending_optional_setup:
                 self.pending_optional_setup.append("tailscale")
             return True
 
-        if shutil.which("tailscale") is None:
-            _warning("Tailscale is missing.")
-            install_now = Confirm.ask(
-                f"  [{CYAN}]Install Tailscale now (brew install --cask tailscale)?[/]",
-                default=True,
-                console=console,
-            )
-            if not install_now:
-                if "tailscale" not in self.pending_optional_setup:
-                    self.pending_optional_setup.append("tailscale")
-                return True
-            rc = _run_interactive_command(["brew", "install", "--cask", "tailscale"])
-            if rc != 0:
-                _warning("Tailscale install failed. Deferring setup.")
-                if "tailscale" not in self.pending_optional_setup:
-                    self.pending_optional_setup.append("tailscale")
-                return True
-
         ok, status = _run_command(["tailscale", "status"], timeout=10)
         if not ok or "logged out" in status.lower():
             _warning("Tailscale not connected.")
-            _info("Run 'tailscale up' in another terminal, then return here.")
-            ready = Confirm.ask(
-                f"  [{CYAN}]Have you completed 'tailscale up'?[/]",
-                default=False,
-                console=console,
-            )
-            if not ready:
-                if "tailscale" not in self.pending_optional_setup:
-                    self.pending_optional_setup.append("tailscale")
-                return True
+            _info("Run `tailscale up` later to enable field access URL.")
+            if "tailscale" not in self.pending_optional_setup:
+                self.pending_optional_setup.append("tailscale")
+            return True
 
         ok_ip, out_ip = _run_command(["tailscale", "ip", "-4"], timeout=10)
         if not ok_ip:
@@ -636,6 +574,35 @@ class QuickSetup:
         if "tailscale" in self.pending_optional_setup:
             self.pending_optional_setup.remove("tailscale")
         return True
+
+    def _gateway_running(self) -> tuple[bool, str]:
+        ok, out = _run_command(["openclaw", "status"], timeout=12)
+        if not ok:
+            return False, out
+        lowered = out.lower()
+        return ("gateway service" in lowered and "running" in lowered), out
+
+    def _ensure_gateway_running_for_pairing(self) -> bool:
+        _info("Starting OpenClaw gateway...")
+        start_rc = _run_interactive_command(["openclaw", "gateway", "start"])
+        if start_rc != 0:
+            _warning("Gateway start returned non-zero; trying restart.")
+            _ = _run_interactive_command(["openclaw", "gateway", "restart"])
+
+        last_status = ""
+        for _ in range(4):
+            running, status_out = self._gateway_running()
+            last_status = status_out
+            if running:
+                _success("OpenClaw gateway is running")
+                return True
+            time.sleep(2)
+
+        _error("OpenClaw gateway is not running. Telegram pairing cannot continue.")
+        if last_status:
+            _info(f"openclaw status: {last_status}")
+        _info("Try: openclaw gateway install --force && openclaw gateway restart")
+        return False
 
     def _configure_openclaw_and_workspace_step(self) -> bool:
         console.print()
@@ -905,7 +872,7 @@ class QuickSetup:
         console.print()
         console.print(Panel(
             "Telegram pairing is required in quick setup.\n"
-            f"Send a message to @{self.bot_username} and approve the pairing code.",
+            f"Send /start (or any message) to @{self.bot_username}, then paste the pairing code.",
             border_style=CYAN,
             title=f"[bold {BRIGHT_CYAN}]Telegram Pairing (Required)[/]",
             width=72,
@@ -916,13 +883,8 @@ class QuickSetup:
             _success("Telegram pairing previously completed (replay mode)")
             return True
 
-        _info("Starting OpenClaw gateway...")
-        start_rc = _run_interactive_command(["openclaw", "gateway", "start"])
-        if start_rc != 0:
-            _warning("Gateway start returned non-zero; trying restart.")
-            _ = _run_interactive_command(["openclaw", "gateway", "restart"])
-
-        time.sleep(2)
+        if not self._ensure_gateway_running_for_pairing():
+            return False
 
         while True:
             pairing_code = Prompt.ask(
@@ -939,6 +901,15 @@ class QuickSetup:
                 return True
 
             _warning(f"Pairing approval failed: {out}")
+            pending_ok, pending_out = _run_command(["openclaw", "pairing", "list", "telegram", "--json"], timeout=20)
+            if pending_ok:
+                try:
+                    pending_payload = json.loads(pending_out)
+                except Exception:
+                    pending_payload = {}
+                requests = pending_payload.get("requests") if isinstance(pending_payload, dict) else []
+                if isinstance(requests, list) and not requests:
+                    _info(f"No pending Telegram pairing requests found. Send /start to @{self.bot_username} and retry.")
             retry = Confirm.ask(
                 f"  [{CYAN}]Retry pairing?[/]",
                 default=True,
