@@ -296,8 +296,10 @@ def test_installer_launcher_free_renders_script(monkeypatch):
     assert response.status_code == 200
     assert "export MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_solo.whl'" in response.text
     assert "export MAESTRO_INSTALL_AUTO='1'" in response.text
+    assert "export MAESTRO_INSTALL_FLOW='install'" in response.text
+    assert "export MAESTRO_INSTALL_INTENT='free'" in response.text
     assert "export MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
-    assert "install-maestro-free-macos.sh" in response.text
+    assert "install-maestro-install-macos.sh" in response.text
 
 
 def test_installer_launcher_pro_renders_script_with_pro_or_core_spec(monkeypatch):
@@ -308,13 +310,23 @@ def test_installer_launcher_pro_renders_script_with_pro_or_core_spec(monkeypatch
     response = client.get("/pro")
     assert response.status_code == 200
     assert "export MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_core_bundle.whl'" in response.text
-    assert "install-maestro-pro-macos.sh" in response.text
+    assert "export MAESTRO_INSTALL_INTENT='pro'" in response.text
+    assert "install-maestro-install-macos.sh" in response.text
 
     monkeypatch.delenv("MAESTRO_INSTALLER_CORE_PACKAGE_SPEC", raising=False)
     monkeypatch.delenv("MAESTRO_CORE_PACKAGE_SPEC", raising=False)
     second = client.get("/pro")
     assert second.status_code == 503
     assert "missing_pro_or_core_package_spec" in str(second.json().get("detail", ""))
+
+
+def test_installer_launcher_install_defaults_to_pro_intent(monkeypatch):
+    monkeypatch.setenv("MAESTRO_INSTALLER_CORE_PACKAGE_SPEC", "https://downloads.example.com/maestro_core_bundle.whl")
+    client = TestClient(billing_service.app)
+    response = client.get("/install")
+    assert response.status_code == 200
+    assert "export MAESTRO_INSTALL_FLOW='install'" in response.text
+    assert "export MAESTRO_INSTALL_INTENT='pro'" in response.text
 
 
 def test_checkout_success_and_cancel_pages_render():

@@ -1063,14 +1063,20 @@ def healthz():
 @app.get("/free")
 @app.get("/install/free")
 def install_free_script(raw_request: Request):
-    script = build_installer_script(flow="free", billing_base_url=_request_base_url(raw_request))
+    script = build_installer_script(flow="install", intent="free", billing_base_url=_request_base_url(raw_request))
     return PlainTextResponse(script, media_type="text/x-shellscript; charset=utf-8")
 
 
 @app.get("/pro")
 @app.get("/install/pro")
 def install_pro_script(raw_request: Request):
-    script = build_installer_script(flow="pro", billing_base_url=_request_base_url(raw_request))
+    script = build_installer_script(flow="install", intent="pro", billing_base_url=_request_base_url(raw_request))
+    return PlainTextResponse(script, media_type="text/x-shellscript; charset=utf-8")
+
+
+@app.get("/install")
+def install_script(raw_request: Request):
+    script = build_installer_script(flow="install", intent="pro", billing_base_url=_request_base_url(raw_request))
     return PlainTextResponse(script, media_type="text/x-shellscript; charset=utf-8")
 
 

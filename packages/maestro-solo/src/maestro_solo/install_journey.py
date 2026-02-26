@@ -9,9 +9,14 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 
 from .entitlements import normalize_tier, resolve_effective_entitlement
+from .openclaw_runtime import (
+    DEFAULT_MAESTRO_OPENCLAW_PROFILE,
+    openclaw_config_path,
+    resolve_openclaw_profile,
+)
 from .solo_license import load_local_license
 
 
@@ -21,6 +26,7 @@ TOTAL_STEPS = 4
 @dataclass
 class InstallJourneyOptions:
     flow: str
+    intent: str
     channel: str
     solo_home: str
     billing_url: str
@@ -28,6 +34,7 @@ class InstallJourneyOptions:
     purchase_email: str
     force_pro_purchase: bool
     replay_setup: bool
+    openclaw_profile: str
 
 
 def _log(message: str):
@@ -59,7 +66,7 @@ def _load_json(path: Path) -> dict:
 
 def _has_existing_setup(solo_home: str) -> bool:
     install_state = Path(solo_home).expanduser().resolve() / "install.json"
-    openclaw_config = Path.home() / ".openclaw" / "openclaw.json"
+    openclaw_config = openclaw_config_path()
 
     state = _load_json(install_state) if install_state.exists() else {}
     if not bool(state.get("setup_completed")):
@@ -112,6 +119,8 @@ def _run_cli_stream(args: list[str], *, options: InstallJourneyOptions) -> int:
     env = os.environ.copy()
     env["MAESTRO_INSTALL_CHANNEL"] = options.channel
     env["MAESTRO_SOLO_HOME"] = options.solo_home
+    if options.openclaw_profile:
+        env["MAESTRO_OPENCLAW_PROFILE"] = options.openclaw_profile
     cmd = [sys.executable, "-m", "maestro_solo.cli", *args]
     result = subprocess.run(cmd, env=env, check=False)
     return int(result.returncode)
@@ -153,11 +162,33 @@ def _run_setup_phase(options: InstallJourneyOptions) -> bool:
     return False
 
 
-def _run_auth_phase(options: InstallJourneyOptions) -> bool:
+def _resolve_pro_activation_choice(options: InstallJourneyOptions) -> bool:
+    if options.flow == "pro":
+        return True
+    if options.flow == "free":
+        return False
+    if options.intent == "free":
+        _log("Install intent: core-first (Pro can be enabled later).")
+        return False
+
+    default_yes = options.intent == "pro"
+    prompt = "Enable Pro now before first launch? (you can skip and upgrade later)"
+    try:
+        wants_pro = Confirm.ask(prompt, default=default_yes)
+    except Exception:
+        wants_pro = default_yes
+    if wants_pro:
+        _log("Install choice: activate Pro now.")
+    else:
+        _log("Install choice: continue in core mode for now.")
+    return bool(wants_pro)
+
+
+def _run_auth_phase(options: InstallJourneyOptions, *, wants_pro_now: bool) -> bool:
     args = _billing_args(options)
 
-    if options.flow == "free":
-        _log("Free flow: showing billing auth status.")
+    if not wants_pro_now:
+        _log("Core flow: showing billing auth status.")
         _run_cli_stream(["auth", "status", *args], options=options)
         _log("Optional later: maestro-solo auth login")
         return True
@@ -172,14 +203,14 @@ def _run_auth_phase(options: InstallJourneyOptions) -> bool:
     return True
 
 
-def _run_purchase_phase(options: InstallJourneyOptions) -> bool:
+def _run_purchase_phase(options: InstallJourneyOptions, *, wants_pro_now: bool) -> bool:
     args = _billing_args(options)
 
     _log("Checking entitlement status before purchase...")
     _run_cli_stream(["entitlements", "status"], options=options)
 
-    if options.flow == "free":
-        _log("Free flow: no payment required.")
+    if not wants_pro_now:
+        _log("Core flow: no payment required.")
         preview_email = _resolve_purchase_email(provided=options.purchase_email, required=False)
         _run_cli_stream(
             [
@@ -247,15 +278,15 @@ def _run_purchase_phase(options: InstallJourneyOptions) -> bool:
     return True
 
 
-def _run_up_phase(options: InstallJourneyOptions) -> int:
-    if options.flow == "pro":
+def _run_up_phase(options: InstallJourneyOptions, *, wants_pro_now: bool) -> int:
+    if wants_pro_now:
         active, _, _ = _pro_entitlement_active()
         if active:
             _log("Pro already active. Starting Maestro Pro runtime...")
         else:
             _log("Starting Maestro runtime while Pro entitlement is pending.")
     else:
-        _log("Starting Maestro Free runtime...")
+        _log("Starting Maestro runtime in core mode...")
 
     return _run_cli_stream(["up", "--tui"], options=options)
 
@@ -263,41 +294,59 @@ def _run_up_phase(options: InstallJourneyOptions) -> int:
 def run_install_journey(options: InstallJourneyOptions) -> int:
     os.environ["MAESTRO_INSTALL_CHANNEL"] = options.channel
     os.environ["MAESTRO_SOLO_HOME"] = options.solo_home
+    if options.openclaw_profile:
+        os.environ["MAESTRO_OPENCLAW_PROFILE"] = options.openclaw_profile
 
     _step(1, "Setup")
     if not _run_setup_phase(options):
         return 1
 
+    wants_pro_now = _resolve_pro_activation_choice(options)
+
     _step(2, "Auth")
-    if not _run_auth_phase(options):
+    if not _run_auth_phase(options, wants_pro_now=wants_pro_now):
         return 1
 
     _step(3, "Purchase")
-    if not _run_purchase_phase(options):
+    if not _run_purchase_phase(options, wants_pro_now=wants_pro_now):
         return 1
 
     _step(4, "Up")
-    return _run_up_phase(options)
+    return _run_up_phase(options, wants_pro_now=wants_pro_now)
 
 
 def options_from_env_and_args(args) -> InstallJourneyOptions:
     flow = str(getattr(args, "flow", "free") or "free").strip().lower()
-    if flow not in {"free", "pro"}:
+    if flow not in {"free", "pro", "install"}:
         flow = "free"
+
+    raw_intent = str(getattr(args, "intent", "") or os.environ.get("MAESTRO_INSTALL_INTENT", "")).strip().lower()
+    if raw_intent == "core":
+        raw_intent = "free"
+    intent = raw_intent if raw_intent in {"free", "pro"} else ""
 
     channel = str(getattr(args, "channel", "auto") or "auto").strip().lower()
     if channel == "auto":
-        channel = "pro" if flow == "pro" else "core"
+        if flow == "pro":
+            channel = "pro"
+        elif flow == "install" and intent == "pro":
+            channel = "pro"
+        else:
+            channel = "core"
     if channel not in {"core", "pro"}:
         channel = "core"
 
     raw_home = str(os.environ.get("MAESTRO_SOLO_HOME", "")).strip()
     solo_home = raw_home or str(Path.home() / ".maestro-solo")
 
+    profile_default = DEFAULT_MAESTRO_OPENCLAW_PROFILE
+    openclaw_profile = resolve_openclaw_profile(default=profile_default)
+
     replay_setup = not _is_truthy(str(getattr(args, "no_replay_setup", False)).strip())
 
     return InstallJourneyOptions(
         flow=flow,
+        intent=intent,
         channel=channel,
         solo_home=solo_home,
         billing_url=str(getattr(args, "billing_url", "") or "").strip().rstrip("/"),
@@ -305,4 +354,5 @@ def options_from_env_and_args(args) -> InstallJourneyOptions:
         purchase_email=str(getattr(args, "email", "") or "").strip(),
         force_pro_purchase=bool(getattr(args, "force_pro_purchase", False)),
         replay_setup=replay_setup,
+        openclaw_profile=openclaw_profile,
     )

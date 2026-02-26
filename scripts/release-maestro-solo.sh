@@ -115,21 +115,39 @@ main() {
   [[ "$done" == "1" ]] || { echo "[release] ERROR: deployment did not reach SUCCESS in time" >&2; exit 1; }
 
   echo "[release] Running installer smoke checks"
-  local free_script pro_script
+  local free_script pro_script install_script
   free_script="$(curl -fsSL "$BILLING_URL/free")"
   pro_script="$(curl -fsSL "$BILLING_URL/pro")"
+  install_script="$(curl -fsSL "$BILLING_URL/install")"
 
   echo "$free_script" | grep -F "$engine_url" >/dev/null || { echo "[release] ERROR: /free missing engine wheel URL" >&2; exit 1; }
   echo "$free_script" | grep -F "$solo_url" >/dev/null || { echo "[release] ERROR: /free missing solo wheel URL" >&2; exit 1; }
-  echo "$free_script" | grep -F "$script_base_url/install-maestro-free-macos.sh" >/dev/null || {
+  echo "$free_script" | grep -F "$script_base_url/install-maestro-install-macos.sh" >/dev/null || {
     echo "[release] ERROR: /free missing pinned installer script URL" >&2
+    exit 1
+  }
+  echo "$free_script" | grep -F "MAESTRO_INSTALL_INTENT='free'" >/dev/null || {
+    echo "[release] ERROR: /free missing free intent export" >&2
     exit 1
   }
 
   echo "$pro_script" | grep -F "$engine_url" >/dev/null || { echo "[release] ERROR: /pro missing engine wheel URL" >&2; exit 1; }
   echo "$pro_script" | grep -F "$solo_url" >/dev/null || { echo "[release] ERROR: /pro missing solo wheel URL" >&2; exit 1; }
-  echo "$pro_script" | grep -F "$script_base_url/install-maestro-pro-macos.sh" >/dev/null || {
+  echo "$pro_script" | grep -F "$script_base_url/install-maestro-install-macos.sh" >/dev/null || {
     echo "[release] ERROR: /pro missing pinned installer script URL" >&2
+    exit 1
+  }
+  echo "$pro_script" | grep -F "MAESTRO_INSTALL_INTENT='pro'" >/dev/null || {
+    echo "[release] ERROR: /pro missing pro intent export" >&2
+    exit 1
+  }
+
+  echo "$install_script" | grep -F "$script_base_url/install-maestro-install-macos.sh" >/dev/null || {
+    echo "[release] ERROR: /install missing pinned installer script URL" >&2
+    exit 1
+  }
+  echo "$install_script" | grep -F "MAESTRO_INSTALL_INTENT='pro'" >/dev/null || {
+    echo "[release] ERROR: /install missing default pro intent export" >&2
     exit 1
   }
 

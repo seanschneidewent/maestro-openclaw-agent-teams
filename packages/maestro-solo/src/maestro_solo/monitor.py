@@ -24,6 +24,7 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from maestro_engine.network import resolve_network_urls
+from .openclaw_runtime import openclaw_config_path, openclaw_state_root, prepend_openclaw_profile_args
 
 
 CYAN = "cyan"
@@ -146,8 +147,9 @@ class MonitorState:
 
 
 def _safe_run(args: list[str], timeout: int = 6) -> tuple[bool, str]:
+    cmd = prepend_openclaw_profile_args(args)
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -260,7 +262,7 @@ def _append_activity_event(
 
 
 def _active_session_metadata(agent_id: str) -> dict[str, Any]:
-    sessions_path = Path.home() / ".openclaw" / "agents" / str(agent_id).strip() / "sessions" / "sessions.json"
+    sessions_path = openclaw_state_root() / "agents" / str(agent_id).strip() / "sessions" / "sessions.json"
     if not sessions_path.exists():
         return {}
     try:
@@ -410,7 +412,7 @@ def _activity_events_from_session_line(
 
 
 def _load_openclaw_config() -> dict[str, Any]:
-    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path()
     if not config_path.exists():
         return {}
     try:
@@ -494,7 +496,7 @@ def _resolve_primary_agent() -> tuple[str, str]:
 def _load_token_stats(agent_id: str) -> tuple[int, int]:
     clean_agent_id = str(agent_id or "").strip() or "maestro-solo-personal"
 
-    sessions_path = Path.home() / ".openclaw" / "agents" / clean_agent_id / "sessions" / "sessions.json"
+    sessions_path = openclaw_state_root() / "agents" / clean_agent_id / "sessions" / "sessions.json"
     if not sessions_path.exists():
         return 0, 0
     try:
@@ -743,7 +745,9 @@ def _update_runtime_state(state: MonitorState, process: subprocess.Popen, gatewa
 
 
 def _start_gateway_log_stream(stop_event: threading.Event, gateway_logs: LogBuffer) -> subprocess.Popen | None:
-    gateway_cmd = ["openclaw", "logs", "--follow", "--plain", "--local-time", "--limit", "40"]
+    gateway_cmd = prepend_openclaw_profile_args(
+        ["openclaw", "logs", "--follow", "--plain", "--local-time", "--limit", "40"]
+    )
     try:
         gateway_process = _start_text_process(gateway_cmd)
     except Exception as exc:

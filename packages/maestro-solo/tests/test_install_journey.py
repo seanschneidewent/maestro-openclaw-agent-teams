@@ -6,6 +6,7 @@ from maestro_solo.install_journey import InstallJourneyOptions, run_install_jour
 def _opts(**overrides) -> InstallJourneyOptions:
     payload = {
         "flow": "free",
+        "intent": "",
         "channel": "core",
         "solo_home": "/tmp/maestro-solo",
         "billing_url": "https://billing.example.com",
@@ -13,6 +14,7 @@ def _opts(**overrides) -> InstallJourneyOptions:
         "purchase_email": "",
         "force_pro_purchase": False,
         "replay_setup": True,
+        "openclaw_profile": "maestro-solo",
     }
     payload.update(overrides)
     return InstallJourneyOptions(**payload)
@@ -95,3 +97,42 @@ def test_journey_replay_falls_back_to_preflight_when_setup_replay_fails(monkeypa
     code = run_install_journey(_opts(flow="free"))
     assert code == 0
     assert ["doctor", "--fix", "--no-restart"] in calls
+
+
+def test_journey_install_intent_pro_can_be_skipped(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr("maestro_solo.install_journey._has_existing_setup", lambda _solo_home: False)
+    monkeypatch.setattr("maestro_solo.install_journey._resolve_purchase_email", lambda **_: "you@example.com")
+    monkeypatch.setattr("maestro_solo.install_journey.Confirm.ask", lambda *_args, **_kwargs: False)
+
+    def _fake_run(args: list[str], *, options: InstallJourneyOptions) -> int:
+        calls.append(list(args))
+        return 0
+
+    monkeypatch.setattr("maestro_solo.install_journey._run_cli_stream", _fake_run)
+
+    code = run_install_journey(_opts(flow="install", intent="pro", channel="pro"))
+    assert code == 0
+    assert ["auth", "login", "--billing-url", "https://billing.example.com"] not in calls
+    assert any(cmd[:2] == ["purchase", "--email"] and "--preview" in cmd for cmd in calls)
+    assert calls[-1] == ["up", "--tui"]
+
+
+def test_journey_install_intent_pro_runs_pro_path_when_confirmed(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr("maestro_solo.install_journey._has_existing_setup", lambda _solo_home: False)
+    monkeypatch.setattr("maestro_solo.install_journey._pro_entitlement_active", lambda: (False, "", ""))
+    monkeypatch.setattr("maestro_solo.install_journey._resolve_purchase_email", lambda **_: "buyer@example.com")
+    monkeypatch.setattr("maestro_solo.install_journey.Confirm.ask", lambda *_args, **_kwargs: True)
+
+    def _fake_run(args: list[str], *, options: InstallJourneyOptions) -> int:
+        calls.append(list(args))
+        return 0
+
+    monkeypatch.setattr("maestro_solo.install_journey._run_cli_stream", _fake_run)
+
+    code = run_install_journey(_opts(flow="install", intent="pro", channel="pro"))
+    assert code == 0
+    assert ["auth", "login", "--billing-url", "https://billing.example.com"] in calls
+    real_calls = [cmd for cmd in calls if cmd and cmd[0] == "purchase" and "--preview" not in cmd]
+    assert len(real_calls) == 1

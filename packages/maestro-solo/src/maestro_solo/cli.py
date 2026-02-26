@@ -848,7 +848,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     journey = sub.add_parser("journey", help=argparse.SUPPRESS)
-    journey.add_argument("--flow", default="free", choices=["free", "pro"])
+    journey.add_argument("--flow", default="free", choices=["free", "pro", "install"])
+    journey.add_argument("--intent", default="", help=argparse.SUPPRESS)
     journey.add_argument("--channel", default="auto", choices=["auto", "core", "pro"])
     journey.add_argument("--billing-url", default=None)
     journey.add_argument("--plan", default=DEFAULT_PLAN)

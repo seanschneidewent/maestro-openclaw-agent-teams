@@ -48,6 +48,13 @@ def _installer_pro_script_url() -> str:
     return f"{_installer_script_base_url().rstrip('/')}/install-maestro-pro-macos.sh"
 
 
+def _installer_install_script_url() -> str:
+    configured = _first_env_value("MAESTRO_INSTALLER_INSTALL_SCRIPT_URL")
+    if configured:
+        return configured
+    return f"{_installer_script_base_url().rstrip('/')}/install-maestro-install-macos.sh"
+
+
 def _installer_core_package_spec() -> str:
     return _first_env_value("MAESTRO_INSTALLER_CORE_PACKAGE_SPEC", "MAESTRO_CORE_PACKAGE_SPEC")
 
@@ -61,10 +68,21 @@ def _installer_auto_approve() -> str:
     return configured or "1"
 
 
-def build_installer_script(*, flow: str, billing_base_url: str) -> str:
+def _installer_openclaw_profile() -> str:
+    configured = _first_env_value("MAESTRO_INSTALLER_OPENCLAW_PROFILE", "MAESTRO_OPENCLAW_PROFILE")
+    return configured or "maestro-solo"
+
+
+def build_installer_script(*, flow: str, billing_base_url: str, intent: str = "") -> str:
     clean_flow = _clean_text(flow).lower()
-    if clean_flow not in {"free", "pro"}:
+    if clean_flow not in {"free", "pro", "install"}:
         raise HTTPException(status_code=400, detail="invalid_install_flow")
+
+    clean_intent = _clean_text(intent).lower()
+    if clean_intent == "core":
+        clean_intent = "free"
+    if clean_intent and clean_intent not in {"free", "pro"}:
+        raise HTTPException(status_code=400, detail="invalid_install_intent")
 
     core_spec = _installer_core_package_spec()
     pro_spec = _installer_pro_package_spec()
@@ -72,16 +90,30 @@ def build_installer_script(*, flow: str, billing_base_url: str) -> str:
         raise HTTPException(status_code=503, detail="installer_not_configured:missing_core_package_spec")
     if clean_flow == "pro" and not pro_spec and not core_spec:
         raise HTTPException(status_code=503, detail="installer_not_configured:missing_pro_or_core_package_spec")
+    if clean_flow == "install":
+        if clean_intent == "free" and not core_spec:
+            raise HTTPException(status_code=503, detail="installer_not_configured:missing_core_package_spec")
+        if not core_spec and not pro_spec:
+            raise HTTPException(status_code=503, detail="installer_not_configured:missing_pro_or_core_package_spec")
 
     script_base_url = _installer_script_base_url().rstrip("/")
-    script_url = _installer_free_script_url() if clean_flow == "free" else _installer_pro_script_url()
+    if clean_flow == "free":
+        script_url = _installer_free_script_url()
+    elif clean_flow == "pro":
+        script_url = _installer_pro_script_url()
+    else:
+        script_url = _installer_install_script_url()
     env_assignments: list[tuple[str, str]] = []
     if core_spec:
         env_assignments.append(("MAESTRO_CORE_PACKAGE_SPEC", core_spec))
-    if clean_flow == "pro" and pro_spec:
+    if pro_spec:
         env_assignments.append(("MAESTRO_PRO_PACKAGE_SPEC", pro_spec))
     env_assignments.append(("MAESTRO_INSTALL_AUTO", _installer_auto_approve()))
     env_assignments.append(("MAESTRO_INSTALL_BASE_URL", f"{script_base_url}/install-maestro-macos.sh"))
+    env_assignments.append(("MAESTRO_OPENCLAW_PROFILE", _installer_openclaw_profile()))
+    env_assignments.append(("MAESTRO_INSTALL_FLOW", clean_flow))
+    if clean_intent:
+        env_assignments.append(("MAESTRO_INSTALL_INTENT", clean_intent))
     if billing_base_url:
         env_assignments.append(("MAESTRO_BILLING_URL", billing_base_url))
 

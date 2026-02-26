@@ -47,7 +47,7 @@ def test_openai_oauth_step_does_not_fallback_to_onboard(monkeypatch, tmp_path):
     _configure_env(monkeypatch, tmp_path)
     calls: list[list[str]] = []
 
-    monkeypatch.setattr(quick_setup, "_openclaw_oauth_profile_exists", lambda _provider: False)
+    monkeypatch.setattr(quick_setup, "_openclaw_oauth_profile_exists", lambda _provider, **_kwargs: False)
     monkeypatch.setattr(
         quick_setup.QuickSetup,
         "_ensure_openai_oauth_provider_plugin",
@@ -62,7 +62,7 @@ def test_openai_oauth_step_does_not_fallback_to_onboard(monkeypatch, tmp_path):
 
     runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
     assert runner._openai_oauth_step() is False
-    assert calls == [["openclaw", "models", "auth", "login", "--provider", "openai-codex"]]
+    assert calls == [["openclaw", "--profile", "maestro-solo", "models", "auth", "login", "--provider", "openai-codex"]]
 
 
 def test_openai_oauth_plugin_bootstrap_stages_plugin_and_config(monkeypatch, tmp_path):
@@ -82,7 +82,7 @@ def test_openai_oauth_plugin_bootstrap_stages_plugin_and_config(monkeypatch, tmp
     runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
     assert runner._ensure_openai_oauth_provider_plugin() is True
 
-    config_path = Path(tmp_path / "home" / ".openclaw" / "openclaw.json")
+    config_path = Path(tmp_path / "home" / ".openclaw-maestro-solo" / "openclaw.json")
     assert config_path.exists()
     config = json.loads(config_path.read_text(encoding="utf-8"))
     plugins = config.get("plugins", {})
@@ -138,7 +138,7 @@ def test_workspace_bootstrap_core_tier_does_not_reference_native_plugin(monkeypa
 
     assert runner._configure_openclaw_and_workspace_step() is True
 
-    config_path = Path(tmp_path / "home" / ".openclaw" / "openclaw.json")
+    config_path = Path(tmp_path / "home" / ".openclaw-maestro-solo" / "openclaw.json")
     assert config_path.exists()
     config = json.loads(config_path.read_text(encoding="utf-8"))
 
@@ -179,7 +179,7 @@ def test_pairing_fails_fast_when_gateway_is_not_running(monkeypatch, tmp_path):
         return 1
 
     def _fake_command(args: list[str], *, timeout: int = 120, capture: bool = True):
-        if args[:2] == ["openclaw", "status"]:
+        if args[:4] == ["openclaw", "--profile", "maestro-solo", "status"]:
             return True, "gateway service stopped"
         return False, "not-running"
 
@@ -194,8 +194,8 @@ def test_pairing_fails_fast_when_gateway_is_not_running(monkeypatch, tmp_path):
     runner.bot_username = "trace_bot"
     assert runner._pair_telegram_required_step() is False
     assert calls[:4] == [
-        ["openclaw", "gateway", "start"],
-        ["openclaw", "gateway", "install", "--force"],
-        ["openclaw", "gateway", "restart"],
-        ["openclaw", "gateway", "start"],
+        ["openclaw", "--profile", "maestro-solo", "gateway", "start"],
+        ["openclaw", "--profile", "maestro-solo", "gateway", "install", "--force"],
+        ["openclaw", "--profile", "maestro-solo", "gateway", "restart"],
+        ["openclaw", "--profile", "maestro-solo", "gateway", "start"],
     ]

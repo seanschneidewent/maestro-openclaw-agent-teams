@@ -20,6 +20,7 @@ from .entitlements import has_capability, resolve_effective_entitlement
 from .profile import PROFILE_FLEET, PROFILE_SOLO, resolve_profile
 from maestro_engine.utils import load_json, save_json
 from .install_state import load_install_state, resolve_fleet_store_root, update_install_state
+from .openclaw_runtime import openclaw_config_path, openclaw_state_root, prepend_openclaw_profile_args
 from .workspace_templates import (
     provider_env_key_for_model,
     render_company_agents_md,
@@ -58,7 +59,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _load_openclaw_config(home_dir: Path) -> tuple[dict[str, Any], Path]:
-    config_path = home_dir / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(home_dir=home_dir)
     payload = load_json(config_path)
     if not isinstance(payload, dict):
         payload = {}
@@ -506,12 +507,12 @@ def _rotate_stale_sessions(
 ) -> DoctorCheck:
     sessions_dir: Path | None = None
     for agent_id in ("maestro-solo-personal", "maestro-personal", "maestro-company"):
-        candidate = home_dir / ".openclaw" / "agents" / agent_id / "sessions"
+        candidate = openclaw_state_root(home_dir=home_dir) / "agents" / agent_id / "sessions"
         if candidate.exists():
             sessions_dir = candidate
             break
     if sessions_dir is None:
-        sessions_dir = home_dir / ".openclaw" / "agents" / "maestro-solo-personal" / "sessions"
+        sessions_dir = openclaw_state_root(home_dir=home_dir) / "agents" / "maestro-solo-personal" / "sessions"
     sessions_path = sessions_dir / "sessions.json"
     if not sessions_path.exists():
         return DoctorCheck(
@@ -578,8 +579,9 @@ def _rotate_stale_sessions(
 
 
 def _run_cmd(args: list[str], timeout: int = 25) -> tuple[bool, str]:
+    cmd = prepend_openclaw_profile_args(args)
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()

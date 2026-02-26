@@ -72,3 +72,11 @@ def test_parser_journey_command():
     assert args.flow == "pro"
     assert args.channel == "auto"
     assert args.plan == "solo_monthly"
+
+
+def test_parser_journey_install_intent_command():
+    parser = build_parser()
+    args = parser.parse_args(["journey", "--flow", "install", "--intent", "pro"])
+    assert args.command == "journey"
+    assert args.flow == "install"
+    assert args.intent == "pro"

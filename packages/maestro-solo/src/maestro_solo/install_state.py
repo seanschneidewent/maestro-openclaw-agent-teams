@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from maestro_engine.utils import load_json, save_json
+from .openclaw_runtime import openclaw_config_path, openclaw_state_root
 
 
 INSTALL_STATE_VERSION = 1
@@ -60,6 +61,9 @@ def normalize_install_state(state: dict[str, Any] | None) -> dict[str, Any]:
         raw = str(payload.get(key, "")).strip()
         if raw:
             out[key] = raw
+    raw_profile = str(payload.get("openclaw_profile", "")).strip()
+    if raw_profile:
+        out["openclaw_profile"] = raw_profile
     return out
 
 
@@ -99,7 +103,7 @@ def record_active_project(
 
 def resolve_personal_workspace(home_dir: Path | None = None) -> Path | None:
     home = Path(home_dir).expanduser().resolve() if home_dir is not None else Path.home().resolve()
-    config_path = home / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(home_dir=home)
     config = load_json(config_path, default={})
     if not isinstance(config, dict):
         return None
@@ -127,7 +131,7 @@ def resolve_personal_workspace(home_dir: Path | None = None) -> Path | None:
         if workspace:
             return Path(workspace).expanduser().resolve()
 
-    return (home / ".openclaw" / DEFAULT_WORKSPACE_DIR).resolve()
+    return (openclaw_state_root(home_dir=home) / DEFAULT_WORKSPACE_DIR).resolve()
 
 
 def _read_workspace_store(workspace: Path | None) -> Path | None:

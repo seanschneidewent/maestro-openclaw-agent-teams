@@ -25,6 +25,12 @@ from rich.text import Text
 from .doctor import run_doctor
 from .entitlements import entitlement_label, has_capability, normalize_tier, resolve_effective_entitlement
 from .install_state import load_install_state, save_install_state
+from .openclaw_runtime import (
+    DEFAULT_MAESTRO_OPENCLAW_PROFILE,
+    openclaw_state_root,
+    prepend_openclaw_profile_args,
+    resolve_openclaw_profile,
+)
 from .solo_license import ensure_local_trial_license
 from .workspace_templates import render_personal_agents_md, render_personal_tools_md, render_workspace_env
 
@@ -132,7 +138,7 @@ def _run_interactive_command(args: list[str], *, timeout: int = 0) -> int:
         return 1
 
 
-def _openclaw_oauth_profile_exists(provider_id: str) -> bool:
+def _openclaw_oauth_profile_exists(provider_id: str, *, openclaw_root: Path) -> bool:
     provider = str(provider_id or "").strip().lower()
     if not provider:
         return False
@@ -150,7 +156,7 @@ def _openclaw_oauth_profile_exists(provider_id: str) -> bool:
                 return True
         return False
 
-    agents_root = Path.home() / ".openclaw" / "agents"
+    agents_root = openclaw_root / "agents"
     if not agents_root.exists():
         return False
 
@@ -192,8 +198,7 @@ def _discover_repo_root() -> Path:
     return current.parent
 
 
-def _load_openclaw_config() -> dict[str, Any]:
-    config_path = Path.home() / ".openclaw" / "openclaw.json"
+def _load_openclaw_config(config_path: Path) -> dict[str, Any]:
     if not config_path.exists():
         return {}
     try:
@@ -257,21 +262,48 @@ class QuickSetup:
         self.provider_env_key = "OPENAI_API_KEY"
         self.model = "openai-codex/gpt-5.2"
         self.model_auth_method = "openclaw_oauth"
-        openclaw_config = _load_openclaw_config()
+
+        state_profile = str(state.get("openclaw_profile", "")).strip()
+        profile_default = DEFAULT_MAESTRO_OPENCLAW_PROFILE
+        if self.setup_completed and not state_profile and not str(os.environ.get("MAESTRO_OPENCLAW_PROFILE", "")).strip():
+            profile_default = ""
+        self.openclaw_profile = resolve_openclaw_profile(default=profile_default)
+        self.openclaw_root = openclaw_state_root(profile=self.openclaw_profile)
+        self.openclaw_config_file = self.openclaw_root / "openclaw.json"
+
+        openclaw_config = _load_openclaw_config(self.openclaw_config_file)
         openclaw_env = openclaw_config.get("env") if isinstance(openclaw_config.get("env"), dict) else {}
         openclaw_channels = openclaw_config.get("channels") if isinstance(openclaw_config.get("channels"), dict) else {}
         telegram_cfg = openclaw_channels.get("telegram") if isinstance(openclaw_channels.get("telegram"), dict) else {}
+        telegram_accounts = telegram_cfg.get("accounts") if isinstance(telegram_cfg.get("accounts"), dict) else {}
+        personal_telegram_cfg = (
+            telegram_accounts.get("maestro-solo-personal")
+            if isinstance(telegram_accounts.get("maestro-solo-personal"), dict)
+            else {}
+        )
 
         self.gemini_key = str(openclaw_env.get("GEMINI_API_KEY", "")).strip()
-        self.telegram_token = str(telegram_cfg.get("botToken", "")).strip()
+        self.telegram_token = str(personal_telegram_cfg.get("botToken", "")).strip()
         self.bot_username = ""
         self.tailscale_ip = ""
         self.pending_optional_setup: list[str] = ["ingest_plans"]
-        self.workspace = (Path.home() / ".openclaw" / "workspace-maestro-solo").resolve()
+        self.workspace = (self.openclaw_root / "workspace-maestro-solo").resolve()
         self.store_root = (self.workspace / "knowledge_store").resolve()
         self.trial_info: dict[str, Any] = {}
         self.entitlement: dict[str, Any] = resolve_effective_entitlement()
         self.tier = normalize_tier(str(self.entitlement.get("tier", "core")))
+
+    def _openclaw_label(self) -> str:
+        return self.openclaw_profile or "default"
+
+    def _openclaw_cmd(self, args: list[str]) -> list[str]:
+        return prepend_openclaw_profile_args(["openclaw", *args], profile=self.openclaw_profile)
+
+    def _run_openclaw_command(self, args: list[str], *, timeout: int = 120, capture: bool = True) -> tuple[bool, str]:
+        return _run_command(self._openclaw_cmd(args), timeout=timeout, capture=capture)
+
+    def _run_openclaw_interactive(self, args: list[str], *, timeout: int = 0) -> int:
+        return _run_interactive_command(self._openclaw_cmd(args), timeout=timeout)
 
     def run(self) -> int:
         if not self._intro():
@@ -325,6 +357,7 @@ class QuickSetup:
         if platform.system() != "Darwin":
             _error("Quick setup currently supports macOS only.")
             return False
+        _info(f"OpenClaw profile: {self._openclaw_label()} ({self.openclaw_root})")
         return True
 
     def _company_name_step(self) -> bool:
@@ -357,6 +390,7 @@ class QuickSetup:
             "product": "maestro-solo",
             "install_id": self.install_id,
             "company_name": self.company_name,
+            "openclaw_profile": self.openclaw_profile,
             "setup_mode": "quick",
             "setup_completed": bool(state.get("setup_completed", False)),
         })
@@ -498,7 +532,7 @@ class QuickSetup:
             width=72,
         ))
 
-        if _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID):
+        if _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID, openclaw_root=self.openclaw_root):
             _success("Existing OpenAI OAuth profile found")
             return True
 
@@ -506,17 +540,18 @@ class QuickSetup:
             _error("OpenAI OAuth provider bootstrap failed.")
             return False
 
-        _info("Starting OAuth login: openclaw models auth login --provider openai-codex")
-        rc = _run_interactive_command(["openclaw", "models", "auth", "login", "--provider", OPENAI_OAUTH_PROVIDER_ID])
-        if rc == 0 and _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID):
+        profile_cmd = " ".join(self._openclaw_cmd(["models", "auth", "login", "--provider", OPENAI_OAUTH_PROVIDER_ID]))
+        _info(f"Starting OAuth login: {profile_cmd}")
+        rc = self._run_openclaw_interactive(["models", "auth", "login", "--provider", OPENAI_OAUTH_PROVIDER_ID])
+        if rc == 0 and _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID, openclaw_root=self.openclaw_root):
             _success("OpenAI OAuth configured")
             return True
 
         _warning("OAuth login command did not complete.")
-        if _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID):
+        if _openclaw_oauth_profile_exists(OPENAI_OAUTH_PROVIDER_ID, openclaw_root=self.openclaw_root):
             _success("OpenAI OAuth configured")
             return True
-        _info("Run this command and then rerun Maestro setup: openclaw models auth login --provider openai-codex")
+        _info(f"Run this command and then rerun Maestro setup: {profile_cmd}")
         _error("OpenAI OAuth is required and is not configured.")
         return False
 
@@ -542,7 +577,7 @@ class QuickSetup:
             _warning("Could not locate Maestro OpenAI OAuth plugin files.")
             return False
 
-        config_dir = Path.home() / ".openclaw"
+        config_dir = self.openclaw_root
         extensions_dir = config_dir / "extensions"
         extension_dst = extensions_dir / OPENAI_OAUTH_PLUGIN_ID
         try:
@@ -733,7 +768,7 @@ class QuickSetup:
         return True
 
     def _gateway_running(self) -> tuple[bool, str]:
-        ok, out = _run_command(["openclaw", "status"], timeout=12)
+        ok, out = self._run_openclaw_command(["status"], timeout=12)
         if not ok:
             return False, out
         lowered = out.lower()
@@ -751,7 +786,7 @@ class QuickSetup:
             return False, last
 
         _info("Starting OpenClaw gateway...")
-        start_rc = _run_interactive_command(["openclaw", "gateway", "start"])
+        start_rc = self._run_openclaw_interactive(["gateway", "start"])
         running, last_status = _wait_for_running(4)
         if running:
             _success("OpenClaw gateway is running")
@@ -762,14 +797,14 @@ class QuickSetup:
         else:
             _warning("Gateway did not become reachable; installing gateway service.")
 
-        install_rc = _run_interactive_command(["openclaw", "gateway", "install", "--force"])
+        install_rc = self._run_openclaw_interactive(["gateway", "install", "--force"])
         if install_rc != 0:
             _warning("Gateway install returned non-zero; continuing with restart attempts.")
 
-        restart_rc = _run_interactive_command(["openclaw", "gateway", "restart"])
+        restart_rc = self._run_openclaw_interactive(["gateway", "restart"])
         if restart_rc != 0:
             _warning("Gateway restart returned non-zero; trying service start once more.")
-            _ = _run_interactive_command(["openclaw", "gateway", "start"])
+            _ = self._run_openclaw_interactive(["gateway", "start"])
 
         running, last_status = _wait_for_running(6)
         if running:
@@ -779,7 +814,9 @@ class QuickSetup:
         _error("OpenClaw gateway is not running. Telegram pairing cannot continue.")
         if last_status:
             _info(f"openclaw status: {last_status}")
-        _info("Try: openclaw gateway install --force && openclaw gateway restart")
+        retry_cmd = " ".join(self._openclaw_cmd(["gateway", "install", "--force"]))
+        restart_cmd = " ".join(self._openclaw_cmd(["gateway", "restart"]))
+        _info(f"Try: {retry_cmd} && {restart_cmd}")
         return False
 
     def _configure_openclaw_and_workspace_step(self) -> bool:
@@ -795,7 +832,7 @@ class QuickSetup:
         native_extension_enabled = has_capability(self.entitlement, "maestro_native_tools")
         frontend_enabled = has_capability(self.entitlement, "workspace_frontend")
 
-        config_dir = Path.home() / ".openclaw"
+        config_dir = self.openclaw_root
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / "openclaw.json"
 
@@ -1068,13 +1105,13 @@ class QuickSetup:
                 _warning("Pairing code is required.")
                 continue
 
-            ok, out = _run_command(["openclaw", "pairing", "approve", "telegram", pairing_code], timeout=30)
+            ok, out = self._run_openclaw_command(["pairing", "approve", "telegram", pairing_code], timeout=30)
             if ok:
                 _success("Telegram pairing approved")
                 return True
 
             _warning(f"Pairing approval failed: {out}")
-            pending_ok, pending_out = _run_command(["openclaw", "pairing", "list", "telegram", "--json"], timeout=20)
+            pending_ok, pending_out = self._run_openclaw_command(["pairing", "list", "telegram", "--json"], timeout=20)
             if pending_ok:
                 try:
                     pending_payload = json.loads(pending_out)
@@ -1138,6 +1175,7 @@ class QuickSetup:
                 "product": "maestro-solo",
                 "install_id": self.install_id,
                 "company_name": self.company_name,
+                "openclaw_profile": self.openclaw_profile,
                 "workspace_root": str(self.workspace),
                 "store_root": str(self.store_root),
                 "active_project_slug": "",
@@ -1163,6 +1201,7 @@ class QuickSetup:
         table.add_row("Company", self.company_name)
         table.add_row("Tier", self.tier)
         table.add_row("Agent", "maestro-solo-personal")
+        table.add_row("OpenClaw Profile", self._openclaw_label())
         table.add_row("Model", self.model)
         table.add_row("Auth", "OpenAI OAuth via OpenClaw")
         table.add_row("Telegram", f"@{self.bot_username}")

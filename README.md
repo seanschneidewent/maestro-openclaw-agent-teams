@@ -4,13 +4,19 @@ Maestro is a **Solo-first** construction agent runtime with optional Fleet/enter
 
 ## Quickstart (Solo, macOS)
 
-Free one-liner (single terminal journey: setup -> auth -> purchase preview -> up):
+Canonical one-liner (single terminal journey: setup -> auth/purchase choice -> up):
+
+```bash
+curl -fsSL https://maestro-billing-service-production.up.railway.app/install | bash
+```
+
+Free-preselected one-liner (skips Pro activation by default, still upgradeable later):
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/free | bash
 ```
 
-Pro one-liner (single terminal journey: setup -> auth -> purchase -> up):
+Pro-preselected one-liner (asks to activate Pro before first launch):
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/pro | bash
@@ -25,9 +31,10 @@ Installer behavior:
 
 Flow differences:
 
-- Free flow shows Auth status and Purchase preview panels but does not start checkout.
-- Pro flow ensures Google sign-in, then opens Stripe Checkout unless Pro entitlement is already active.
+- `/install` and `/pro` default to Pro-first and ask before checkout.
+- `/free` defaults to core-first and shows upgrade preview without checkout.
 - Set `MAESTRO_FORCE_PRO_PURCHASE=1` to force checkout even when Pro is already active.
+- Maestro isolates OpenClaw setup under profile `maestro-solo` by default.
 
 Branding tip: point `get.maestro.run` (or your preferred domain) to the billing service and publish:
 

@@ -6,10 +6,12 @@ SOLO_HOME_DEFAULT="$HOME/.maestro-solo"
 VENV_DIR_DEFAULT="$INSTALL_ROOT_DEFAULT/venv-maestro-solo"
 INSTALL_CHANNEL_DEFAULT="auto"
 INSTALL_FLOW_DEFAULT="free"
+INSTALL_INTENT_DEFAULT=""
 PRO_PLAN_DEFAULT="solo_monthly"
 CORE_PACKAGE_SPEC_DEFAULT=""
 PRO_PACKAGE_SPEC_DEFAULT=""
 AUTO_APPROVE_DEFAULT="auto"
+OPENCLAW_PROFILE_DEFAULT="maestro-solo"
 
 # Avoid BASH_SOURCE array access to keep curl|bash + nounset behavior stable.
 SCRIPT_SOURCE="${0:-}"
@@ -26,6 +28,7 @@ SOLO_HOME="${MAESTRO_SOLO_HOME:-$SOLO_HOME_DEFAULT}"
 VENV_DIR="${MAESTRO_VENV_DIR:-$VENV_DIR_DEFAULT}"
 INSTALL_CHANNEL_RAW="${MAESTRO_INSTALL_CHANNEL:-$INSTALL_CHANNEL_DEFAULT}"
 INSTALL_FLOW_RAW="${MAESTRO_INSTALL_FLOW:-$INSTALL_FLOW_DEFAULT}"
+INSTALL_INTENT_RAW="${MAESTRO_INSTALL_INTENT:-$INSTALL_INTENT_DEFAULT}"
 CORE_PACKAGE_SPEC="${MAESTRO_CORE_PACKAGE_SPEC:-$CORE_PACKAGE_SPEC_DEFAULT}"
 PRO_PACKAGE_SPEC="${MAESTRO_PRO_PACKAGE_SPEC:-$PRO_PACKAGE_SPEC_DEFAULT}"
 PRO_PLAN_ID="${MAESTRO_PRO_PLAN_ID:-$PRO_PLAN_DEFAULT}"
@@ -33,8 +36,11 @@ PURCHASE_EMAIL="${MAESTRO_PURCHASE_EMAIL:-}"
 USE_LOCAL_REPO="${MAESTRO_USE_LOCAL_REPO:-0}"
 FORCE_PRO_PURCHASE="${MAESTRO_FORCE_PRO_PURCHASE:-0}"
 AUTO_APPROVE_RAW="${MAESTRO_INSTALL_AUTO:-$AUTO_APPROVE_DEFAULT}"
+OPENCLAW_PROFILE_RAW="${MAESTRO_OPENCLAW_PROFILE:-$OPENCLAW_PROFILE_DEFAULT}"
 INSTALL_CHANNEL=""
 INSTALL_FLOW=""
+INSTALL_INTENT=""
+OPENCLAW_PROFILE=""
 PYTHON_BIN=""
 AUTO_APPROVE="0"
 
@@ -106,9 +112,41 @@ normalize_flow() {
   local clean
   clean="$(printf '%s' "$INSTALL_FLOW_RAW" | tr '[:upper:]' '[:lower:]')"
   case "$clean" in
-    free|pro) INSTALL_FLOW="$clean" ;;
+    free|pro|install) INSTALL_FLOW="$clean" ;;
     *)
-      fatal "Invalid MAESTRO_INSTALL_FLOW='$INSTALL_FLOW_RAW' (expected free or pro)."
+      fatal "Invalid MAESTRO_INSTALL_FLOW='$INSTALL_FLOW_RAW' (expected free, pro, or install)."
+      ;;
+  esac
+}
+
+normalize_intent() {
+  local clean
+  clean="$(printf '%s' "$INSTALL_INTENT_RAW" | tr '[:upper:]' '[:lower:]' | xargs)"
+  if [[ "$clean" == "core" ]]; then
+    clean="free"
+  fi
+  case "$clean" in
+    free|pro) INSTALL_INTENT="$clean" ;;
+    "") INSTALL_INTENT="" ;;
+    *)
+      fatal "Invalid MAESTRO_INSTALL_INTENT='$INSTALL_INTENT_RAW' (expected empty, free, or pro)."
+      ;;
+  esac
+}
+
+normalize_openclaw_profile() {
+  local clean
+  clean="$(printf '%s' "$OPENCLAW_PROFILE_RAW" | xargs)"
+  case "$(printf '%s' "$clean" | tr '[:upper:]' '[:lower:]')" in
+    ""|default|none|off|shared)
+      OPENCLAW_PROFILE=""
+      ;;
+    *)
+      if [[ "$clean" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+        OPENCLAW_PROFILE="$clean"
+      else
+        fatal "Invalid MAESTRO_OPENCLAW_PROFILE='$OPENCLAW_PROFILE_RAW' (letters/numbers/._- only)."
+      fi
       ;;
   esac
 }
@@ -145,10 +183,16 @@ resolve_auto_channel() {
   fi
   if [[ "$INSTALL_FLOW" == "pro" ]]; then
     INSTALL_CHANNEL="pro"
+  elif [[ "$INSTALL_FLOW" == "install" && "$INSTALL_INTENT" == "pro" ]]; then
+    INSTALL_CHANNEL="pro"
   else
     INSTALL_CHANNEL="core"
   fi
-  log "Auto install channel resolved to '$INSTALL_CHANNEL' for flow '$INSTALL_FLOW'."
+  if [[ -n "$INSTALL_INTENT" ]]; then
+    log "Auto install channel resolved to '$INSTALL_CHANNEL' for flow '$INSTALL_FLOW' (intent '$INSTALL_INTENT')."
+  else
+    log "Auto install channel resolved to '$INSTALL_CHANNEL' for flow '$INSTALL_FLOW'."
+  fi
 }
 
 refresh_path_for_brew() {
@@ -336,6 +380,9 @@ run_install_journey() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
 
   local -a journey_args=(journey --flow "$INSTALL_FLOW" --channel "$INSTALL_CHANNEL" --plan "$PRO_PLAN_ID")
+  if [[ -n "$INSTALL_INTENT" ]]; then
+    journey_args+=(--intent "$INSTALL_INTENT")
+  fi
 
   local billing_url="${MAESTRO_BILLING_URL:-}"
   if [[ -n "$billing_url" ]]; then
@@ -359,12 +406,15 @@ run_install_journey() {
   exec env \
     MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" \
     MAESTRO_SOLO_HOME="$SOLO_HOME" \
+    MAESTRO_OPENCLAW_PROFILE="$OPENCLAW_PROFILE" \
     "$PYTHON_BIN" -m maestro_solo.cli "${journey_args[@]}"
 }
 
 main() {
   normalize_channel
   normalize_flow
+  normalize_intent
+  normalize_openclaw_profile
   resolve_auto_approve
   resolve_auto_channel
   ensure_macos
