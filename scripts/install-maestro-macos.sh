@@ -10,8 +10,15 @@ PRO_PLAN_DEFAULT="solo_monthly"
 CORE_PACKAGE_SPEC_DEFAULT=""
 PRO_PACKAGE_SPEC_DEFAULT=""
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_SOURCE="${BASH_SOURCE[0]-}"
+if [[ -n "$SCRIPT_SOURCE" && "$SCRIPT_SOURCE" != "bash" && -f "$SCRIPT_SOURCE" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+  SCRIPT_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+  # When executed via stdin (e.g. curl | bash), BASH_SOURCE can be unset.
+  SCRIPT_DIR="$(pwd)"
+  SCRIPT_REPO_ROOT="$SCRIPT_DIR"
+fi
 
 SOLO_HOME="${MAESTRO_SOLO_HOME:-$SOLO_HOME_DEFAULT}"
 VENV_DIR="${MAESTRO_VENV_DIR:-$VENV_DIR_DEFAULT}"

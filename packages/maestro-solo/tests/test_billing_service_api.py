@@ -294,8 +294,8 @@ def test_installer_launcher_free_renders_script(monkeypatch):
         headers={"x-forwarded-proto": "https", "x-forwarded-host": "get.maestro.run"},
     )
     assert response.status_code == 200
-    assert "MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_solo.whl'" in response.text
-    assert "MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
+    assert "export MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_solo.whl'" in response.text
+    assert "export MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
     assert "install-maestro-free-macos.sh" in response.text
 
 
@@ -306,7 +306,7 @@ def test_installer_launcher_pro_renders_script_with_pro_or_core_spec(monkeypatch
     client = TestClient(billing_service.app)
     response = client.get("/pro")
     assert response.status_code == 200
-    assert "MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_core_bundle.whl'" in response.text
+    assert "export MAESTRO_CORE_PACKAGE_SPEC='https://downloads.example.com/maestro_core_bundle.whl'" in response.text
     assert "install-maestro-pro-macos.sh" in response.text
 
     monkeypatch.delenv("MAESTRO_INSTALLER_CORE_PACKAGE_SPEC", raising=False)
