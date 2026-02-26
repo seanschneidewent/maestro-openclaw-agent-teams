@@ -249,6 +249,71 @@ run_quick_setup() {
   MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli setup --quick
 }
 
+has_existing_setup() {
+  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
+  local status="no"
+  status="$(
+    MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+raw_home = str(os.environ.get("MAESTRO_SOLO_HOME", "")).strip()
+solo_home = Path(raw_home).expanduser().resolve() if raw_home else (Path.home() / ".maestro-solo").resolve()
+install_state = solo_home / "install.json"
+openclaw_config = Path.home() / ".openclaw" / "openclaw.json"
+
+def _load_json(path: Path):
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            return payload
+    except Exception:
+        pass
+    return {}
+
+state = _load_json(install_state) if install_state.exists() else {}
+if not bool(state.get("setup_completed")):
+    print("no")
+    raise SystemExit(0)
+
+config = _load_json(openclaw_config) if openclaw_config.exists() else {}
+env = config.get("env") if isinstance(config.get("env"), dict) else {}
+agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
+agent_list = agents.get("list") if isinstance(agents.get("list"), list) else []
+
+gemini = env.get("GEMINI_API_KEY")
+has_gemini = isinstance(gemini, str) and bool(gemini.strip())
+has_personal_agent = any(
+    isinstance(item, dict) and str(item.get("id", "")).strip() == "maestro-solo-personal"
+    for item in agent_list
+)
+
+print("yes" if (has_gemini and has_personal_agent) else "no")
+PY
+  )"
+  [[ "$status" == "yes" ]]
+}
+
+run_preflight_checks() {
+  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
+  log "Running preflight checks (doctor --fix)..."
+  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+    "$PYTHON_BIN" -m maestro_solo.cli doctor --fix --no-restart
+}
+
+run_setup_or_preflight() {
+  if has_existing_setup; then
+    log "Existing Maestro setup detected. Skipping interactive setup."
+    if run_preflight_checks; then
+      log "Preflight checks passed."
+      return 0
+    fi
+    warn "Preflight checks failed. Falling back to interactive quick setup."
+  fi
+  run_quick_setup
+}
+
 run_pro_purchase() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   if [[ "$INSTALL_FLOW" != "pro" ]]; then
@@ -287,7 +352,7 @@ main() {
   ensure_virtualenv
   install_maestro_packages
   persist_install_channel
-  run_quick_setup
+  run_setup_or_preflight
   run_pro_purchase
   start_runtime
 }

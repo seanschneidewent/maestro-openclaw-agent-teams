@@ -146,19 +146,72 @@ def _discover_repo_root() -> Path:
     return current.parent
 
 
+def _load_openclaw_config() -> dict[str, Any]:
+    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    if not config_path.exists():
+        return {}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _validate_gemini_key(key: str) -> tuple[bool, str]:
+    clean = str(key or "").strip()
+    if len(clean) < 20:
+        return False, "key_too_short"
+    try:
+        response = httpx.get(
+            f"https://generativelanguage.googleapis.com/v1/models?key={clean}",
+            timeout=12,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if response.status_code != 200:
+        return False, f"http_{response.status_code}"
+    return True, ""
+
+
+def _validate_telegram_token(token: str) -> tuple[bool, str]:
+    clean = str(token or "").strip()
+    if not re.match(r"^\d+:[A-Za-z0-9_-]+$", clean):
+        return False, "invalid_token_format"
+    try:
+        response = httpx.get(f"https://api.telegram.org/bot{clean}/getMe", timeout=12)
+        payload = response.json()
+    except Exception as exc:
+        return False, str(exc)
+    if response.status_code != 200 or not isinstance(payload, dict) or not payload.get("ok"):
+        return False, f"http_{response.status_code}"
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return False, "malformed_bot_metadata"
+    username = str(result.get("username", "")).strip()
+    if not username:
+        return False, "missing_bot_username"
+    return True, username
+
+
 class QuickSetup:
     """Quick setup path: minimum required for a live Maestro Solo runtime."""
 
     def __init__(self, *, company_name: str = ""):
         state = load_install_state()
+        self.setup_completed = bool(state.get("setup_completed"))
         self.company_name = str(company_name).strip() or str(state.get("company_name", "")).strip() or "Company"
         self.install_id = str(state.get("install_id", "")).strip() or str(uuid.uuid4())
         self.provider = "openai"
         self.provider_env_key = "OPENAI_API_KEY"
         self.model = "openai-codex/gpt-5.2"
         self.model_auth_method = "openclaw_oauth"
-        self.gemini_key = ""
-        self.telegram_token = ""
+        openclaw_config = _load_openclaw_config()
+        openclaw_env = openclaw_config.get("env") if isinstance(openclaw_config.get("env"), dict) else {}
+        openclaw_channels = openclaw_config.get("channels") if isinstance(openclaw_config.get("channels"), dict) else {}
+        telegram_cfg = openclaw_channels.get("telegram") if isinstance(openclaw_channels.get("telegram"), dict) else {}
+
+        self.gemini_key = str(openclaw_env.get("GEMINI_API_KEY", "")).strip()
+        self.telegram_token = str(telegram_cfg.get("botToken", "")).strip()
         self.bot_username = ""
         self.tailscale_ip = ""
         self.pending_optional_setup: list[str] = ["ingest_plans"]
@@ -216,6 +269,9 @@ class QuickSetup:
 
     def _company_name_step(self) -> bool:
         console.print()
+        if self.setup_completed and self.company_name:
+            _success(f"Company: {self.company_name}")
+            return True
         default_name = self.company_name
         entered = Prompt.ask(
             f"  [{CYAN}]Company name[/]",
@@ -398,6 +454,15 @@ class QuickSetup:
             width=72,
         ))
 
+        if self.gemini_key:
+            _info("Validating existing Gemini key from OpenClaw config...")
+            ok_existing, detail_existing = _validate_gemini_key(self.gemini_key)
+            if ok_existing:
+                _success("Existing Gemini key verified")
+                return True
+            _warning(f"Existing Gemini key is invalid ({detail_existing}).")
+            self.gemini_key = ""
+
         while True:
             key = Prompt.ask(
                 f"  [{CYAN}]Paste GEMINI_API_KEY[/]",
@@ -408,24 +473,9 @@ class QuickSetup:
                 continue
 
             _info("Validating Gemini key...")
-            try:
-                response = httpx.get(
-                    f"https://generativelanguage.googleapis.com/v1/models?key={key}",
-                    timeout=12,
-                )
-            except Exception as exc:
-                _warning(f"Gemini key validation request failed: {exc}")
-                retry = Confirm.ask(
-                    f"  [{CYAN}]Retry Gemini key entry?[/]",
-                    default=True,
-                    console=console,
-                )
-                if retry:
-                    continue
-                return False
-
-            if response.status_code != 200:
-                _warning(f"Gemini key rejected (status {response.status_code}).")
+            ok, detail = _validate_gemini_key(key)
+            if not ok:
+                _warning(f"Gemini key rejected ({detail}).")
                 continue
 
             self.gemini_key = key
@@ -442,37 +492,27 @@ class QuickSetup:
             width=72,
         ))
 
+        if self.telegram_token:
+            _info("Validating existing Telegram token from OpenClaw config...")
+            ok_existing, existing_result = _validate_telegram_token(self.telegram_token)
+            if ok_existing:
+                self.bot_username = existing_result
+                _success(f"Existing Telegram bot verified: @{self.bot_username}")
+                return True
+            _warning(f"Existing Telegram token is invalid ({existing_result}).")
+            self.telegram_token = ""
+
         while True:
             token = Prompt.ask(f"  [{CYAN}]Paste Telegram bot token[/]", console=console).strip()
-            if not re.match(r"^\d+:[A-Za-z0-9_-]+$", token):
-                _warning("Token format invalid. Expected '<digits>:<token>'.")
-                continue
-
             _info("Validating Telegram token...")
-            try:
-                response = httpx.get(f"https://api.telegram.org/bot{token}/getMe", timeout=12)
-                payload = response.json()
-            except Exception as exc:
-                _warning(f"Telegram validation failed: {exc}")
-                continue
-
-            if response.status_code != 200 or not isinstance(payload, dict) or not payload.get("ok"):
-                _warning("Telegram token rejected by Telegram API.")
-                continue
-
-            result = payload.get("result")
-            if not isinstance(result, dict):
-                _warning("Telegram returned malformed bot metadata.")
-                continue
-
-            username = str(result.get("username", "")).strip()
-            if not username:
-                _warning("Telegram bot username missing.")
+            ok, result = _validate_telegram_token(token)
+            if not ok:
+                _warning(f"Telegram token rejected ({result}).")
                 continue
 
             self.telegram_token = token
-            self.bot_username = username
-            _success(f"Telegram bot verified: @{username}")
+            self.bot_username = result
+            _success(f"Telegram bot verified: @{self.bot_username}")
             return True
 
     def _tailscale_optional_step(self) -> bool:

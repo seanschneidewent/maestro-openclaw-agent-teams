@@ -29,6 +29,12 @@ Installer behavior:
 5. Pro flow only: runs `maestro-solo purchase --mode live`.
 6. Starts `maestro-solo up --tui`.
 
+Existing install behavior:
+
+- If setup is already complete, installer skips interactive setup.
+- It runs `maestro-solo doctor --fix --no-restart` as a preflight check.
+- It only falls back to interactive quick setup when preflight fails.
+
 Optional env overrides:
 
 - `MAESTRO_PURCHASE_EMAIL=person@example.com` for unattended Pro checkout launch.
