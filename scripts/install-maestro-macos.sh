@@ -94,6 +94,18 @@ normalize_flow() {
   esac
 }
 
+resolve_auto_channel() {
+  if [[ "$INSTALL_CHANNEL" != "auto" ]]; then
+    return 0
+  fi
+  if [[ "$INSTALL_FLOW" == "pro" ]]; then
+    INSTALL_CHANNEL="pro"
+  else
+    INSTALL_CHANNEL="core"
+  fi
+  log "Auto install channel resolved to '$INSTALL_CHANNEL' for flow '$INSTALL_FLOW'."
+}
+
 refresh_path_for_brew() {
   if [[ -x "/opt/homebrew/bin/brew" ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -416,6 +428,7 @@ start_runtime() {
 main() {
   normalize_channel
   normalize_flow
+  resolve_auto_channel
   ensure_macos
   ensure_homebrew
   ensure_python

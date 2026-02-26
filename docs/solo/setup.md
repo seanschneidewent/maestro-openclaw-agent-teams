@@ -16,7 +16,7 @@ curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-a
 Pro install (setup -> purchase -> up):
 
 ```bash
-MAESTRO_CORE_PACKAGE_SPEC="<private-wheel-urls>" \
+MAESTRO_PRO_PACKAGE_SPEC="<private-wheel-urls>" \
 curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-pro-macos.sh | bash
 ```
 
@@ -41,6 +41,7 @@ Optional env overrides:
 - `MAESTRO_PURCHASE_EMAIL=person@example.com` for unattended Pro checkout launch.
 - `MAESTRO_PRO_PLAN_ID=solo_monthly` to override default Pro plan ID.
 - `MAESTRO_FORCE_PRO_PURCHASE=1` to force checkout even if Pro is already active locally.
+- `MAESTRO_INSTALL_CHANNEL=core|pro` to override default auto-resolution (`free -> core`, `pro -> pro`).
 
 Quick setup prompts:
 
