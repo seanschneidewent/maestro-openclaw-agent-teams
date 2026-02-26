@@ -288,6 +288,18 @@ persist_install_channel() {
   log "Install channel persisted: $INSTALL_CHANNEL"
 }
 
+attach_stdin_to_tty_if_available() {
+  if [[ -t 0 ]]; then
+    return 0
+  fi
+  if [[ -r "/dev/tty" ]]; then
+    exec </dev/tty
+    log "Attached interactive prompts to /dev/tty."
+    return 0
+  fi
+  fatal "Interactive setup requires a terminal. Re-run this installer from an interactive shell."
+}
+
 install_maestro_packages() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   "$PYTHON_BIN" -m pip install --upgrade pip setuptools wheel
@@ -363,6 +375,7 @@ main() {
   ensure_virtualenv
   install_maestro_packages
   persist_install_channel
+  attach_stdin_to_tty_if_available
   run_install_journey
 }
 
