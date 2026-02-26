@@ -63,3 +63,12 @@ def test_parser_purchase_preview_flag():
     assert args.command == "purchase"
     assert args.email == "owner@example.com"
     assert args.preview is True
+
+
+def test_parser_journey_command():
+    parser = build_parser()
+    args = parser.parse_args(["journey", "--flow", "pro", "--channel", "auto", "--plan", "solo_monthly"])
+    assert args.command == "journey"
+    assert args.flow == "pro"
+    assert args.channel == "auto"
+    assert args.plan == "solo_monthly"

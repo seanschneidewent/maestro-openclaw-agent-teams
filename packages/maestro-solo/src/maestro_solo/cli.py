@@ -211,6 +211,13 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_journey(args: argparse.Namespace) -> int:
+    from .install_journey import options_from_env_and_args, run_install_journey
+
+    options = options_from_env_and_args(args)
+    return run_install_journey(options)
+
+
 def _cmd_auth(args: argparse.Namespace) -> int:
     action = _clean_text(getattr(args, "auth_action", "")).lower() or "status"
     billing = _billing_url(getattr(args, "billing_url", None))
@@ -840,6 +847,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replay quick setup checks using existing config when available",
     )
 
+    journey = sub.add_parser("journey", help=argparse.SUPPRESS)
+    journey.add_argument("--flow", default="free", choices=["free", "pro"])
+    journey.add_argument("--channel", default="auto", choices=["auto", "core", "pro"])
+    journey.add_argument("--billing-url", default=None)
+    journey.add_argument("--plan", default=DEFAULT_PLAN)
+    journey.add_argument("--email", default="")
+    journey.add_argument("--force-pro-purchase", action="store_true")
+    journey.add_argument("--no-replay-setup", action="store_true")
+
     auth = sub.add_parser("auth", help="Sign in/out and inspect Maestro billing auth session")
     auth_sub = auth.add_subparsers(dest="auth_action", required=False)
     auth_status = auth_sub.add_parser("status", help="Show current auth session status")
@@ -937,6 +953,7 @@ def main(argv: list[str] | None = None):
     args = build_parser().parse_args(parsed_argv)
     handlers = {
         "setup": _cmd_setup,
+        "journey": _cmd_journey,
         "auth": _cmd_auth,
         "purchase": _cmd_purchase,
         "unsubscribe": _cmd_unsubscribe,

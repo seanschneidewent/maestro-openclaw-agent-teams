@@ -3,9 +3,9 @@
 ## Solo Commands (Primary)
 
 - `maestro-solo setup`
-- `maestro-solo setup --quick [--company-name "..."]`
+- `maestro-solo setup --quick [--company-name "..."] [--replay]`
 - `maestro-solo auth status|login|logout`
-- `maestro-solo purchase`
+- `maestro-solo purchase [--preview]`
 - `maestro-solo status [--remote-verify]`
 - `maestro-solo up --tui`
 - `maestro-solo ingest <folder> [--dpi N] [--project-name "..."] [--store ...]`
@@ -42,4 +42,6 @@
 - `maestro-fleet` is the dedicated Fleet product CLI.
 - Fleet internals are being split into package-native modules in a later phase; current CLI behavior is stable now.
 - `setup --quick` is a macOS fast path designed for one-command install/bootstrap and requires Telegram configuration.
+- `setup --quick --replay` re-renders the full setup journey while reusing existing configuration.
+- `purchase --preview` renders purchase UX without creating checkout sessions.
 - `maestro-solo purchase` and `maestro-solo unsubscribe` require a valid billing auth session (`maestro-solo auth login`).

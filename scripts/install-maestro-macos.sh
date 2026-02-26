@@ -10,8 +10,8 @@ PRO_PLAN_DEFAULT="solo_monthly"
 CORE_PACKAGE_SPEC_DEFAULT=""
 PRO_PACKAGE_SPEC_DEFAULT=""
 
-# Prefer BASH_SOURCE when available, but avoid array indexing for bash 3 + nounset compatibility.
-SCRIPT_SOURCE="${BASH_SOURCE:-${0:-}}"
+# Avoid BASH_SOURCE array access to keep curl|bash + nounset behavior stable.
+SCRIPT_SOURCE="${0:-}"
 if [[ -n "$SCRIPT_SOURCE" && "$SCRIPT_SOURCE" != "bash" && "$SCRIPT_SOURCE" != "-bash" && -f "$SCRIPT_SOURCE" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
   SCRIPT_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -34,9 +34,6 @@ FORCE_PRO_PURCHASE="${MAESTRO_FORCE_PRO_PURCHASE:-0}"
 INSTALL_CHANNEL=""
 INSTALL_FLOW=""
 PYTHON_BIN=""
-PRO_PURCHASE_SKIPPED="0"
-STAGE_STEP="0"
-STAGE_TOTAL="4"
 
 log() {
   printf '[maestro-install] %s\n' "$*"
@@ -49,12 +46,6 @@ warn() {
 fatal() {
   printf '[maestro-install] ERROR: %s\n' "$*" >&2
   exit 1
-}
-
-stage() {
-  local title="$1"
-  STAGE_STEP="$((STAGE_STEP + 1))"
-  printf '\n[maestro-install] ===== Step %s/%s: %s =====\n' "$STAGE_STEP" "$STAGE_TOTAL" "$title"
 }
 
 prompt_yes_no() {
@@ -269,245 +260,40 @@ install_maestro_packages() {
   "$PYTHON_BIN" -m pip install "${pip_args[@]}"
 }
 
-prompt_email() {
-  local entered="$PURCHASE_EMAIL"
-  entered="$(printf '%s' "$entered" | xargs)"
-  while [[ -z "$entered" || "$entered" != *"@"* ]]; do
-    read -r -p "Enter your billing email: " entered || true
-    entered="$(printf '%s' "$entered" | xargs)"
-    if [[ -z "$entered" || "$entered" != *"@"* ]]; then
-      warn "Please enter a valid email address."
-    fi
-  done
-  PURCHASE_EMAIL="$entered"
-}
-
-run_quick_setup() {
-  local mode="${1:-fresh}"
+run_install_journey() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  local -a setup_args=(setup --quick)
-  if [[ "$mode" == "replay" ]]; then
-    setup_args+=(--replay)
-    log "Replaying quick setup journey with saved configuration..."
-  else
-    log "Starting quick setup..."
-  fi
-  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli "${setup_args[@]}"
-}
 
-has_existing_setup() {
-  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  local status="no"
-  status="$(
-    MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" - <<'PY'
-import json
-import os
-from pathlib import Path
+  local -a journey_args=(journey --flow "$INSTALL_FLOW" --channel "$INSTALL_CHANNEL" --plan "$PRO_PLAN_ID")
 
-raw_home = str(os.environ.get("MAESTRO_SOLO_HOME", "")).strip()
-solo_home = Path(raw_home).expanduser().resolve() if raw_home else (Path.home() / ".maestro-solo").resolve()
-install_state = solo_home / "install.json"
-openclaw_config = Path.home() / ".openclaw" / "openclaw.json"
-
-def _load_json(path: Path):
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            return payload
-    except Exception:
-        pass
-    return {}
-
-state = _load_json(install_state) if install_state.exists() else {}
-if not bool(state.get("setup_completed")):
-    print("no")
-    raise SystemExit(0)
-
-config = _load_json(openclaw_config) if openclaw_config.exists() else {}
-env = config.get("env") if isinstance(config.get("env"), dict) else {}
-agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
-agent_list = agents.get("list") if isinstance(agents.get("list"), list) else []
-
-gemini = env.get("GEMINI_API_KEY")
-has_gemini = isinstance(gemini, str) and bool(gemini.strip())
-has_personal_agent = any(
-    isinstance(item, dict) and str(item.get("id", "")).strip() == "maestro-solo-personal"
-    for item in agent_list
-)
-
-print("yes" if (has_gemini and has_personal_agent) else "no")
-PY
-  )"
-  [[ "$status" == "yes" ]]
-}
-
-run_preflight_checks() {
-  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  log "Running preflight checks (doctor --fix)..."
-  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-    "$PYTHON_BIN" -m maestro_solo.cli doctor --fix --no-restart
-}
-
-run_setup_or_preflight() {
-  if has_existing_setup; then
-    log "Existing Maestro setup detected. Replaying guided setup checks."
-    if run_quick_setup replay; then
-      log "Setup replay passed."
-      return 0
-    fi
-    warn "Setup replay failed. Falling back to preflight checks."
-    if run_preflight_checks; then
-      log "Preflight checks passed."
-      return 0
-    fi
-    fatal "Setup replay and preflight checks both failed. Run 'maestro-solo setup --quick' to repair."
-  fi
-  run_quick_setup fresh
-}
-
-run_pro_auth() {
-  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   local billing_url="${MAESTRO_BILLING_URL:-}"
-  local -a auth_args=()
   if [[ -n "$billing_url" ]]; then
-    auth_args+=(--billing-url "$billing_url")
+    journey_args+=(--billing-url "$billing_url")
   fi
 
-  if [[ "$INSTALL_FLOW" != "pro" ]]; then
-    log "Free flow: showing billing auth status."
-    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-      "$PYTHON_BIN" -m maestro_solo.cli auth status "${auth_args[@]}" || true
-    log "Optional later: maestro-solo auth login"
-    return 0
+  local purchase_email
+  purchase_email="$(printf '%s' "$PURCHASE_EMAIL" | xargs)"
+  if [[ -n "$purchase_email" ]]; then
+    journey_args+=(--email "$purchase_email")
   fi
 
-  log "Checking billing auth session..."
-  if MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-    "$PYTHON_BIN" -m maestro_solo.cli auth status "${auth_args[@]}"; then
-    log "Billing auth already active."
-    return 0
-  fi
-
-  log "No active billing auth session. Starting Google sign-in..."
-  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-    "$PYTHON_BIN" -m maestro_solo.cli auth login "${auth_args[@]}" \
-    || fatal "Authentication failed. Re-run installer or run 'maestro-solo auth login' manually."
-}
-
-should_skip_pro_purchase() {
-  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   if is_truthy "$FORCE_PRO_PURCHASE"; then
-    return 1
+    journey_args+=(--force-pro-purchase)
   fi
 
-  local entitlement_check=""
-  entitlement_check="$(
-    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" - <<'PY'
-from maestro_solo.entitlements import normalize_tier, resolve_effective_entitlement
-
-state = resolve_effective_entitlement()
-tier = normalize_tier(str(state.get("tier", "core")))
-source = str(state.get("source", "")).strip()
-expires_at = str(state.get("expires_at", "")).strip()
-stale = bool(state.get("stale"))
-
-if tier == "pro" and not stale:
-    print(f"yes|{source}|{expires_at}")
-else:
-    print(f"no|{source}|{expires_at}")
-PY
-  )"
-
-  if [[ "$entitlement_check" == yes\|* ]]; then
-    local details
-    details="${entitlement_check#yes|}"
-    local source="${details%%|*}"
-    local expires_at="${details#*|}"
-    if [[ -n "$expires_at" ]]; then
-      log "Active Pro entitlement detected (source=$source expires_at=$expires_at). Skipping purchase."
-    else
-      log "Active Pro entitlement detected (source=$source). Skipping purchase."
-    fi
-    PRO_PURCHASE_SKIPPED="1"
-    return 0
-  fi
-  return 1
-}
-
-run_pro_purchase() {
-  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  local billing_url="${MAESTRO_BILLING_URL:-}"
-  local -a purchase_args=()
-  if [[ -n "$billing_url" ]]; then
-    purchase_args+=(--billing-url "$billing_url")
+  if ! is_truthy "${MAESTRO_SETUP_REPLAY:-1}"; then
+    journey_args+=(--no-replay-setup)
   fi
 
-  if [[ "$INSTALL_FLOW" != "pro" ]]; then
-    log "Free flow: no payment required."
-    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-      "$PYTHON_BIN" -m maestro_solo.cli entitlements status || true
-
-    local preview_email="$PURCHASE_EMAIL"
-    preview_email="$(printf '%s' "$preview_email" | xargs)"
-    if [[ -z "$preview_email" ]]; then
-      preview_email="you@example.com"
-    fi
-
-    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-      "$PYTHON_BIN" -m maestro_solo.cli purchase \
-        --email "$preview_email" \
-        --plan "$PRO_PLAN_ID" \
-        --mode live \
-        --preview \
-        --no-open \
-        --non-interactive \
-        "${purchase_args[@]}" \
-      || true
-
-    log "Upgrade anytime: maestro-solo purchase --email you@example.com --plan $PRO_PLAN_ID --mode live"
-    return 0
-  fi
-
-  log "Checking entitlement status before purchase..."
-  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-    "$PYTHON_BIN" -m maestro_solo.cli entitlements status || true
-
-  if should_skip_pro_purchase; then
-    log "Purchase stage complete: active Pro entitlement already exists."
-    return 0
-  fi
-
-  log "Pro flow selected: purchase is required before launch."
-  prompt_email
-  log "Starting secure checkout for $PURCHASE_EMAIL"
-  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
-    "$PYTHON_BIN" -m maestro_solo.cli purchase \
-      --email "$PURCHASE_EMAIL" \
-      --plan "$PRO_PLAN_ID" \
-      --mode live \
-      "${purchase_args[@]}" \
-    || fatal "Pro purchase failed. Re-run installer or run 'maestro-solo purchase --email $PURCHASE_EMAIL' manually."
-}
-
-start_runtime() {
-  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  if [[ "$INSTALL_FLOW" == "pro" ]]; then
-    if [[ "$PRO_PURCHASE_SKIPPED" == "1" ]]; then
-      log "Pro already active. Starting Maestro Pro runtime..."
-    else
-      log "Purchase complete. Starting Maestro Pro runtime..."
-    fi
-  else
-    log "Starting Maestro Free runtime..."
-  fi
-  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" exec "$PYTHON_BIN" -m maestro_solo.cli up --tui
+  exec env \
+    MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" \
+    MAESTRO_SOLO_HOME="$SOLO_HOME" \
+    "$PYTHON_BIN" -m maestro_solo.cli "${journey_args[@]}"
 }
 
 main() {
   normalize_channel
   normalize_flow
   resolve_auto_channel
-  stage "Setup"
   ensure_macos
   ensure_homebrew
   ensure_python
@@ -516,13 +302,7 @@ main() {
   ensure_virtualenv
   install_maestro_packages
   persist_install_channel
-  run_setup_or_preflight
-  stage "Auth"
-  run_pro_auth
-  stage "Purchase"
-  run_pro_purchase
-  stage "Up"
-  start_runtime
+  run_install_journey
 }
 
 main "$@"

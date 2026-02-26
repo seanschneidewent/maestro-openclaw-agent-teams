@@ -153,6 +153,21 @@ Recommended branded UX:
   - `curl -fsSL https://get.maestro.run/free | bash`
   - `curl -fsSL https://get.maestro.run/pro | bash`
 
+## Automated Release + Deploy
+
+Use the release pipeline script to build wheels, publish GitHub release assets, update Railway installer vars, wait for deploy success, and smoke-check `/free` + `/pro`:
+
+```bash
+bash scripts/release-maestro-solo.sh 0.1.4
+```
+
+What it validates:
+
+- Package versions are synchronized in both `pyproject.toml` and `__init__.py`.
+- Wheels for the requested version exist and are uploaded to release tag `v<version>`.
+- Railway vars are pinned to the current git commit for installer scripts and to the release wheel URLs.
+- `/free` and `/pro` launcher output contains the exact pinned commit + wheel URLs.
+
 ## Fast Setup Checklist
 
 1. Create Railway Postgres service `maestro-solo-db`.
