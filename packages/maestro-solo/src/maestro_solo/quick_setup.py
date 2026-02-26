@@ -198,10 +198,14 @@ class QuickSetup:
 
     def __init__(self, *, company_name: str = "", replay: bool = False):
         state = load_install_state()
+        state_company_name = str(state.get("company_name", "")).strip()
+        provided_company_name = str(company_name).strip()
         self.setup_completed = bool(state.get("setup_completed"))
         self.replay_requested = bool(replay)
         self.replay_existing = bool(self.replay_requested and self.setup_completed)
-        self.company_name = str(company_name).strip() or str(state.get("company_name", "")).strip() or "Company"
+        self.company_name = provided_company_name or state_company_name or "Company"
+        self.company_name_from_state = bool(state_company_name)
+        self.company_name_provided = bool(provided_company_name)
         self.install_id = str(state.get("install_id", "")).strip() or str(uuid.uuid4())
         self.provider = "openai"
         self.provider_env_key = "OPENAI_API_KEY"
@@ -282,6 +286,10 @@ class QuickSetup:
         if self.setup_completed and self.company_name:
             _success(f"Company: {self.company_name}")
             return True
+        if self.company_name_from_state and not self.company_name_provided and self.company_name:
+            _success(f"Company: {self.company_name} (saved)")
+            self._checkpoint_company_name()
+            return True
         default_name = self.company_name
         entered = Prompt.ask(
             f"  [{CYAN}]Company name[/]",
@@ -292,8 +300,21 @@ class QuickSetup:
         if not self.company_name:
             _error("Company name is required.")
             return False
+        self._checkpoint_company_name()
         _success(f"Company: {self.company_name}")
         return True
+
+    def _checkpoint_company_name(self):
+        state = load_install_state()
+        state.update({
+            "version": 1,
+            "product": "maestro-solo",
+            "install_id": self.install_id,
+            "company_name": self.company_name,
+            "setup_mode": "quick",
+            "setup_completed": bool(state.get("setup_completed", False)),
+        })
+        save_install_state(state)
 
     def _prerequisites_step(self) -> bool:
         console.print()
@@ -441,17 +462,11 @@ class QuickSetup:
             _success("OpenAI OAuth configured")
             return True
 
-        _warning("OAuth login did not complete. Attempting provider bootstrap.")
-        onboard_rc = _run_interactive_command(["openclaw", "onboard", "--auth-choice", "openai-codex"])
-        if onboard_rc != 0:
-            _error("OpenClaw provider bootstrap failed.")
-            return False
-
-        retry_rc = _run_interactive_command(["openclaw", "models", "auth", "login", "--provider", "openai-codex"])
-        if retry_rc == 0 and _openclaw_oauth_profile_exists("openai-codex"):
+        _warning("OAuth login command did not complete.")
+        if _openclaw_oauth_profile_exists("openai-codex"):
             _success("OpenAI OAuth configured")
             return True
-
+        _info("Run this command and then rerun Maestro setup: openclaw models auth login --provider openai-codex")
         _error("OpenAI OAuth is required and is not configured.")
         return False
 
