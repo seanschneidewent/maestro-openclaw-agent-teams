@@ -10,8 +10,9 @@ PRO_PLAN_DEFAULT="solo_monthly"
 CORE_PACKAGE_SPEC_DEFAULT=""
 PRO_PACKAGE_SPEC_DEFAULT=""
 
-SCRIPT_SOURCE="${BASH_SOURCE[0]-}"
-if [[ -n "$SCRIPT_SOURCE" && "$SCRIPT_SOURCE" != "bash" && -f "$SCRIPT_SOURCE" ]]; then
+# Prefer BASH_SOURCE when available, but avoid array indexing for bash 3 + nounset compatibility.
+SCRIPT_SOURCE="${BASH_SOURCE:-${0:-}}"
+if [[ -n "$SCRIPT_SOURCE" && "$SCRIPT_SOURCE" != "bash" && "$SCRIPT_SOURCE" != "-bash" && -f "$SCRIPT_SOURCE" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")" && pwd)"
   SCRIPT_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 else
@@ -429,7 +430,7 @@ start_runtime() {
   else
     log "Starting Maestro Free runtime..."
   fi
-  exec MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli up --tui
+  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" exec "$PYTHON_BIN" -m maestro_solo.cli up --tui
 }
 
 main() {
