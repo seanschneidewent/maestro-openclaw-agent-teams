@@ -1,3 +1,3 @@
 """Shared Maestro engine primitives."""
 
-__version__ = "0.1.8"
+__version__ = "0.1.9"

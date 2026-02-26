@@ -96,6 +96,31 @@ def test_openai_oauth_plugin_bootstrap_stages_plugin_and_config(monkeypatch, tmp
     assert npm_calls == []
 
 
+def test_openai_oauth_plugin_bootstrap_retries_npm_install(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    install_attempts = 0
+
+    def _fake_run_in_dir(args: list[str], *, cwd: Path, timeout: int = 120, capture: bool = True):
+        nonlocal install_attempts
+        if args[:2] == ["npm", "install"]:
+            install_attempts += 1
+            if install_attempts < 3:
+                return False, f"network error attempt {install_attempts}"
+            marker = Path(cwd) / "node_modules" / "@mariozechner" / "pi-ai"
+            marker.mkdir(parents=True, exist_ok=True)
+            (marker / "package.json").write_text("{}", encoding="utf-8")
+            return True, "installed"
+        return True, ""
+
+    monkeypatch.setattr(quick_setup.shutil, "which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None)
+    monkeypatch.setattr(quick_setup, "_run_command_in_dir", _fake_run_in_dir)
+    monkeypatch.setattr(quick_setup.time, "sleep", lambda _seconds: None)
+
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    assert runner._ensure_openai_oauth_provider_plugin() is True
+    assert install_attempts == 3
+
+
 def test_workspace_bootstrap_core_tier_does_not_reference_native_plugin(monkeypatch, tmp_path):
     _configure_env(monkeypatch, tmp_path)
 

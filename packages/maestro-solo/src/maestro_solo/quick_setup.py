@@ -70,7 +70,14 @@ def _run_command(args: list[str], *, timeout: int = 120, capture: bool = True) -
         return False, str(exc)
 
     if capture:
-        output = (result.stdout or "").strip() or (result.stderr or "").strip()
+        output_parts = []
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+        if stdout:
+            output_parts.append(stdout)
+        if stderr:
+            output_parts.append(stderr)
+        output = "\n".join(output_parts).strip()
     else:
         output = ""
     return result.returncode == 0, output
@@ -90,10 +97,27 @@ def _run_command_in_dir(args: list[str], *, cwd: Path, timeout: int = 120, captu
         return False, str(exc)
 
     if capture:
-        output = (result.stdout or "").strip() or (result.stderr or "").strip()
+        output_parts = []
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+        if stdout:
+            output_parts.append(stdout)
+        if stderr:
+            output_parts.append(stderr)
+        output = "\n".join(output_parts).strip()
     else:
         output = ""
     return result.returncode == 0, output
+
+
+def _tail_output(output: str, *, lines: int = 25, max_chars: int = 2200) -> str:
+    text = str(output or "").strip()
+    if not text:
+        return ""
+    selected = "\n".join(text.splitlines()[-lines:]).strip()
+    if len(selected) > max_chars:
+        return selected[-max_chars:]
+    return selected
 
 
 def _run_interactive_command(args: list[str], *, timeout: int = 0) -> int:
@@ -540,13 +564,30 @@ class QuickSetup:
                 _warning("npm is required to install OpenAI OAuth plugin dependency.")
                 return False
             _info("Installing OpenAI OAuth provider dependency...")
-            ok_install, install_out = _run_command_in_dir(
-                ["npm", "install", "--no-audit", "--no-fund", "--silent"],
-                cwd=extension_dst,
-                timeout=600,
-            )
-            if not ok_install:
-                _warning(f"OpenAI OAuth dependency install failed: {install_out}")
+            install_errors: list[str] = []
+            for attempt in range(1, 4):
+                ok_install, install_out = _run_command_in_dir(
+                    ["npm", "install", "--no-audit", "--no-fund", "--loglevel", "warn"],
+                    cwd=extension_dst,
+                    timeout=600,
+                )
+                if ok_install and dependency_marker.exists():
+                    break
+
+                summary = _tail_output(install_out)
+                if summary:
+                    install_errors.append(f"attempt {attempt}: {summary}")
+                else:
+                    install_errors.append(f"attempt {attempt}: npm install exited non-zero with no output")
+
+                if attempt < 3:
+                    _warning(f"OpenAI OAuth dependency install attempt {attempt} failed; retrying...")
+                    time.sleep(attempt * 2)
+            else:
+                _warning("OpenAI OAuth dependency install failed after 3 attempts.")
+                for err in install_errors:
+                    _warning(err)
+                _info(f"Manual retry: cd {extension_dst} && npm install --no-audit --no-fund --loglevel verbose")
                 return False
 
         config_file = config_dir / "openclaw.json"
