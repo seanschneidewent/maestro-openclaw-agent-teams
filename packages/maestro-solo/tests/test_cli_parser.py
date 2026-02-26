@@ -24,6 +24,15 @@ def test_parser_setup_quick_command():
     assert args.command == "setup"
     assert args.quick is True
     assert args.company_name == "ACME"
+    assert args.replay is False
+
+
+def test_parser_setup_quick_replay_command():
+    parser = build_parser()
+    args = parser.parse_args(["setup", "--quick", "--replay"])
+    assert args.command == "setup"
+    assert args.quick is True
+    assert args.replay is True
 
 
 def test_parser_entitlements_activate_command():

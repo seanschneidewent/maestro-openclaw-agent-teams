@@ -196,9 +196,11 @@ def _validate_telegram_token(token: str) -> tuple[bool, str]:
 class QuickSetup:
     """Quick setup path: minimum required for a live Maestro Solo runtime."""
 
-    def __init__(self, *, company_name: str = ""):
+    def __init__(self, *, company_name: str = "", replay: bool = False):
         state = load_install_state()
         self.setup_completed = bool(state.get("setup_completed"))
+        self.replay_requested = bool(replay)
+        self.replay_existing = bool(self.replay_requested and self.setup_completed)
         self.company_name = str(company_name).strip() or str(state.get("company_name", "")).strip() or "Company"
         self.install_id = str(state.get("install_id", "")).strip() or str(uuid.uuid4())
         self.provider = "openai"
@@ -254,10 +256,18 @@ class QuickSetup:
         console.print(Align.center(Text("M A E S T R O", style=f"bold {BRIGHT_CYAN}")))
         console.print(Align.center(Text("Quick Setup (macOS)", style=DIM)))
         console.print(Rule(style=CYAN))
-        console.print(Panel(
+        body = (
             "This flow configures only what is required to get Maestro live:\n"
             "OpenClaw + OpenAI OAuth + Gemini key + Telegram pairing.\n\n"
-            "Optional setup stays deferred and Maestro can guide it later.",
+            "Optional setup stays deferred and Maestro can guide it later."
+        )
+        if self.replay_existing:
+            body += (
+                "\n\nReplay mode is active: existing setup is re-validated and "
+                "prompts are skipped where possible."
+            )
+        console.print(Panel(
+            body,
             border_style=CYAN,
             title=f"[bold {BRIGHT_CYAN}]Quick Setup[/]",
             width=72,
@@ -517,6 +527,40 @@ class QuickSetup:
 
     def _tailscale_optional_step(self) -> bool:
         console.print()
+        if self.replay_existing:
+            _info("Replay mode: checking Tailscale status without prompts.")
+            if shutil.which("tailscale") is None:
+                _warning("Tailscale not installed. Keeping field access deferred.")
+                if "tailscale" not in self.pending_optional_setup:
+                    self.pending_optional_setup.append("tailscale")
+                return True
+
+            ok, status = _run_command(["tailscale", "status"], timeout=10)
+            if not ok or "logged out" in status.lower():
+                _warning("Tailscale not connected. Keeping field access deferred.")
+                if "tailscale" not in self.pending_optional_setup:
+                    self.pending_optional_setup.append("tailscale")
+                return True
+
+            ok_ip, out_ip = _run_command(["tailscale", "ip", "-4"], timeout=10)
+            if not ok_ip:
+                _warning("Could not resolve Tailscale IPv4. Keeping field access deferred.")
+                if "tailscale" not in self.pending_optional_setup:
+                    self.pending_optional_setup.append("tailscale")
+                return True
+
+            self.tailscale_ip = str(out_ip.splitlines()[0]).strip()
+            if not self.tailscale_ip:
+                _warning("Tailscale IPv4 is empty. Keeping field access deferred.")
+                if "tailscale" not in self.pending_optional_setup:
+                    self.pending_optional_setup.append("tailscale")
+                return True
+
+            _success(f"Tailscale ready: {self.tailscale_ip}")
+            if "tailscale" in self.pending_optional_setup:
+                self.pending_optional_setup.remove("tailscale")
+            return True
+
         configure_now = Confirm.ask(
             f"  [{CYAN}]Configure Tailscale now for field access?[/]",
             default=False,
@@ -852,6 +896,11 @@ class QuickSetup:
             width=72,
         ))
 
+        if self.replay_existing:
+            _info("Replay mode: preserving existing Telegram pairing setup.")
+            _success("Telegram pairing previously completed (replay mode)")
+            return True
+
         _info("Starting OpenClaw gateway...")
         start_rc = _run_interactive_command(["openclaw", "gateway", "start"])
         if start_rc != 0:
@@ -993,6 +1042,6 @@ class QuickSetup:
         ))
 
 
-def run_quick_setup(*, company_name: str = "") -> int:
-    runner = QuickSetup(company_name=company_name)
+def run_quick_setup(*, company_name: str = "", replay: bool = False) -> int:
+    runner = QuickSetup(company_name=company_name, replay=replay)
     return runner.run()

@@ -200,7 +200,10 @@ def _cmd_setup(args: argparse.Namespace) -> int:
     if bool(getattr(args, "quick", False)):
         from .quick_setup import run_quick_setup
 
-        return run_quick_setup(company_name=str(getattr(args, "company_name", "")).strip())
+        return run_quick_setup(
+            company_name=str(getattr(args, "company_name", "")).strip(),
+            replay=bool(getattr(args, "replay", False)),
+        )
 
     from .setup_wizard import main as setup_main
 
@@ -801,6 +804,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--company-name",
         default="",
         help="Optional company name used by --quick",
+    )
+    setup.add_argument(
+        "--replay",
+        action="store_true",
+        help="Replay quick setup checks using existing config when available",
     )
 
     auth = sub.add_parser("auth", help="Sign in/out and inspect Maestro billing auth session")

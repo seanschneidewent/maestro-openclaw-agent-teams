@@ -283,9 +283,16 @@ prompt_email() {
 }
 
 run_quick_setup() {
+  local mode="${1:-fresh}"
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  log "Starting quick setup..."
-  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli setup --quick
+  local -a setup_args=(setup --quick)
+  if [[ "$mode" == "replay" ]]; then
+    setup_args+=(--replay)
+    log "Replaying quick setup journey with saved configuration..."
+  else
+    log "Starting quick setup..."
+  fi
+  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli "${setup_args[@]}"
 }
 
 has_existing_setup() {
@@ -343,14 +350,19 @@ run_preflight_checks() {
 
 run_setup_or_preflight() {
   if has_existing_setup; then
-    log "Existing Maestro setup detected. Reusing saved setup data."
-    if run_preflight_checks; then
-      log "Setup checks passed."
+    log "Existing Maestro setup detected. Replaying guided setup checks."
+    if run_quick_setup replay; then
+      log "Setup replay passed."
       return 0
     fi
-    warn "Preflight checks failed. Falling back to interactive quick setup."
+    warn "Setup replay failed. Falling back to preflight checks."
+    if run_preflight_checks; then
+      log "Preflight checks passed."
+      return 0
+    fi
+    fatal "Setup replay and preflight checks both failed. Run 'maestro-solo setup --quick' to repair."
   fi
-  run_quick_setup
+  run_quick_setup fresh
 }
 
 run_pro_auth() {
