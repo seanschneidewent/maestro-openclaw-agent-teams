@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "maestro-solo"
-version = "0.1.0"
+version = "0.1.1"
 description = "Maestro Solo product"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Maestro Construction Agents" }]
 dependencies = [
-  "maestro-engine>=0.1.0",
+  "maestro-engine>=0.1.1",
   "google-genai>=1.0.0",
   "Pillow>=11.0.0",
   "cryptography>=42.0.0",
