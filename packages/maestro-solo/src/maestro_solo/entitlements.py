@@ -26,9 +26,9 @@ DEFAULT_OFFLINE_GRACE_HOURS = 72
 CORE_CAPABILITIES = (
     "ingest",
     "generic_tools",
-    "workspace_basics",
 )
 PRO_ONLY_CAPABILITIES = (
+    "workspace_basics",
     "maestro_skill",
     "maestro_native_tools",
     "workspace_frontend",
@@ -321,16 +321,15 @@ def _within_offline_grace(saved_at: str, now: datetime | None = None) -> bool:
     return elapsed.total_seconds() <= (grace_hours * 3600)
 
 
+def _core_channel_allows_pro_upgrade() -> bool:
+    raw = str(os.environ.get("MAESTRO_ALLOW_PRO_ON_CORE_CHANNEL", "1")).strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
 def resolve_effective_entitlement(*, home_dir: Path | None = None) -> dict[str, Any]:
     """Resolve current runtime tier and capabilities with core fallback."""
     channel = install_channel()
-    if channel == TIER_CORE:
-        return {
-            "tier": TIER_CORE,
-            "capabilities": capabilities_for_tier(TIER_CORE),
-            "source": "install_channel",
-            "reason": "core_channel_forced",
-        }
+    allow_core_upgrade = _core_channel_allows_pro_upgrade()
 
     local_entitlement = load_local_entitlement(home_dir=home_dir)
     token = _clean_text(local_entitlement.get("entitlement_token"))
@@ -338,7 +337,7 @@ def resolve_effective_entitlement(*, home_dir: Path | None = None) -> dict[str, 
         status = verify_entitlement_token(token)
         if bool(status.get("valid")):
             tier = normalize_tier(str(status.get("tier", TIER_CORE)))
-            if channel == TIER_PRO and tier == TIER_CORE:
+            if tier == TIER_PRO and channel == TIER_CORE and not allow_core_upgrade:
                 tier = TIER_CORE
             return {
                 "tier": tier,
@@ -365,7 +364,7 @@ def resolve_effective_entitlement(*, home_dir: Path | None = None) -> dict[str, 
         license_status = verify_solo_license_key(license_key)
         if bool(license_status.get("valid")):
             tier = plan_tier(str(license_status.get("plan_id", "")))
-            if tier == TIER_PRO and channel != TIER_CORE:
+            if tier == TIER_PRO and (channel != TIER_CORE or allow_core_upgrade):
                 return {
                     "tier": TIER_PRO,
                     "capabilities": capabilities_for_tier(TIER_PRO),
@@ -378,7 +377,7 @@ def resolve_effective_entitlement(*, home_dir: Path | None = None) -> dict[str, 
     return {
         "tier": TIER_CORE,
         "capabilities": capabilities_for_tier(TIER_CORE),
-        "source": "default_core",
+        "source": "install_channel" if channel == TIER_CORE else "default_core",
     }
 
 

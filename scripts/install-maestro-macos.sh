@@ -4,7 +4,9 @@ set -euo pipefail
 INSTALL_ROOT_DEFAULT="$HOME/.maestro"
 SOLO_HOME_DEFAULT="$HOME/.maestro-solo"
 VENV_DIR_DEFAULT="$INSTALL_ROOT_DEFAULT/venv-maestro-solo"
-INSTALL_CHANNEL_DEFAULT="core"
+INSTALL_CHANNEL_DEFAULT="auto"
+INSTALL_FLOW_DEFAULT="free"
+PRO_PLAN_DEFAULT="solo_monthly"
 CORE_PACKAGE_SPEC_DEFAULT=""
 PRO_PACKAGE_SPEC_DEFAULT=""
 
@@ -14,10 +16,14 @@ SCRIPT_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOLO_HOME="${MAESTRO_SOLO_HOME:-$SOLO_HOME_DEFAULT}"
 VENV_DIR="${MAESTRO_VENV_DIR:-$VENV_DIR_DEFAULT}"
 INSTALL_CHANNEL_RAW="${MAESTRO_INSTALL_CHANNEL:-$INSTALL_CHANNEL_DEFAULT}"
+INSTALL_FLOW_RAW="${MAESTRO_INSTALL_FLOW:-$INSTALL_FLOW_DEFAULT}"
 CORE_PACKAGE_SPEC="${MAESTRO_CORE_PACKAGE_SPEC:-$CORE_PACKAGE_SPEC_DEFAULT}"
 PRO_PACKAGE_SPEC="${MAESTRO_PRO_PACKAGE_SPEC:-$PRO_PACKAGE_SPEC_DEFAULT}"
+PRO_PLAN_ID="${MAESTRO_PRO_PLAN_ID:-$PRO_PLAN_DEFAULT}"
+PURCHASE_EMAIL="${MAESTRO_PURCHASE_EMAIL:-}"
 USE_LOCAL_REPO="${MAESTRO_USE_LOCAL_REPO:-0}"
 INSTALL_CHANNEL=""
+INSTALL_FLOW=""
 PYTHON_BIN=""
 
 log() {
@@ -59,9 +65,20 @@ normalize_channel() {
   local clean
   clean="$(printf '%s' "$INSTALL_CHANNEL_RAW" | tr '[:upper:]' '[:lower:]')"
   case "$clean" in
-    core|pro) INSTALL_CHANNEL="$clean" ;;
+    core|pro|auto) INSTALL_CHANNEL="$clean" ;;
     *)
-      fatal "Invalid MAESTRO_INSTALL_CHANNEL='$INSTALL_CHANNEL_RAW' (expected core or pro)."
+      fatal "Invalid MAESTRO_INSTALL_CHANNEL='$INSTALL_CHANNEL_RAW' (expected auto, core, or pro)."
+      ;;
+  esac
+}
+
+normalize_flow() {
+  local clean
+  clean="$(printf '%s' "$INSTALL_FLOW_RAW" | tr '[:upper:]' '[:lower:]')"
+  case "$clean" in
+    free|pro) INSTALL_FLOW="$clean" ;;
+    *)
+      fatal "Invalid MAESTRO_INSTALL_FLOW='$INSTALL_FLOW_RAW' (expected free or pro)."
       ;;
   esac
 }
@@ -197,6 +214,10 @@ install_maestro_packages() {
   local package_spec="$CORE_PACKAGE_SPEC"
   if [[ "$INSTALL_CHANNEL" == "pro" ]]; then
     package_spec="$PRO_PACKAGE_SPEC"
+    if [[ -z "$package_spec" ]]; then
+      warn "MAESTRO_PRO_PACKAGE_SPEC is empty; falling back to MAESTRO_CORE_PACKAGE_SPEC."
+      package_spec="$CORE_PACKAGE_SPEC"
+    fi
   fi
   [[ -n "$package_spec" ]] || fatal "Package spec is empty. Set MAESTRO_CORE_PACKAGE_SPEC / MAESTRO_PRO_PACKAGE_SPEC to private wheel spec(s), or set MAESTRO_USE_LOCAL_REPO=1 for local development."
 
@@ -209,20 +230,55 @@ install_maestro_packages() {
   "$PYTHON_BIN" -m pip install "${pip_args[@]}"
 }
 
+prompt_email() {
+  local entered="$PURCHASE_EMAIL"
+  entered="$(printf '%s' "$entered" | xargs)"
+  while [[ -z "$entered" || "$entered" != *"@"* ]]; do
+    read -r -p "Enter your billing email: " entered || true
+    entered="$(printf '%s' "$entered" | xargs)"
+    if [[ -z "$entered" || "$entered" != *"@"* ]]; then
+      warn "Please enter a valid email address."
+    fi
+  done
+  PURCHASE_EMAIL="$entered"
+}
+
 run_quick_setup() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
   log "Starting quick setup..."
   MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli setup --quick
 }
 
+run_pro_purchase() {
+  [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
+  if [[ "$INSTALL_FLOW" != "pro" ]]; then
+    return 0
+  fi
+
+  log "Pro flow selected: purchase is required before launch."
+  prompt_email
+  log "Starting secure checkout for $PURCHASE_EMAIL"
+  MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" \
+    "$PYTHON_BIN" -m maestro_solo.cli purchase \
+      --email "$PURCHASE_EMAIL" \
+      --plan "$PRO_PLAN_ID" \
+      --mode live \
+    || fatal "Pro purchase failed. Re-run installer or run 'maestro-solo purchase --email $PURCHASE_EMAIL' manually."
+}
+
 start_runtime() {
   [[ -n "$PYTHON_BIN" ]] || fatal "Internal error: virtualenv python is not configured"
-  log "Starting Maestro runtime..."
+  if [[ "$INSTALL_FLOW" == "pro" ]]; then
+    log "Purchase complete. Starting Maestro Pro runtime..."
+  else
+    log "Starting Maestro Free runtime..."
+  fi
   exec MAESTRO_INSTALL_CHANNEL="$INSTALL_CHANNEL" MAESTRO_SOLO_HOME="$SOLO_HOME" "$PYTHON_BIN" -m maestro_solo.cli up --tui
 }
 
 main() {
   normalize_channel
+  normalize_flow
   ensure_macos
   ensure_homebrew
   ensure_python
@@ -232,6 +288,7 @@ main() {
   install_maestro_packages
   persist_install_channel
   run_quick_setup
+  run_pro_purchase
   start_runtime
 }
 

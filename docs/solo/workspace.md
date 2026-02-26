@@ -1,10 +1,19 @@
 # Solo Workspace
 
+Workspace UI is a Maestro Pro capability.
+
 ## Canonical Routes
 
 - UI: `/workspace`
 - WS: `/workspace/ws`
 - API: `/workspace/api/*`
+
+In Free/Core mode these routes return `403` with an upgrade instruction.
+
+## Free/Core Runtime Route
+
+- Root: `/`
+- Response: JSON status (`mode: text_only`) with next-step commands for ingest and upgrade.
 
 ## Field Access (Tailnet)
 

@@ -4,35 +4,41 @@ Maestro is a **Solo-first** construction agent runtime with optional Fleet/enter
 
 ## Quickstart (Solo, macOS)
 
+Free one-liner (setup -> up):
+
 ```bash
-MAESTRO_INSTALL_CHANNEL=core \
 MAESTRO_CORE_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-free-macos.sh | bash
 ```
 
-This bootstrap installs prerequisites, installs the selected Solo package channel, runs quick setup, and starts `maestro-solo up --tui`.
-
-Channel examples (private wheels):
+Pro one-liner (setup -> purchase -> up):
 
 ```bash
-MAESTRO_INSTALL_CHANNEL=core \
 MAESTRO_CORE_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-pro-macos.sh | bash
+```
 
+Pro flow prompts for billing email, opens Stripe Checkout, waits for license provisioning, then starts runtime.
+
+Advanced channel override (optional):
+
+```bash
 MAESTRO_INSTALL_CHANNEL=pro \
 MAESTRO_PRO_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-pro-macos.sh | bash
 ```
 
 Notes:
 
 - `MAESTRO_*_PACKAGE_SPEC` supports whitespace or comma-separated pip args.
 - Pass both `maestro-engine` and `maestro-solo` wheel URLs unless your private index resolves dependencies.
+- Optional for unattended Pro installs: `MAESTRO_PURCHASE_EMAIL=person@example.com`.
 - Local repo dev mode is still available via `MAESTRO_USE_LOCAL_REPO=1`.
 
 Open:
 
-- `http://localhost:3000/workspace`
+- Free/Core: `http://localhost:3000/` (text-only runtime + upgrade prompt)
+- Pro: `http://localhost:3000/workspace`
 
 ## Manual Setup (Development)
 

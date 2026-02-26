@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sys
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -77,6 +78,24 @@ store_path: Path = DEFAULT_STORE
 server_port: int = 3000
 ws_clients: dict[str, set[WebSocket]] = {}
 project_dir_slug_index: dict[str, str] = {}
+
+
+def _workspace_enabled() -> bool:
+    # Free/core mode disables workspace UI routes by default.
+    if str(os.environ.get("MAESTRO_ALLOW_CORE_WORKSPACE", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    tier = str(os.environ.get("MAESTRO_TIER", "core")).strip().lower()
+    return tier == "pro"
+
+
+def _workspace_disabled_response() -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": "Workspace UI is available on Maestro Pro only.",
+            "next_step": "Run maestro-solo purchase --email you@example.com --plan solo_monthly --mode live",
+        },
+        status_code=403,
+    )
 
 
 def _workspace_missing_project_response() -> JSONResponse:
@@ -226,6 +245,8 @@ async def api_projects():
 
 
 def _workspace_slug_or_response() -> tuple[str | None, JSONResponse | None]:
+    if not _workspace_enabled():
+        return None, _workspace_disabled_response()
     slug = _active_workspace_slug()
     if not slug:
         return None, _workspace_missing_project_response()
@@ -738,6 +759,9 @@ async def api_schedule_close_item(slug: str, item_id: str, payload: dict[str, An
 
 @app.websocket("/workspace/ws")
 async def websocket_workspace(websocket: WebSocket):
+    if not _workspace_enabled():
+        await websocket.close(code=4403)
+        return
     slug = _active_workspace_slug()
     if not slug:
         await websocket.close(code=4004)
@@ -779,6 +803,8 @@ async def serve_static_assets(rest: str):
 
 @app.get("/workspace/{rest:path}")
 async def serve_workspace(rest: str = ""):
+    if not _workspace_enabled():
+        return _workspace_disabled_response()
     if rest.startswith("api/") or rest.startswith("ws/"):
         return JSONResponse({"error": "Not found"}, status_code=404)
 
@@ -796,11 +822,15 @@ async def serve_workspace(rest: str = ""):
 
 @app.get("/workspace")
 async def serve_workspace_root():
+    if not _workspace_enabled():
+        return _workspace_disabled_response()
     return await serve_workspace("")
 
 
 @app.get("/{slug}/{rest:path}")
 async def serve_frontend(slug: str, rest: str = ""):
+    if not _workspace_enabled():
+        return _workspace_disabled_response()
     if slug in ("api", "ws"):
         return JSONResponse({"error": "Not found"}, status_code=404)
 
@@ -822,12 +852,27 @@ async def serve_frontend(slug: str, rest: str = ""):
 
 @app.get("/{slug}")
 async def serve_frontend_root(slug: str):
+    if not _workspace_enabled():
+        return _workspace_disabled_response()
     return await serve_frontend(slug, "")
 
 
 @app.get("/")
 async def root():
     from starlette.responses import RedirectResponse
+
+    if not _workspace_enabled():
+        return JSONResponse(
+            {
+                "product": "maestro-solo-core",
+                "status": "ready",
+                "mode": "text_only",
+                "next_steps": [
+                    "maestro-solo ingest <path-to-pdfs>",
+                    "maestro-solo purchase --email you@example.com --plan solo_monthly --mode live",
+                ],
+            }
+        )
 
     return RedirectResponse(url="/workspace")
 

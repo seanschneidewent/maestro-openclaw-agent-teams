@@ -35,8 +35,9 @@ Fleet transition state path: `~/.maestro/install.json`
 
 ## Canonical UI Routes
 
-- Solo workspace: `/workspace`
-- Solo WebSocket: `/workspace/ws`
+- Solo core runtime: `/` (text-only status + upgrade guidance)
+- Solo workspace (Pro): `/workspace`
+- Solo WebSocket (Pro): `/workspace/ws`
 - Fleet command center: `/command-center` (only when Fleet enabled)
 
 ## Important Environment Variables
@@ -44,6 +45,12 @@ Fleet transition state path: `~/.maestro/install.json`
 - `MAESTRO_STORE`
 - `MAESTRO_AGENT_ROLE` (`project` in Solo, `company` in Fleet commander workspace)
 - `MAESTRO_SOLO_HOME`
+- `MAESTRO_INSTALL_FLOW` (`free` or `pro`, installer orchestration)
+- `MAESTRO_INSTALL_CHANNEL` (`auto`, `core`, `pro`)
+- `MAESTRO_PURCHASE_EMAIL` (optional installer email preset for Pro flow)
+- `MAESTRO_PRO_PLAN_ID` (optional installer plan override, default `solo_monthly`)
+- `MAESTRO_TIER` (runtime gate; `pro` enables workspace routes)
+- `MAESTRO_ALLOW_PRO_ON_CORE_CHANNEL` (default `1`, allows paid Pro upgrade even on core distribution channel)
 - `MAESTRO_BILLING_URL`
 - `MAESTRO_LICENSE_URL`
 - `MAESTRO_INTERNAL_TOKEN` (service-to-service auth for local billing/license test flow)

@@ -6,6 +6,11 @@ Canonical Solo workspace surface:
 - WS: `/workspace/ws`
 - API prefix: `/workspace/api/*`
 
+Availability:
+
+- Pro tier: enabled
+- Free/Core tier: returns `403` with upgrade guidance
+
 Slug-scoped compatibility routes remain available:
 
 - `/{slug}/api/*`

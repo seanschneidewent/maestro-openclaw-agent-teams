@@ -6,12 +6,11 @@ Run a fresh end-to-end validation from wheel install through Core startup and Pr
 
 ## Sequence
 
-1. (macOS fast path) Run one command:
+1. (macOS free flow) Run one command:
 
 ```bash
-MAESTRO_INSTALL_CHANNEL=core \
 MAESTRO_CORE_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
-curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-macos.sh | bash
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-free-macos.sh | bash
 ```
 
 Manual path:
@@ -75,11 +74,20 @@ maestro-solo ingest /abs/path/to/plans
 
 `http://localhost:3000/workspace`
 
+11. Validate direct Pro installer path (setup -> purchase -> up):
+
+```bash
+MAESTRO_CORE_PACKAGE_SPEC="https://downloads.example.com/maestro_engine-0.1.0-py3-none-any.whl https://downloads.example.com/maestro_solo-0.1.0-py3-none-any.whl" \
+curl -fsSL https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/main/scripts/install-maestro-pro-macos.sh | bash
+```
+
 ## Pass Criteria
 
 1. Setup succeeds with valid model auth.
 2. Core install runs without source checkout and without editable installs.
 3. `maestro-solo up --tui` starts in Core mode before purchase.
-4. Purchase transitions to licensed and status resolves Pro tier.
-5. `maestro-solo unsubscribe` opens Stripe Customer Portal for self-serve cancellation.
-6. Workspace search/ingest flow works with no Fleet UI elements.
+4. Core route `/` returns text-only status and upgrade command; `/workspace` is blocked in core mode.
+5. Purchase transitions to licensed and status resolves Pro tier.
+6. `maestro-solo unsubscribe` opens Stripe Customer Portal for self-serve cancellation.
+7. Workspace search/ingest flow works with no Fleet UI elements.
+8. Pro installer performs purchase inline and ends with active Pro workspace route.

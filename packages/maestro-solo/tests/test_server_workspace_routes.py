@@ -18,6 +18,11 @@ def _make_single_project_store(root: Path, name: str = "Solo Project"):
     _write_json(root / "project.json", {"name": name})
 
 
+def _enable_pro_workspace(monkeypatch):
+    monkeypatch.setenv("MAESTRO_TIER", "pro")
+    monkeypatch.delenv("MAESTRO_ALLOW_CORE_WORKSPACE", raising=False)
+
+
 @contextmanager
 def _with_store(path: Path):
     previous_store = server.store_path
@@ -39,6 +44,7 @@ def test_workspace_api_project_route_uses_active_project(tmp_path: Path, monkeyp
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("MAESTRO_SOLO_HOME", str(home / ".maestro-solo"))
+    _enable_pro_workspace(monkeypatch)
 
     _make_single_project_store(tmp_path, name="Solo Project")
     with _with_store(tmp_path):
@@ -54,6 +60,7 @@ def test_command_center_not_served_in_solo(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("MAESTRO_SOLO_HOME", str(home / ".maestro-solo"))
+    _enable_pro_workspace(monkeypatch)
 
     _make_single_project_store(tmp_path, name="Solo Project")
     with _with_store(tmp_path):
@@ -66,6 +73,7 @@ def test_root_redirects_to_workspace(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("MAESTRO_SOLO_HOME", str(home / ".maestro-solo"))
+    _enable_pro_workspace(monkeypatch)
 
     _make_single_project_store(tmp_path, name="Solo Project")
     with _with_store(tmp_path):
@@ -79,6 +87,7 @@ def test_workspace_project_notes_route_returns_notes(tmp_path: Path, monkeypatch
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("MAESTRO_SOLO_HOME", str(home / ".maestro-solo"))
+    _enable_pro_workspace(monkeypatch)
 
     _make_single_project_store(tmp_path, name="Solo Project")
     _write_json(
@@ -115,3 +124,40 @@ def test_workspace_project_notes_route_returns_notes(tmp_path: Path, monkeypatch
         slug_response = client.get(f"/{project_slug}/api/project-notes")
         assert slug_response.status_code == 200
         assert slug_response.json()["note_count"] == 1
+
+
+def test_core_mode_blocks_workspace_routes(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MAESTRO_SOLO_HOME", str(home / ".maestro-solo"))
+    monkeypatch.setenv("MAESTRO_TIER", "core")
+    monkeypatch.delenv("MAESTRO_ALLOW_CORE_WORKSPACE", raising=False)
+
+    _make_single_project_store(tmp_path, name="Solo Project")
+    with _with_store(tmp_path):
+        client = TestClient(server.app)
+        workspace_response = client.get("/workspace")
+        assert workspace_response.status_code == 403
+        assert workspace_response.json()["error"] == "Workspace UI is available on Maestro Pro only."
+
+        api_response = client.get("/workspace/api/project")
+        assert api_response.status_code == 403
+        assert api_response.json()["next_step"].startswith("Run maestro-solo purchase")
+
+
+def test_core_mode_root_returns_text_only_status(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("MAESTRO_SOLO_HOME", str(home / ".maestro-solo"))
+    monkeypatch.setenv("MAESTRO_TIER", "core")
+    monkeypatch.delenv("MAESTRO_ALLOW_CORE_WORKSPACE", raising=False)
+
+    _make_single_project_store(tmp_path, name="Solo Project")
+    with _with_store(tmp_path):
+        client = TestClient(server.app)
+        response = client.get("/")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["product"] == "maestro-solo-core"
+        assert payload["mode"] == "text_only"
+        assert any("maestro-solo purchase" in step for step in payload.get("next_steps", []))

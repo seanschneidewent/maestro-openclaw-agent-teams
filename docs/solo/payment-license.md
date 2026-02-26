@@ -4,6 +4,16 @@
 
 Validate that payment provisions Pro entitlement data (license + optional signed entitlement token), then unlocks Pro capabilities.
 
+## Customer Paths
+
+1. Free install path:
+   - installer runs setup and starts core runtime
+   - user upgrades later with `maestro-solo purchase --email you@example.com --plan solo_monthly --mode live`
+2. Pro install path:
+   - installer runs setup
+   - installer runs purchase immediately
+   - runtime starts already licensed
+
 ## Local Services
 
 Run in separate terminals:

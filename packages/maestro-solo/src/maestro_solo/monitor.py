@@ -889,7 +889,10 @@ def _build_layout(
 def run_up_tui(port: int, store: str, host: str):
     """Run server + read-only monitor TUI for `maestro-solo up --tui`."""
     store_path = Path(store).resolve()
-    network = resolve_network_urls(web_port=port, route_path="/workspace")
+    allow_core_workspace = str(os.environ.get("MAESTRO_ALLOW_CORE_WORKSPACE", "")).strip().lower() in {"1", "true", "yes", "on"}
+    tier = str(os.environ.get("MAESTRO_TIER", "core")).strip().lower()
+    workspace_enabled = tier == "pro" or allow_core_workspace
+    network = resolve_network_urls(web_port=port, route_path="/workspace" if workspace_enabled else "/")
     agent_id, workspace_path = _resolve_primary_agent()
     gateway_port = _resolve_gateway_port()
     state = MonitorState(
@@ -921,13 +924,20 @@ def run_up_tui(port: int, store: str, host: str):
     ]
     process = _start_text_process(cmd)
     logs.add(f"Starting server: {' '.join(cmd)}")
-    logs.add(f"Workspace URL: {state.primary_url}")
-    if state.workspace_path:
+    if workspace_enabled:
+        logs.add(f"Workspace URL: {state.primary_url}")
+    else:
+        logs.add(f"Core runtime URL: {state.primary_url}")
+    if workspace_enabled and state.workspace_path:
         logs.add(f"Connected workspace: {state.workspace_path}")
     _append_activity_event(
         activity_logs,
         label="START",
-        message=f"Maestro monitor attached. Workspace: {state.workspace_path or 'unknown'}",
+        message=(
+            f"Maestro monitor attached. Workspace: {state.workspace_path or 'unknown'}"
+            if workspace_enabled
+            else "Maestro monitor attached. Core text-only mode is active."
+        ),
         color=BRIGHT_CYAN,
     )
     _append_gateway_event(

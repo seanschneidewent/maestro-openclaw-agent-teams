@@ -904,11 +904,11 @@ class QuickSetup:
 
     def _summary(self):
         console.print()
-        local_workspace_url = "http://localhost:3000/workspace"
-        tailnet_workspace_url = (
+        local_url = "http://localhost:3000/workspace" if self.tier == "pro" else "http://localhost:3000/"
+        tailnet_url = (
             f"http://{self.tailscale_ip}:3000/workspace"
-            if self.tailscale_ip
-            else "Not configured"
+            if (self.tailscale_ip and self.tier == "pro")
+            else (f"http://{self.tailscale_ip}:3000/" if self.tailscale_ip else "Not configured")
         )
 
         table = Table(show_header=False, box=None, padding=(0, 1))
@@ -918,10 +918,11 @@ class QuickSetup:
         table.add_row("Model", self.model)
         table.add_row("Auth", "OpenAI OAuth via OpenClaw")
         table.add_row("Telegram", f"@{self.bot_username}")
-        table.add_row("Workspace", str(self.workspace))
+        if self.tier == "pro":
+            table.add_row("Workspace", str(self.workspace))
         table.add_row("Store", str(self.store_root))
-        table.add_row("Local URL", local_workspace_url)
-        table.add_row("Field URL", tailnet_workspace_url)
+        table.add_row("Local URL", local_url)
+        table.add_row("Field URL", tailnet_url)
         if self.pending_optional_setup:
             table.add_row("Deferred", ", ".join(self.pending_optional_setup))
 
@@ -932,11 +933,20 @@ class QuickSetup:
             width=84,
         ))
 
-        console.print(Panel(
+        next_step_body = (
             "Start live runtime now:\n"
             "  [bold white]maestro-solo up --tui[/]\n\n"
             "Then open:\n"
-            f"  [bold white]{local_workspace_url}[/]",
+            f"  [bold white]{local_url}[/]"
+        )
+        if self.tier != "pro":
+            next_step_body += (
+                "\n\nUpgrade to Pro when ready:\n"
+                "  [bold white]maestro-solo purchase --email you@example.com --plan solo_monthly --mode live[/]"
+            )
+
+        console.print(Panel(
+            next_step_body,
             border_style=CYAN,
             title=f"[bold {BRIGHT_CYAN}]Next Step[/]",
             width=84,

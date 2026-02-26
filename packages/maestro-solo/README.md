@@ -24,11 +24,14 @@ pip install -e /absolute/path/to/repo/packages/maestro-engine -e /absolute/path/
 
 ## Core/Pro Distribution
 
-- Installer channel is controlled by `MAESTRO_INSTALL_CHANNEL=core|pro`.
+- Installer supports user-facing flow mode via `MAESTRO_INSTALL_FLOW=free|pro`.
+- `free` flow: setup -> up.
+- `pro` flow: setup -> purchase -> up.
+- Installer channel is controlled by `MAESTRO_INSTALL_CHANNEL=auto|core|pro`.
 - Channel is persisted to `~/.maestro-solo/install-channel.txt`.
 - Production install is expected to use private wheel specs (`MAESTRO_CORE_PACKAGE_SPEC` / `MAESTRO_PRO_PACKAGE_SPEC`), not editable repo installs.
 - Runtime resolves effective capabilities from:
-  1. install channel override,
+  1. install channel policy,
   2. signed entitlement token cache,
   3. paid local license fallback,
   4. default core mode.
