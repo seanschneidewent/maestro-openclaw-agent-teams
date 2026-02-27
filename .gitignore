@@ -18,6 +18,7 @@ node_modules/
 dist/
 workspace_frontend/dist/
 command_center_frontend/dist/
+website/dist/
 
 # Thumbnail caches
 .cache/
