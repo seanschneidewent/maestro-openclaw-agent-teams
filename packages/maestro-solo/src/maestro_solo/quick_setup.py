@@ -7,6 +7,7 @@ import os
 import platform
 import re
 import shutil
+import socket
 import subprocess
 import time
 import uuid
@@ -28,6 +29,7 @@ from .install_flow import resolve_install_runtime
 from .install_state import load_install_state, save_install_state
 from .openclaw_config_transform import SoloConfigTransformRequest, transform_openclaw_config
 from .openclaw_runtime import (
+    DEFAULT_MAESTRO_GATEWAY_PORT,
     DEFAULT_MAESTRO_OPENCLAW_PROFILE,
     ensure_safe_openclaw_write_target,
     prepend_openclaw_profile_args,
@@ -46,6 +48,7 @@ NATIVE_PLUGIN_ID = "maestro-native-tools"
 NATIVE_PLUGIN_DENY_TOOLS = ["browser", "web_search", "web_fetch", "canvas", "nodes"]
 OPENAI_OAUTH_PLUGIN_ID = "maestro-openai-codex-auth"
 OPENAI_OAUTH_PROVIDER_ID = "openai-codex"
+LEGACY_SHARED_GATEWAY_PORT = 18789
 
 
 def _success(text: str):
@@ -245,6 +248,43 @@ def _validate_telegram_token(token: str) -> tuple[bool, str]:
     return True, username
 
 
+def _parse_gateway_port(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 1 <= value <= 65535 else None
+    if isinstance(value, str):
+        clean = value.strip()
+        if clean.isdigit():
+            port = int(clean)
+            if 1 <= port <= 65535:
+                return port
+    return None
+
+
+def _port_is_available(port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", int(port)))
+        return True
+    except OSError:
+        return False
+
+
+def _resolve_maestro_gateway_port(config: dict[str, Any]) -> int:
+    gateway = config.get("gateway") if isinstance(config.get("gateway"), dict) else {}
+    configured = _parse_gateway_port(gateway.get("port"))
+    if configured is not None and configured != LEGACY_SHARED_GATEWAY_PORT:
+        return configured
+
+    for candidate in range(DEFAULT_MAESTRO_GATEWAY_PORT, DEFAULT_MAESTRO_GATEWAY_PORT + 16):
+        if _port_is_available(candidate):
+            return candidate
+
+    return DEFAULT_MAESTRO_GATEWAY_PORT
+
+
 class QuickSetup:
     """Quick setup path: minimum required for a live Maestro Solo runtime."""
 
@@ -286,6 +326,7 @@ class QuickSetup:
 
         self.gemini_key = str(openclaw_env.get("GEMINI_API_KEY", "")).strip()
         self.telegram_token = str(personal_telegram_cfg.get("botToken", "")).strip()
+        self.gateway_port = _resolve_maestro_gateway_port(openclaw_config)
         self.bot_username = ""
         self.tailscale_ip = ""
         self.pending_optional_setup: list[str] = ["ingest_plans"]
@@ -367,6 +408,7 @@ class QuickSetup:
             _error("Quick setup currently supports macOS only.")
             return False
         _info(f"OpenClaw profile: {self._openclaw_label()} ({self.openclaw_root})")
+        _info(f"OpenClaw gateway port: {self.gateway_port}")
         return True
 
     def _company_name_step(self) -> bool:
@@ -798,7 +840,7 @@ class QuickSetup:
             return False, last
 
         _info("Starting OpenClaw gateway...")
-        start_rc = self._run_openclaw_interactive(["gateway", "start"])
+        start_rc = self._run_openclaw_interactive(["gateway", "--port", str(self.gateway_port), "start"])
         running, last_status = _wait_for_running(4)
         if running:
             _success("OpenClaw gateway is running")
@@ -809,14 +851,16 @@ class QuickSetup:
         else:
             _warning("Gateway did not become reachable; installing gateway service.")
 
-        install_rc = self._run_openclaw_interactive(["gateway", "install", "--force"])
+        install_rc = self._run_openclaw_interactive(
+            ["gateway", "--port", str(self.gateway_port), "install", "--force"]
+        )
         if install_rc != 0:
             _warning("Gateway install returned non-zero; continuing with restart attempts.")
 
-        restart_rc = self._run_openclaw_interactive(["gateway", "restart"])
+        restart_rc = self._run_openclaw_interactive(["gateway", "--port", str(self.gateway_port), "restart"])
         if restart_rc != 0:
             _warning("Gateway restart returned non-zero; trying service start once more.")
-            _ = self._run_openclaw_interactive(["gateway", "start"])
+            _ = self._run_openclaw_interactive(["gateway", "--port", str(self.gateway_port), "start"])
 
         running, last_status = _wait_for_running(6)
         if running:
@@ -826,8 +870,10 @@ class QuickSetup:
         _error("OpenClaw gateway is not running. Telegram pairing cannot continue.")
         if last_status:
             _info(f"openclaw status: {last_status}")
-        retry_cmd = " ".join(self._openclaw_cmd(["gateway", "install", "--force"]))
-        restart_cmd = " ".join(self._openclaw_cmd(["gateway", "restart"]))
+        retry_cmd = " ".join(
+            self._openclaw_cmd(["gateway", "--port", str(self.gateway_port), "install", "--force"])
+        )
+        restart_cmd = " ".join(self._openclaw_cmd(["gateway", "--port", str(self.gateway_port), "restart"]))
         _info(f"Try: {retry_cmd} && {restart_cmd}")
         return False
 
@@ -872,6 +918,7 @@ class QuickSetup:
                 provider_env_key="OPENAI_API_KEY",
                 provider_key="",
                 provider_auth_method="openclaw_oauth",
+                gateway_port=self.gateway_port,
                 clear_env_keys=("OPENAI_API_KEY",),
             ),
         )

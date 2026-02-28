@@ -6,6 +6,11 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from .openclaw_runtime import DEFAULT_MAESTRO_GATEWAY_PORT
+
+
+LEGACY_SHARED_GATEWAY_PORT = 18789
+
 
 @dataclass(frozen=True)
 class SoloConfigTransformRequest:
@@ -21,6 +26,7 @@ class SoloConfigTransformRequest:
     provider_env_key: str = ""
     provider_key: str = ""
     provider_auth_method: str = ""
+    gateway_port: int | None = None
     clear_env_keys: tuple[str, ...] = ("OPENAI_API_KEY",)
     remove_agent_ids: tuple[str, ...] = ("maestro", "maestro-personal", "maestro-solo-personal")
 
@@ -41,6 +47,21 @@ def transform_openclaw_config(
 
     gateway = config.get("gateway") if isinstance(config.get("gateway"), dict) else {}
     gateway["mode"] = "local"
+    if isinstance(request.gateway_port, int) and 1 <= request.gateway_port <= 65535:
+        gateway["port"] = int(request.gateway_port)
+    else:
+        current_port = gateway.get("port")
+        normalized_port: int | None = None
+        if isinstance(current_port, int) and 1 <= current_port <= 65535:
+            normalized_port = int(current_port)
+        elif isinstance(current_port, str) and current_port.strip().isdigit():
+            parsed = int(current_port.strip())
+            if 1 <= parsed <= 65535:
+                normalized_port = parsed
+        if normalized_port in (None, LEGACY_SHARED_GATEWAY_PORT):
+            gateway["port"] = DEFAULT_MAESTRO_GATEWAY_PORT
+        else:
+            gateway["port"] = normalized_port
     config["gateway"] = gateway
     config.pop("maestro", None)
 

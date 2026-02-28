@@ -151,6 +151,9 @@ def test_workspace_bootstrap_core_tier_does_not_reference_native_plugin(monkeypa
     config_path = Path(tmp_path / "home" / ".openclaw-maestro-solo" / "openclaw.json")
     assert config_path.exists()
     config = json.loads(config_path.read_text(encoding="utf-8"))
+    gateway = config.get("gateway", {})
+    assert gateway.get("mode") == "local"
+    assert gateway.get("port") == quick_setup.DEFAULT_MAESTRO_GATEWAY_PORT
 
     plugins = config.get("plugins", {})
     entries = plugins.get("entries", {})
@@ -225,12 +228,13 @@ def test_pairing_fails_fast_when_gateway_is_not_running(monkeypatch, tmp_path):
 
     runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
     runner.bot_username = "trace_bot"
+    runner.gateway_port = 19133
     assert runner._pair_telegram_required_step() is False
     assert calls[:4] == [
-        ["openclaw", "--profile", "maestro-solo", "gateway", "start"],
-        ["openclaw", "--profile", "maestro-solo", "gateway", "install", "--force"],
-        ["openclaw", "--profile", "maestro-solo", "gateway", "restart"],
-        ["openclaw", "--profile", "maestro-solo", "gateway", "start"],
+        ["openclaw", "--profile", "maestro-solo", "gateway", "--port", "19133", "start"],
+        ["openclaw", "--profile", "maestro-solo", "gateway", "--port", "19133", "install", "--force"],
+        ["openclaw", "--profile", "maestro-solo", "gateway", "--port", "19133", "restart"],
+        ["openclaw", "--profile", "maestro-solo", "gateway", "--port", "19133", "start"],
     ]
 
 

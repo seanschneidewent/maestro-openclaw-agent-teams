@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from maestro_solo.openclaw_config_transform import SoloConfigTransformRequest, transform_openclaw_config
+from maestro_solo.openclaw_runtime import DEFAULT_MAESTRO_GATEWAY_PORT
 
 
 def _request(**overrides) -> SoloConfigTransformRequest:
@@ -32,6 +33,7 @@ def test_transform_applies_gateway_agent_plugins_and_telegram():
     transformed = transform_openclaw_config(base, request=_request())
 
     assert transformed["gateway"]["mode"] == "local"
+    assert transformed["gateway"]["port"] == DEFAULT_MAESTRO_GATEWAY_PORT
     assert "maestro" not in transformed
     assert transformed["env"]["GEMINI_API_KEY"] == "GEMINI_KEY_FOR_TEST"
     assert "OPENAI_API_KEY" not in transformed["env"]
@@ -46,6 +48,14 @@ def test_transform_applies_gateway_agent_plugins_and_telegram():
     assert "maestro-native-tools" in transformed["plugins"]["allow"]
     assert transformed["channels"]["telegram"]["streamMode"] == "partial"
     assert transformed["channels"]["telegram"]["accounts"]["maestro-solo-personal"]["streamMode"] == "partial"
+
+
+def test_transform_migrates_legacy_shared_gateway_port():
+    base = {"gateway": {"mode": "local", "port": 18789}}
+
+    transformed = transform_openclaw_config(base, request=_request(telegram_token=""))
+
+    assert transformed["gateway"]["port"] == DEFAULT_MAESTRO_GATEWAY_PORT
 
 
 def test_transform_disables_native_plugin_without_touching_other_allow_entries():

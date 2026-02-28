@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 DEFAULT_MAESTRO_OPENCLAW_PROFILE = "maestro-solo"
+DEFAULT_MAESTRO_GATEWAY_PORT = 19124
 _PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _PROFILE_OFF_VALUES = {"default", "none", "off", "shared"}
 _TRUTHY = {"1", "true", "yes", "on"}
