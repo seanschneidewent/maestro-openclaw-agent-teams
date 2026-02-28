@@ -131,6 +131,55 @@ def _tail_output(output: str, *, lines: int = 25, max_chars: int = 2200) -> str:
     return selected
 
 
+def _tail_file_text(path: Path, *, max_bytes: int = 65536) -> str:
+    if not path.exists() or max_bytes <= 0:
+        return ""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            start = max(size - int(max_bytes), 0)
+            handle.seek(start, os.SEEK_SET)
+            chunk = handle.read()
+    except Exception:
+        return ""
+    try:
+        return chunk.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _telegram_polling_conflict_detected(openclaw_root: Path) -> bool:
+    logs_dir = openclaw_root / "logs"
+    for candidate in (logs_dir / "gateway.err.log", logs_dir / "gateway.log"):
+        text = _tail_file_text(candidate, max_bytes=98304)
+        if not text:
+            continue
+        lowered = text.lower()
+        if "getupdates conflict" in lowered:
+            return True
+        if "409: conflict" in lowered and "getupdates" in lowered:
+            return True
+    return False
+
+
+def _telegram_webhook_url(token: str) -> str:
+    clean = str(token or "").strip()
+    if not clean:
+        return ""
+    try:
+        response = httpx.get(f"https://api.telegram.org/bot{clean}/getWebhookInfo", timeout=12)
+        payload = response.json() if response.status_code == 200 else {}
+    except Exception:
+        return ""
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        return ""
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return ""
+    return str(result.get("url", "")).strip()
+
+
 def _run_interactive_command(args: list[str], *, timeout: int = 0) -> int:
     try:
         result = subprocess.run(
@@ -998,6 +1047,17 @@ class QuickSetup:
                 f"No pending Telegram pairing requests yet. Send a normal message to @{self.bot_username} "
                 "(not just /start), then continue."
             )
+            webhook_url = _telegram_webhook_url(self.telegram_token)
+            if webhook_url:
+                _warning("Telegram webhook is configured for this bot token. Polling-based pairing may not work.")
+                _info("Clear the webhook for this bot (or use a fresh bot token) and retry pairing.")
+            if _telegram_polling_conflict_detected(self.openclaw_root):
+                _warning(
+                    "Detected Telegram Bot API polling conflict (getUpdates 409) in gateway logs."
+                )
+                _info(
+                    "Another bot instance is using this token. Stop the other instance or switch to a fresh bot token."
+                )
 
     def _configure_openclaw_and_workspace_step(self) -> bool:
         console.print()

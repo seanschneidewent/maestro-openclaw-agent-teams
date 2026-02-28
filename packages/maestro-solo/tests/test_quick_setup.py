@@ -321,3 +321,48 @@ def test_openai_oauth_plugin_bootstrap_blocks_shared_openclaw_without_write_over
     runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
     assert runner.openclaw_root == Path(tmp_path / "home" / ".openclaw")
     assert runner._ensure_openai_oauth_provider_plugin() is False
+
+
+def test_telegram_polling_conflict_detected_reads_recent_gateway_logs(tmp_path):
+    openclaw_root = tmp_path / ".openclaw-maestro-solo"
+    logs_dir = openclaw_root / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "gateway.err.log").write_text(
+        "2026-02-28 [telegram] getUpdates conflict: 409: Conflict: terminated by other getUpdates request\n",
+        encoding="utf-8",
+    )
+    assert quick_setup._telegram_polling_conflict_detected(openclaw_root) is True
+
+
+def test_pairing_preflight_surfaces_conflict_and_webhook_hints(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    runner.bot_username = "trace_bot"
+    runner.telegram_token = "123456:abcDEF123_token"
+
+    messages: list[str] = []
+
+    def _fake_warn(text: str):
+        messages.append(f"W:{text}")
+
+    def _fake_info(text: str):
+        messages.append(f"I:{text}")
+
+    def _fake_run(args: list[str], *, timeout: int = 120, capture: bool = True):
+        if args == ["channels", "status", "--probe", "--json"]:
+            return True, "{}"
+        if args == ["pairing", "list", "telegram", "--json"]:
+            return True, '{"requests":[]}'
+        raise AssertionError(f"unexpected args: {args}")
+
+    monkeypatch.setattr(runner, "_run_openclaw_command", _fake_run)
+    monkeypatch.setattr(quick_setup, "_warning", _fake_warn)
+    monkeypatch.setattr(quick_setup, "_info", _fake_info)
+    monkeypatch.setattr(quick_setup, "_telegram_webhook_url", lambda _token: "https://example.invalid/hook")
+    monkeypatch.setattr(quick_setup, "_telegram_polling_conflict_detected", lambda _root: True)
+
+    runner._pairing_preflight()
+
+    assert any("No pending Telegram pairing requests yet." in entry for entry in messages)
+    assert any("webhook is configured" in entry.lower() for entry in messages)
+    assert any("polling conflict" in entry.lower() for entry in messages)
