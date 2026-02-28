@@ -24,7 +24,13 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from maestro_engine.network import resolve_network_urls
-from .openclaw_runtime import openclaw_config_path, openclaw_state_root, prepend_openclaw_profile_args
+from .openclaw_runtime import (
+    DEFAULT_MAESTRO_GATEWAY_PORT,
+    openclaw_config_path,
+    openclaw_state_root,
+    prepend_openclaw_profile_args,
+    resolve_openclaw_profile,
+)
 
 
 CYAN = "cyan"
@@ -35,7 +41,7 @@ YELLOW = "yellow"
 RED = "red"
 ORANGE = "#ff9f1c"
 LOBSTER = "#ff6b35"
-DEFAULT_GATEWAY_PORT = 18789
+DEFAULT_GATEWAY_PORT = DEFAULT_MAESTRO_GATEWAY_PORT
 SESSION_META_REFRESH_SEC = 2.0
 ACTIVITY_WAIT_SLEEP_SEC = 0.7
 ACTIVITY_IDLE_SLEEP_SEC = 0.5
@@ -422,13 +428,45 @@ def _load_openclaw_config() -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _parse_gateway_port(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 1 <= value <= 65535 else None
+    if isinstance(value, str):
+        clean = value.strip()
+        if clean.isdigit():
+            parsed = int(clean)
+            if 1 <= parsed <= 65535:
+                return parsed
+    return None
+
+
+def _launchagent_path_for_profile() -> Path:
+    profile = str(resolve_openclaw_profile()).strip()
+    label = f"ai.openclaw.{profile}" if profile else "ai.openclaw.gateway"
+    return Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+
+
 def _resolve_gateway_port() -> int:
     env_value = str(os.environ.get("OPENCLAW_GATEWAY_PORT", "")).strip()
     if env_value.isdigit():
         return int(env_value)
 
-    plist_path = Path.home() / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
-    if plist_path.exists():
+    config = _load_openclaw_config()
+    gateway = config.get("gateway") if isinstance(config.get("gateway"), dict) else {}
+    configured_port = _parse_gateway_port(gateway.get("port"))
+    if configured_port is not None:
+        return configured_port
+
+    candidate_paths = [_launchagent_path_for_profile()]
+    generic_path = Path.home() / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
+    if generic_path not in candidate_paths:
+        candidate_paths.append(generic_path)
+
+    for plist_path in candidate_paths:
+        if not plist_path.exists():
+            continue
         try:
             with plist_path.open("rb") as handle:
                 payload = plistlib.load(handle)
@@ -446,7 +484,7 @@ def _resolve_gateway_port() -> int:
                     if value.isdigit():
                         return int(value)
         except Exception:
-            pass
+            continue
 
     return DEFAULT_GATEWAY_PORT
 

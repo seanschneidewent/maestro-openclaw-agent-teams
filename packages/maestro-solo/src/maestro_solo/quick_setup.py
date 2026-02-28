@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import plistlib
 import re
 import shutil
 import socket
@@ -272,6 +273,50 @@ def _port_is_available(port: int) -> bool:
         return False
 
 
+def _port_is_reachable(port: int, timeout: float = 0.5) -> bool:
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _launchagent_gateway_port(plist_path: Path) -> int | None:
+    if not plist_path.exists():
+        return None
+    try:
+        payload = plistlib.loads(plist_path.read_bytes())
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    program_args = payload.get("ProgramArguments")
+    if isinstance(program_args, list):
+        for idx, item in enumerate(program_args):
+            if str(item).strip() == "--port" and idx + 1 < len(program_args):
+                parsed = _parse_gateway_port(program_args[idx + 1])
+                if parsed is not None:
+                    return parsed
+
+    env = payload.get("EnvironmentVariables")
+    if isinstance(env, dict):
+        parsed_env = _parse_gateway_port(env.get("OPENCLAW_GATEWAY_PORT"))
+        if parsed_env is not None:
+            return parsed_env
+    return None
+
+
+def _pending_pairing_request_count(payload: object) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    for key in ("requests", "pending"):
+        candidate = payload.get(key)
+        if isinstance(candidate, list):
+            return len(candidate)
+    return 0
+
+
 def _resolve_maestro_gateway_port(config: dict[str, Any]) -> int:
     gateway = config.get("gateway") if isinstance(config.get("gateway"), dict) else {}
     configured = _parse_gateway_port(gateway.get("port"))
@@ -341,6 +386,15 @@ class QuickSetup:
 
     def _openclaw_cmd(self, args: list[str]) -> list[str]:
         return prepend_openclaw_profile_args(["openclaw", *args], profile=self.openclaw_profile)
+
+    def _launchagent_label(self) -> str:
+        profile = str(self.openclaw_profile or "").strip()
+        if profile:
+            return f"ai.openclaw.{profile}"
+        return "ai.openclaw.gateway"
+
+    def _launchagent_path(self) -> Path:
+        return Path.home() / "Library" / "LaunchAgents" / f"{self._launchagent_label()}.plist"
 
     def _run_openclaw_command(self, args: list[str], *, timeout: int = 120, capture: bool = True) -> tuple[bool, str]:
         return _run_command(self._openclaw_cmd(args), timeout=timeout, capture=capture)
@@ -822,11 +876,47 @@ class QuickSetup:
         return True
 
     def _gateway_running(self) -> tuple[bool, str]:
-        ok, out = self._run_openclaw_command(["status"], timeout=12)
+        ok, out = self._run_openclaw_command(["status", "--all"], timeout=15)
         if not ok:
             return False, out
         lowered = out.lower()
-        return ("gateway service" in lowered and "running" in lowered), out
+        service_running = "gateway service" in lowered and "running" in lowered
+        explicitly_unreachable = "gateway" in lowered and "unreachable" in lowered
+        reachable_port = _port_is_reachable(self.gateway_port)
+        healthy = service_running and not explicitly_unreachable and reachable_port
+        return healthy, out
+
+    def _ensure_gateway_service_port_alignment(self) -> bool:
+        if platform.system().lower() != "darwin":
+            return True
+        plist_path = self._launchagent_path()
+        current_port = _launchagent_gateway_port(plist_path)
+        if current_port == self.gateway_port:
+            return True
+
+        if current_port is None:
+            _info("Gateway service port was not detected; reinstalling service with configured port.")
+        else:
+            _warning(
+                f"Gateway service port mismatch (service={current_port}, expected={self.gateway_port}); "
+                "reinstalling service."
+            )
+
+        install_rc = self._run_openclaw_interactive(
+            ["gateway", "--port", str(self.gateway_port), "install", "--force"]
+        )
+        if install_rc != 0:
+            _warning("Gateway service reinstall returned non-zero during port alignment.")
+            return False
+
+        aligned_port = _launchagent_gateway_port(plist_path)
+        if aligned_port != self.gateway_port:
+            _warning(
+                "Gateway service port still mismatched after reinstall "
+                f"(service={aligned_port}, expected={self.gateway_port})."
+            )
+            return False
+        return True
 
     def _ensure_gateway_running_for_pairing(self) -> bool:
         def _wait_for_running(attempts: int) -> tuple[bool, str]:
@@ -839,6 +929,7 @@ class QuickSetup:
                 time.sleep(2)
             return False, last
 
+        self._ensure_gateway_service_port_alignment()
         _info("Starting OpenClaw gateway...")
         start_rc = self._run_openclaw_interactive(["gateway", "--port", str(self.gateway_port), "start"])
         running, last_status = _wait_for_running(4)
@@ -856,6 +947,8 @@ class QuickSetup:
         )
         if install_rc != 0:
             _warning("Gateway install returned non-zero; continuing with restart attempts.")
+        else:
+            self._ensure_gateway_service_port_alignment()
 
         restart_rc = self._run_openclaw_interactive(["gateway", "--port", str(self.gateway_port), "restart"])
         if restart_rc != 0:
@@ -876,6 +969,35 @@ class QuickSetup:
         restart_cmd = " ".join(self._openclaw_cmd(["gateway", "--port", str(self.gateway_port), "restart"]))
         _info(f"Try: {retry_cmd} && {restart_cmd}")
         return False
+
+    def _pairing_preflight(self):
+        status_ok, status_out = self._run_openclaw_command(["channels", "status", "--probe", "--json"], timeout=25)
+        if not status_ok:
+            _warning(f"Could not probe channel health before pairing: {status_out}")
+        else:
+            try:
+                status_payload = json.loads(status_out)
+            except Exception:
+                status_payload = {}
+            if isinstance(status_payload, dict):
+                _info("Channel health probe completed for Telegram pairing.")
+
+        pending_ok, pending_out = self._run_openclaw_command(["pairing", "list", "telegram", "--json"], timeout=20)
+        if not pending_ok:
+            _warning(f"Could not query pending Telegram pairing requests: {pending_out}")
+            return
+        try:
+            pending_payload = json.loads(pending_out)
+        except Exception:
+            pending_payload = {}
+        pending_count = _pending_pairing_request_count(pending_payload)
+        if pending_count > 0:
+            _success(f"Detected {pending_count} pending Telegram pairing request(s).")
+        else:
+            _info(
+                f"No pending Telegram pairing requests yet. Send a normal message to @{self.bot_username} "
+                "(not just /start), then continue."
+            )
 
     def _configure_openclaw_and_workspace_step(self) -> bool:
         console.print()
@@ -1095,6 +1217,7 @@ class QuickSetup:
 
         if not self._ensure_gateway_running_for_pairing():
             return False
+        self._pairing_preflight()
 
         while True:
             pairing_code = Prompt.ask(
@@ -1119,7 +1242,10 @@ class QuickSetup:
                     pending_payload = {}
                 requests = pending_payload.get("requests") if isinstance(pending_payload, dict) else []
                 if isinstance(requests, list) and not requests:
-                    _info(f"No pending Telegram pairing requests found. Send /start to @{self.bot_username} and retry.")
+                    _info(
+                        f"No pending Telegram pairing requests found. Send a normal message to @{self.bot_username} "
+                        "(not just /start) and retry."
+                    )
             retry = Confirm.ask(
                 f"  [{CYAN}]Retry pairing?[/]",
                 default=True,

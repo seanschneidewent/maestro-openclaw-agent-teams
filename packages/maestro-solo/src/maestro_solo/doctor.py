@@ -20,7 +20,12 @@ from .entitlements import has_capability, resolve_effective_entitlement
 from .profile import PROFILE_FLEET, PROFILE_SOLO, resolve_profile
 from maestro_engine.utils import load_json, save_json
 from .install_state import load_install_state, resolve_fleet_store_root, update_install_state
-from .openclaw_runtime import openclaw_config_path, openclaw_state_root, prepend_openclaw_profile_args
+from .openclaw_runtime import (
+    openclaw_config_path,
+    openclaw_state_root,
+    prepend_openclaw_profile_args,
+    resolve_openclaw_profile,
+)
 from .workspace_templates import (
     provider_env_key_for_model,
     render_company_agents_md,
@@ -105,7 +110,124 @@ def _infer_store_root(store_override: str | None, workspace_root: Path | None) -
 
 
 def _launchagent_path(home_dir: Path) -> Path:
-    return home_dir / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
+    profile = str(resolve_openclaw_profile()).strip()
+    label = f"ai.openclaw.{profile}" if profile else "ai.openclaw.gateway"
+    return home_dir / "Library" / "LaunchAgents" / f"{label}.plist"
+
+
+def _launchagent_label() -> str:
+    profile = str(resolve_openclaw_profile()).strip()
+    if profile:
+        return f"ai.openclaw.{profile}"
+    return "ai.openclaw.gateway"
+
+
+def _parse_gateway_port(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 1 <= value <= 65535 else None
+    if isinstance(value, str):
+        clean = value.strip()
+        if clean.isdigit():
+            parsed = int(clean)
+            if 1 <= parsed <= 65535:
+                return parsed
+    return None
+
+
+def _launchagent_gateway_port(plist_path: Path) -> int | None:
+    if not plist_path.exists():
+        return None
+    try:
+        payload = plistlib.loads(plist_path.read_bytes())
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    program_args = payload.get("ProgramArguments")
+    if isinstance(program_args, list):
+        for idx, item in enumerate(program_args):
+            if str(item).strip() == "--port" and idx + 1 < len(program_args):
+                parsed = _parse_gateway_port(program_args[idx + 1])
+                if parsed is not None:
+                    return parsed
+
+    env = payload.get("EnvironmentVariables")
+    if isinstance(env, dict):
+        parsed_env = _parse_gateway_port(env.get("OPENCLAW_GATEWAY_PORT"))
+        if parsed_env is not None:
+            return parsed_env
+    return None
+
+
+def _sync_gateway_service_port(home_dir: Path, config: dict[str, Any], fix: bool) -> DoctorCheck:
+    gateway = config.get("gateway")
+    gateway_cfg = gateway if isinstance(gateway, dict) else {}
+    expected_port = _parse_gateway_port(gateway_cfg.get("port"))
+    if expected_port is None:
+        return DoctorCheck(
+            name="gateway_port_alignment",
+            ok=True,
+            detail="gateway.port is unset; service port alignment skipped",
+            warning=True,
+        )
+
+    plist_path = _launchagent_path(home_dir)
+    if not plist_path.exists():
+        return DoctorCheck(
+            name="gateway_port_alignment",
+            ok=False,
+            detail=f"Gateway LaunchAgent plist missing: {plist_path}",
+            warning=True,
+        )
+
+    service_port = _launchagent_gateway_port(plist_path)
+    if service_port == expected_port:
+        return DoctorCheck(
+            name="gateway_port_alignment",
+            ok=True,
+            detail=f"gateway.port matches service port ({expected_port})",
+        )
+
+    if not fix:
+        return DoctorCheck(
+            name="gateway_port_alignment",
+            ok=False,
+            detail=(
+                f"gateway.port ({expected_port}) does not match service port ({service_port}). "
+                "Run maestro-solo doctor --fix."
+            ),
+            warning=True,
+        )
+
+    ok, out = _run_cmd(["openclaw", "gateway", "install", "--force", "--port", str(expected_port)], timeout=60)
+    if not ok:
+        return DoctorCheck(
+            name="gateway_port_alignment",
+            ok=False,
+            detail=f"Failed to reinstall gateway service with expected port: {out}",
+            warning=True,
+        )
+
+    aligned_port = _launchagent_gateway_port(plist_path)
+    if aligned_port != expected_port:
+        return DoctorCheck(
+            name="gateway_port_alignment",
+            ok=False,
+            detail=(
+                f"Gateway service reinstall completed but service port is still {aligned_port}; "
+                f"expected {expected_port}"
+            ),
+            warning=True,
+        )
+    return DoctorCheck(
+        name="gateway_port_alignment",
+        ok=True,
+        detail=f"Aligned gateway service port to {expected_port}",
+        fixed=True,
+    )
 
 
 def _sync_launchagent_env(
@@ -816,10 +938,11 @@ def _restart_gateway(home_dir: Path, fix: bool) -> DoctorCheck:
         plist_path = _launchagent_path(home_dir)
         if plist_path.exists():
             uid = str(os.getuid())
-            _run_cmd(["launchctl", "bootout", f"gui/{uid}/ai.openclaw.gateway"], timeout=15)
+            label = _launchagent_label()
+            _run_cmd(["launchctl", "bootout", f"gui/{uid}/{label}"], timeout=15)
             _run_cmd(["pkill", "-f", "openclaw-gateway"], timeout=8)
             _run_cmd(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)], timeout=15)
-            kick_ok, kick_out = _run_cmd(["launchctl", "kickstart", "-k", f"gui/{uid}/ai.openclaw.gateway"], timeout=15)
+            kick_ok, kick_out = _run_cmd(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"], timeout=15)
             if kick_ok:
                 return DoctorCheck(
                     name="gateway_restart",
@@ -843,11 +966,11 @@ def _restart_gateway(home_dir: Path, fix: bool) -> DoctorCheck:
 
 
 def _gateway_running() -> bool:
-    ok, out = _run_cmd(["openclaw", "status"], timeout=10)
+    ok, out = _run_cmd(["openclaw", "status", "--all"], timeout=15)
     if not ok:
         return False
     lowered = out.lower()
-    return "gateway service" in lowered and "running" in lowered
+    return ("gateway service" in lowered and "running" in lowered) and "unreachable" not in lowered
 
 
 def build_doctor_report(
@@ -959,6 +1082,7 @@ def build_doctor_report(
     gateway_token_check = _sync_gateway_auth_tokens(config, config_path=config_path, fix=fix)
     checks.append(gateway_token_check)
     checks.append(_sync_gateway_launchagent_token(fix=fix, token_check=gateway_token_check))
+    checks.append(_sync_gateway_service_port(home, config=config, fix=fix))
 
     if restart_gateway and fix:
         checks.append(_restart_gateway(home, fix=fix))

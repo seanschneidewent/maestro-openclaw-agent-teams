@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import plistlib
 import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -140,3 +142,43 @@ def test_start_gateway_log_stream_handles_missing_openclaw():
 
     assert process is None
     assert any("OpenClaw event stream unavailable" in line for line in logs.recent(4))
+
+
+def test_resolve_gateway_port_prefers_profile_config(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("OPENCLAW_GATEWAY_PORT", raising=False)
+    monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)
+
+    config_path = home / ".openclaw-maestro-solo" / "openclaw.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(json.dumps({"gateway": {"port": 19124}}), encoding="utf-8")
+
+    plist_path = home / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
+    plist_path.parent.mkdir(parents=True, exist_ok=True)
+    plist_path.write_bytes(plistlib.dumps({
+        "ProgramArguments": ["openclaw", "gateway", "--port", "18789"],
+        "EnvironmentVariables": {"OPENCLAW_GATEWAY_PORT": "18789"},
+    }))
+
+    assert monitor._resolve_gateway_port() == 19124
+
+
+def test_resolve_gateway_port_uses_profile_specific_launchagent(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("OPENCLAW_GATEWAY_PORT", raising=False)
+    monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)
+
+    profile_plist = home / "Library" / "LaunchAgents" / "ai.openclaw.maestro-solo.plist"
+    profile_plist.parent.mkdir(parents=True, exist_ok=True)
+    profile_plist.write_bytes(plistlib.dumps({
+        "ProgramArguments": ["openclaw", "gateway", "--port", "19125"],
+    }))
+
+    generic_plist = home / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
+    generic_plist.write_bytes(plistlib.dumps({
+        "ProgramArguments": ["openclaw", "gateway", "--port", "18789"],
+    }))
+
+    assert monitor._resolve_gateway_port() == 19125

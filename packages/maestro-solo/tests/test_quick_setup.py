@@ -229,6 +229,7 @@ def test_pairing_fails_fast_when_gateway_is_not_running(monkeypatch, tmp_path):
     runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
     runner.bot_username = "trace_bot"
     runner.gateway_port = 19133
+    monkeypatch.setattr(runner, "_ensure_gateway_service_port_alignment", lambda: True)
     assert runner._pair_telegram_required_step() is False
     assert calls[:4] == [
         ["openclaw", "--profile", "maestro-solo", "gateway", "--port", "19133", "start"],
@@ -236,6 +237,67 @@ def test_pairing_fails_fast_when_gateway_is_not_running(monkeypatch, tmp_path):
         ["openclaw", "--profile", "maestro-solo", "gateway", "--port", "19133", "restart"],
         ["openclaw", "--profile", "maestro-solo", "gateway", "--port", "19133", "start"],
     ]
+
+
+def test_gateway_running_requires_reachable_port(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    runner.gateway_port = 19124
+
+    monkeypatch.setattr(
+        runner,
+        "_run_openclaw_command",
+        lambda *args, **kwargs: (True, "Gateway service running; Gateway local · ws://127.0.0.1:19124"),
+    )
+    monkeypatch.setattr(quick_setup, "_port_is_reachable", lambda _port, timeout=0.5: False)
+
+    ok, _ = runner._gateway_running()
+    assert ok is False
+
+
+def test_gateway_running_rejects_unreachable_status(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    runner.gateway_port = 19124
+
+    monkeypatch.setattr(
+        runner,
+        "_run_openclaw_command",
+        lambda *args, **kwargs: (
+            True,
+            "Gateway service running; Gateway local · ws://127.0.0.1:19124 · unreachable (connect ECONNREFUSED)",
+        ),
+    )
+    monkeypatch.setattr(quick_setup, "_port_is_reachable", lambda _port, timeout=0.5: True)
+
+    ok, _ = runner._gateway_running()
+    assert ok is False
+
+
+def test_gateway_alignment_reinstalls_service_when_port_mismatch(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    runner = quick_setup.QuickSetup(company_name="Trace", replay=False)
+    runner.gateway_port = 19124
+    calls: list[list[str]] = []
+    observed = {"count": 0}
+
+    monkeypatch.setattr(quick_setup.platform, "system", lambda: "Darwin")
+
+    def _fake_launchagent_port(_path):
+        observed["count"] += 1
+        if observed["count"] == 1:
+            return 18789
+        return 19124
+
+    monkeypatch.setattr(quick_setup, "_launchagent_gateway_port", _fake_launchagent_port)
+
+    def _fake_interactive(args: list[str], *, timeout: int = 0) -> int:
+        calls.append(list(args))
+        return 0
+
+    monkeypatch.setattr(runner, "_run_openclaw_interactive", _fake_interactive)
+    assert runner._ensure_gateway_service_port_alignment() is True
+    assert calls == [["gateway", "--port", "19124", "install", "--force"]]
 
 
 def test_quick_setup_blocks_shared_openclaw_writes_without_explicit_write_override(monkeypatch, tmp_path):
