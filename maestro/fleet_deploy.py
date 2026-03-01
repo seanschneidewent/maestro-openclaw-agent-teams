@@ -354,12 +354,22 @@ def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[st
     state_dir = _fleet_state_dir()
     pid_path = state_dir / "serve.pid.json"
     log_path = state_dir / "serve.log"
+    requested_port = int(port)
 
     if pid_path.exists():
         payload = load_json(pid_path, default={})
         running_pid = int(payload.get("pid", 0)) if isinstance(payload, dict) else 0
         if _pid_running(running_pid):
-            return {"ok": True, "already_running": True, "pid": running_pid, "pid_path": str(pid_path), "log_path": str(log_path)}
+            running_port = int(payload.get("port", 0)) if isinstance(payload, dict) else 0
+            return {
+                "ok": True,
+                "already_running": True,
+                "pid": running_pid,
+                "port": running_port or requested_port,
+                "port_mismatch": bool(running_port and running_port != requested_port),
+                "pid_path": str(pid_path),
+                "log_path": str(log_path),
+            }
         pid_path.unlink(missing_ok=True)
 
     cmd = [
@@ -400,7 +410,15 @@ def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[st
             "command": cmd,
         },
     )
-    return {"ok": True, "already_running": False, "pid": int(proc.pid), "pid_path": str(pid_path), "log_path": str(log_path)}
+    return {
+        "ok": True,
+        "already_running": False,
+        "pid": int(proc.pid),
+        "port": int(port),
+        "port_mismatch": False,
+        "pid_path": str(pid_path),
+        "log_path": str(log_path),
+    }
 
 
 def _verify_command_center_http(port: int, timeout_seconds: int = 25) -> bool:
@@ -608,6 +626,12 @@ def run_deploy(
         if not detached.get("ok"):
             console.print(f"[red]Failed to start detached Fleet server: {detached.get('detail', 'unknown error')}[/]")
             return 1
+        detached_port = int(detached.get("port", 0)) if isinstance(detached.get("port"), int | float | str) else 0
+        if detached_port and detached_port != effective_port:
+            effective_port = detached_port
+            console.print(
+                f"[yellow]Reusing existing Fleet server on port {effective_port} from PID state.[/]"
+            )
         if not _verify_command_center_http(effective_port):
             console.print(
                 "[red]Fleet server process started but command-center health check did not pass in time.[/]\n"

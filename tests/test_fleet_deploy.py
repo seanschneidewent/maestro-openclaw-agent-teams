@@ -187,3 +187,85 @@ def test_run_deploy_uses_shifted_port_when_requested_port_busy(monkeypatch, tmp_
     )
     assert code == 0
     assert captured["port"] == 3011
+
+
+def test_run_deploy_reuses_existing_server_port_from_pid_state(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    config_path = home / ".openclaw" / "openclaw.json"
+    config = {
+        "env": {},
+        "agents": {
+            "list": [
+                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.2"},
+            ]
+        },
+        "channels": {"telegram": {"enabled": True, "accounts": {}}},
+    }
+    _write_json(config_path, config)
+
+    store_root = tmp_path / "store"
+    checked_port: dict[str, int] = {}
+
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_prereqs",
+        lambda require_tailscale: fleet_deploy.PrereqResult(ok=True, failures=[], warnings=[]),
+    )
+    monkeypatch.setattr(fleet_deploy, "set_profile", lambda *args, **kwargs: {"profile": "fleet"})
+    monkeypatch.setattr(fleet_deploy, "_ensure_openclaw_config_exists", lambda *args, **kwargs: config_path)
+    monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
+    monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_configure_company_openclaw",
+        lambda **kwargs: {
+            "config_path": str(config_path),
+            "workspace_root": str(tmp_path / "workspace-maestro"),
+            "provider_env_key": "OPENAI_API_KEY",
+            "binding_changes": [],
+        },
+    )
+    monkeypatch.setattr(fleet_deploy, "resolve_fleet_store_root", lambda _store: store_root)
+    monkeypatch.setattr(fleet_deploy, "save_install_state", lambda payload: None)
+    monkeypatch.setattr(fleet_deploy, "run_doctor", lambda **kwargs: 0)
+    monkeypatch.setattr(fleet_deploy, "_resolve_deploy_port", lambda preferred_port, max_attempts=20: (3011, True))
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_start_detached_server",
+        lambda **kwargs: {
+            "ok": True,
+            "already_running": True,
+            "pid": 77777,
+            "port": 3010,
+            "port_mismatch": True,
+            "pid_path": str(tmp_path / "serve.pid.json"),
+            "log_path": str(tmp_path / "serve.log"),
+        },
+    )
+    def _fake_verify_command_center_http(port: int, timeout_seconds: int = 25) -> bool:
+        checked_port["port"] = int(port)
+        return True
+
+    monkeypatch.setattr(fleet_deploy, "_verify_command_center_http", _fake_verify_command_center_http)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "resolve_network_urls",
+        lambda web_port, route_path="/command-center": {
+            "recommended_url": f"http://localhost:{web_port}{route_path}",
+            "localhost_url": f"http://localhost:{web_port}{route_path}",
+            "tailnet_url": "",
+        },
+    )
+
+    code = fleet_deploy.run_deploy(
+        company_name="TestCo",
+        model="openai/gpt-5.2",
+        api_key="sk-test-openai-key",
+        telegram_token="123456:ABCDEF",
+        port=3000,
+        non_interactive=True,
+        skip_remote_validation=True,
+        start_services=True,
+    )
+    assert code == 0
+    assert checked_port["port"] == 3010
