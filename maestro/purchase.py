@@ -17,7 +17,6 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
 from .control_plane import (
-    build_purchase_status,
     create_project_node,
     ensure_telegram_account_bindings,
     project_control_payload,
@@ -25,7 +24,13 @@ from .control_plane import (
     sync_fleet_registry,
 )
 from .install_state import resolve_fleet_store_root
-from .license import LicenseError, generate_project_key, validate_project_key
+from .license import (
+    LicenseError,
+    generate_project_key,
+    stamp_knowledge_store,
+    validate_project_key,
+)
+from .openclaw_guard import ensure_openclaw_override_allowed
 from .utils import load_json, save_json, slugify
 from .workspace_templates import provider_env_key_for_model, render_workspace_env
 
@@ -39,7 +44,16 @@ MODEL_CHOICES = {
     "4": ("anthropic/claude-opus-4-6", "ANTHROPIC_API_KEY"),
 }
 
-DEFAULT_PROJECT_NODE_PRICE_USD = 49
+VERTEX_API_KEY_RE = re.compile(r"^AIza[0-9A-Za-z_-]{24,}$")
+
+
+def _looks_like_vertex_api_key(value: str) -> bool:
+    return bool(VERTEX_API_KEY_RE.match(str(value or "").strip()))
+
+
+def _looks_like_google_access_token(value: str) -> bool:
+    token = str(value or "").strip()
+    return token.startswith("ya29.") or token.startswith("eyJ")
 
 
 def _mask_secret(value: str) -> str:
@@ -94,10 +108,20 @@ def _validate_api_key(provider_env_key: str, key: str) -> tuple[bool, str]:
             )
             return response.status_code != 401, f"Anthropic status={response.status_code}"
         if provider_env_key == "GEMINI_API_KEY":
+            if _looks_like_google_access_token(key):
+                token_response = httpx.get(
+                    "https://oauth2.googleapis.com/tokeninfo",
+                    params={"access_token": key},
+                    timeout=10,
+                )
+                if token_response.status_code == 200:
+                    return True, f"Vertex token status={token_response.status_code}"
             response = httpx.get(
                 f"https://generativelanguage.googleapis.com/v1/models?key={key}",
                 timeout=10,
             )
+            if response.status_code == 403 and _looks_like_vertex_api_key(key):
+                return True, "Vertex API key accepted (Developer API check returned 403)"
             return response.status_code == 200, f"Gemini status={response.status_code}"
     except Exception as exc:
         return False, str(exc)
@@ -262,8 +286,6 @@ def _update_openclaw_for_project(
         "dmPolicy": "pairing",
         "groupPolicy": "allowlist",
         "streamMode": "partial",
-        "username": telegram_bot_username.strip(),
-        "display_name": telegram_bot_display_name.strip(),
     }
     binding_changes = ensure_telegram_account_bindings(config)
 
@@ -416,6 +438,8 @@ def run_purchase(
     json_output: bool = False,
     non_interactive: bool = False,
     skip_remote_validation: bool = False,
+    local_license_mode: bool = False,
+    allow_openclaw_override: bool = False,
 ) -> int:
     _, config_path = _load_openclaw_config()
     if not config_path.exists():
@@ -423,11 +447,17 @@ def run_purchase(
         return 1
 
     config, _ = _load_openclaw_config()
+    safe_override, override_message = ensure_openclaw_override_allowed(
+        config,
+        allow_override=allow_openclaw_override,
+    )
+    if not safe_override:
+        console.print(f"[red]{override_message}[/]")
+        return 1
     company = _resolve_company_agent(config)
     company_model = str(company.get("model", "google/gemini-3-pro-preview")).strip()
     store_root = resolve_fleet_store_root(store_override)
     registry = sync_fleet_registry(store_root, dry_run=dry_run)
-    purchase_status = build_purchase_status(store_root, registry=registry)
 
     if not project_name:
         if non_interactive:
@@ -489,7 +519,12 @@ def run_purchase(
         if non_interactive:
             console.print(f"[red]Missing API key for {provider_env_key}[/]")
             return 1
-        selected_api_key = Prompt.ask(f"Paste {provider_env_key}").strip()
+        prompt_label = (
+            "Paste GEMINI_API_KEY (Gemini API or Vertex AI key)"
+            if provider_env_key == "GEMINI_API_KEY"
+            else f"Paste {provider_env_key}"
+        )
+        selected_api_key = Prompt.ask(prompt_label).strip()
 
     if provider_env_key and selected_api_key and not skip_remote_validation:
         ok, detail = _validate_api_key(provider_env_key, selected_api_key)
@@ -535,50 +570,31 @@ def run_purchase(
         else:
             console.print(f"[green]Telegram verified: @{bot_username}[/]")
 
-    # Licensing gate
-    requires_paid = bool(purchase_status.get("requires_paid_license"))
+    # Fleet mode is always local/offline licensing with no payment gating.
+    local_mode = True
     selected_license = maestro_license_key.strip() if isinstance(maestro_license_key, str) else ""
     license_result: dict[str, Any] | None = None
+    license_stamp: dict[str, Any] | None = None
     planned_store_path = (store_root / project_slug).resolve()
-    if requires_paid:
-        billing_state, has_card = _ensure_card_on_file(non_interactive=non_interactive, dry_run=dry_run)
-        if not has_card:
-            console.print(
-                "[red]Paid project slot requires a card on file before Maestro license activation.[/]"
-            )
-            return 1
-
-        if not non_interactive:
-            last4 = billing_state.get("card_last4")
-            if isinstance(last4, str) and last4.strip():
-                console.print(f"[green]Card on file confirmed (•••• {last4}).[/]")
-            approved = Confirm.ask(
-                f"Buy and activate a new Maestro node for ${DEFAULT_PROJECT_NODE_PRICE_USD}?",
-                default=True,
-            )
-            if not approved:
-                console.print("[yellow]Purchase cancelled.[/]")
-                return 1
-
-        # Manual override kept for internal/dev fallback.
-        if not selected_license:
-            company_id = _derive_company_id(company)
-            project_id = _derive_project_id(project_slug)
-            selected_license = generate_project_key(
-                company_id=company_id,
-                project_id=project_id,
-                project_slug=project_slug,
-                knowledge_store_path=str(planned_store_path),
-            )
-        try:
-            license_result = validate_project_key(
-                selected_license,
-                project_slug=project_slug,
-                knowledge_store_path=str(planned_store_path),
-            )
-        except LicenseError as exc:
-            console.print(f"[red]License validation failed: {exc}[/]")
-            return 1
+    # Manual override kept for internal/dev fallback.
+    if not selected_license:
+        company_id = _derive_company_id(company)
+        project_id = _derive_project_id(project_slug)
+        selected_license = generate_project_key(
+            company_id=company_id,
+            project_id=project_id,
+            project_slug=project_slug,
+            knowledge_store_path=str(planned_store_path),
+        )
+    try:
+        license_result = validate_project_key(
+            selected_license,
+            project_slug=project_slug,
+            knowledge_store_path=str(planned_store_path),
+        )
+    except LicenseError as exc:
+        console.print(f"[red]License validation failed: {exc}[/]")
+        return 1
 
     result = create_project_node(
         store_root=store_root,
@@ -620,6 +636,15 @@ def run_purchase(
         project_store_path=project_store_path,
         dry_run=dry_run,
     )
+    if license_result and selected_license and not dry_run:
+        try:
+            license_stamp = stamp_knowledge_store(
+                str(project_store_path),
+                selected_license,
+                project_slug,
+            )
+        except LicenseError as exc:
+            console.print(f"[yellow]Project created, but license stamping failed: {exc}[/]")
     gateway_restart = _restart_openclaw_gateway(dry_run=dry_run)
     if gateway_restart.get("ok"):
         console.print("[green]OpenClaw gateway restarted with project bot config.[/]")
@@ -649,29 +674,31 @@ def run_purchase(
         "project_store_path": str(project_store_path),
         "model": selected_model,
         "provider_env_key": provider_env_key,
-        "maestro_license_required": requires_paid,
+        "maestro_license_required": True,
         "maestro_license_activated": bool(license_result),
+        "maestro_license_mode": "local" if local_mode else "standard",
+        "maestro_license_stamped": bool(license_stamp),
         "openclaw_update": openclaw_update,
         "gateway_restart": gateway_restart,
         "telegram_pairing": pairing_result,
         "ingest_command": control.get("ingest", {}).get("command") if isinstance(control.get("ingest"), dict) else "",
         "command_center_url": network["recommended_url"],
-        "purchase_command": "maestro-purchase",
+        "project_create_command": "maestro-fleet project create",
     }
 
     if json_output:
         console.print_json(json.dumps(output))
         return 0
 
-    tier = "paid" if requires_paid else "free"
     console.print(Panel(
         "\n".join([
-            f"Project Maestro provisioned ({tier} slot)",
+            "Project Maestro provisioned",
             f"Project: {project_name} ({project_slug})",
             f"Assignee: {assignee}",
             f"Store: {project_store_path}",
             f"Model: {selected_model}",
-            f"Maestro License: {'Auto-activated' if bool(license_result) else 'Not required (free slot)'}",
+            f"Maestro License: {'Activated' if bool(license_result) else 'Not activated'}",
+            "License Mode: Local/Offline",
             f"Gateway Reload: {'OK' if gateway_restart.get('ok') else 'Needs manual restart'}",
             (
                 f"Telegram Pairing: {'Approved' if pairing_result.get('approved') else 'Pending'}"
@@ -682,7 +709,7 @@ def run_purchase(
             f"Ingest command:",
             output["ingest_command"] or "maestro ingest \"/abs/path/to/pdfs\"",
         ]),
-        title="maestro-purchase",
+        title="maestro-fleet project create",
         border_style="cyan",
     ))
     return 0
@@ -711,28 +738,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--skip-remote-validation", action="store_true")
+    parser.add_argument("--local", "--offline", dest="local_license_mode", action="store_true")
+    parser.add_argument("--allow-openclaw-override", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None):
-    console.print("[yellow][deprecated][/yellow] `maestro-purchase` is an alias. Use `maestro fleet purchase`.")
-    args = build_parser().parse_args(argv)
-    code = run_purchase(
-        project_name=args.project_name,
-        assignee=args.assignee,
-        superintendent=args.superintendent,
-        model=args.model,
-        api_key=args.api_key,
-        telegram_token=args.telegram_token,
-        pairing_code=args.pairing_code,
-        maestro_license_key=args.maestro_license_key,
-        store_override=args.store,
-        dry_run=bool(args.dry_run),
-        json_output=bool(args.json),
-        non_interactive=bool(args.non_interactive),
-        skip_remote_validation=bool(args.skip_remote_validation),
+    console.print(
+        "[red]`maestro-purchase` is disabled in Fleet mode.[/]\n"
+        "[bold white]Use:[/] `maestro-fleet project create`"
     )
-    raise SystemExit(code)
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":

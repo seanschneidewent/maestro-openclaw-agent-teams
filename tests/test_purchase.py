@@ -1,4 +1,4 @@
-"""Tests for maestro-purchase workflow."""
+"""Tests for Fleet project provisioning workflow."""
 
 from __future__ import annotations
 
@@ -29,6 +29,39 @@ def _base_config(workspace: Path) -> dict:
         },
         "channels": {"telegram": {"enabled": True, "accounts": {}}},
     }
+
+
+def test_validate_api_key_accepts_vertex_api_key_on_gemini_403(monkeypatch):
+    class _Response:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    monkeypatch.setattr(
+        purchase.httpx,
+        "get",
+        lambda *args, **kwargs: _Response(403),
+    )
+
+    ok, detail = purchase._validate_api_key("GEMINI_API_KEY", "AIza" + ("A" * 35))
+    assert ok is True
+    assert "Vertex API key accepted" in detail
+
+
+def test_validate_api_key_accepts_vertex_access_token(monkeypatch):
+    class _Response:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    def _fake_get(url: str, *args, **kwargs):
+        if "oauth2.googleapis.com/tokeninfo" in url:
+            return _Response(200)
+        return _Response(401)
+
+    monkeypatch.setattr(purchase.httpx, "get", _fake_get)
+
+    ok, detail = purchase._validate_api_key("GEMINI_API_KEY", "ya29.test-vertex-token")
+    assert ok is True
+    assert "Vertex token status=200" in detail
 
 
 def test_run_purchase_non_interactive_dry_run(monkeypatch, tmp_path: Path):
@@ -62,7 +95,7 @@ def test_run_purchase_non_interactive_dry_run(monkeypatch, tmp_path: Path):
     assert not (store_root / "alpha-build").exists()
 
 
-def test_run_purchase_requires_license_after_free_slot(monkeypatch, tmp_path: Path):
+def test_run_purchase_has_no_payment_gate_after_free_slot(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     workspace = home / ".openclaw" / "workspace-maestro"
     config_path = home / ".openclaw" / "openclaw.json"
@@ -90,10 +123,10 @@ def test_run_purchase_requires_license_after_free_slot(monkeypatch, tmp_path: Pa
         dry_run=True,
         skip_remote_validation=True,
     )
-    assert code == 1
+    assert code == 0
 
 
-def test_run_purchase_paid_slot_auto_activates_maestro_license(monkeypatch, tmp_path: Path):
+def test_run_purchase_auto_activates_maestro_license(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     workspace = home / ".openclaw" / "workspace-maestro"
     config_path = home / ".openclaw" / "openclaw.json"
@@ -120,6 +153,38 @@ def test_run_purchase_paid_slot_auto_activates_maestro_license(monkeypatch, tmp_
         non_interactive=True,
         dry_run=True,
         skip_remote_validation=True,
+    )
+    assert code == 0
+
+
+def test_run_purchase_local_mode_bypasses_card_requirement(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    workspace = home / ".openclaw" / "workspace-maestro"
+    config_path = home / ".openclaw" / "openclaw.json"
+    config = _base_config(workspace)
+    _write_json(config_path, config)
+
+    store_root = tmp_path / "store-root"
+    existing = store_root / "existing-project"
+    existing.mkdir(parents=True, exist_ok=True)
+    _write_json(existing / "project.json", {"name": "Existing Project", "slug": "existing-project"})
+
+    monkeypatch.setattr(
+        purchase,
+        "_load_openclaw_config",
+        lambda: (config, config_path),
+    )
+    monkeypatch.setattr(purchase, "resolve_fleet_store_root", lambda _: store_root)
+    monkeypatch.setattr(purchase, "_load_billing_state", lambda: {"card_on_file": False})
+
+    code = purchase.run_purchase(
+        project_name="Second Project",
+        assignee="Sarah",
+        telegram_token="123456:ABCDEF",
+        non_interactive=True,
+        dry_run=True,
+        skip_remote_validation=True,
+        local_license_mode=True,
     )
     assert code == 0
 
@@ -176,6 +241,7 @@ def test_run_purchase_preserves_registered_project_agent(monkeypatch, tmp_path: 
             "workspace": str(workspace / "projects" / "alpha-build"),
         })
         config_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        (store_root / "alpha-build").mkdir(parents=True, exist_ok=True)
         return {
             "ok": True,
             "project": {"project_store_path": str(store_root / "alpha-build")},
@@ -204,6 +270,8 @@ def test_run_purchase_preserves_registered_project_agent(monkeypatch, tmp_path: 
     assert "maestro-company" in agent_ids
     assert "maestro-project-alpha-build" in agent_ids
     assert "maestro-project-alpha-build" in saved.get("channels", {}).get("telegram", {}).get("accounts", {})
+    project_account = saved.get("channels", {}).get("telegram", {}).get("accounts", {}).get("maestro-project-alpha-build", {})
+    assert set(project_account.keys()) == {"botToken", "dmPolicy", "groupPolicy", "streamMode"}
     bindings = saved.get("bindings", [])
     assert {
         "agentId": "maestro-project-alpha-build",
