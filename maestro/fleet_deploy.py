@@ -506,7 +506,7 @@ def run_deploy(
         if existing_provider_key and not non_interactive:
             use_existing = Confirm.ask(
                 f"Use existing {provider_env_key} from OpenClaw config ({_mask_secret(existing_provider_key)})?",
-                default=True,
+                default=False,
             )
             if use_existing:
                 selected_api_key = existing_provider_key
@@ -519,6 +519,9 @@ def run_deploy(
         return 1
     if provider_env_key and not selected_api_key:
         selected_api_key = Prompt.ask(prompt_label).strip()
+        if not selected_api_key:
+            console.print(f"[red]{provider_env_key} is required to continue.[/]")
+            return 1
     if provider_env_key and selected_api_key and not skip_remote_validation:
         ok_key, detail_key = _validate_api_key(provider_env_key, selected_api_key)
         if not ok_key and used_existing_api_key:
@@ -530,6 +533,9 @@ def run_deploy(
                 selected_api_key = replacement
                 used_existing_api_key = False
                 ok_key, detail_key = _validate_api_key(provider_env_key, selected_api_key)
+            else:
+                console.print(f"[red]{provider_env_key} is required to continue.[/]")
+                return 1
         if not ok_key:
             if non_interactive:
                 console.print(f"[red]API key validation failed: {detail_key}[/]")
