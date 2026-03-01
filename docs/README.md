@@ -31,6 +31,8 @@ This is the canonical documentation entrypoint for the repository.
 - [Enable Fleet](fleet/enable.md)
 - [Fleet Command Center](fleet/command-center.md)
 - [Fleet Purchase Workflow](fleet/purchase.md)
+- [Fleet Deploy Playbook](fleet/deploy-playbook.md)
+- [Fleet Release + Launcher Runbook](fleet/release-launcher.md)
 
 ## API and Storage Contracts
 

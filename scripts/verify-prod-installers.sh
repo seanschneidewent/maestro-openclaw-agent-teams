@@ -8,13 +8,14 @@ usage() {
 Verify production installer launcher endpoints.
 
 Usage:
-  scripts/verify-prod-installers.sh [--billing-url URL] [--expect-version X.Y.Z]
+  scripts/verify-prod-installers.sh [--billing-url URL] [--expect-version X.Y.Z] [--check-fleet]
 
 Checks:
   - /install, /free, /pro endpoints are reachable
   - MAESTRO_INSTALL_AUTO is enabled
   - MAESTRO_OPENCLAW_PROFILE is maestro-solo
   - /free intent=free; /install and /pro intent=pro
+  - Optional: /fleet endpoint and Fleet launcher vars
   - Optional release version pin check against wheel URLs
 EOF
 }
@@ -55,6 +56,7 @@ main() {
 
   local billing_url="$BILLING_URL_DEFAULT"
   local expect_version=""
+  local check_fleet="0"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -65,6 +67,10 @@ main() {
       --expect-version)
         expect_version="${2:-}"
         shift 2
+        ;;
+      --check-fleet)
+        check_fleet="1"
+        shift
         ;;
       -h|--help)
         usage
@@ -81,11 +87,18 @@ main() {
   local install_script
   local free_script
   local pro_script
+  local fleet_script=""
   install_script="$(fetch_script "$billing_url/install")"
   free_script="$(fetch_script "$billing_url/free")"
   pro_script="$(fetch_script "$billing_url/pro")"
+  if [[ "$check_fleet" == "1" ]]; then
+    fleet_script="$(fetch_script "$billing_url/fleet")"
+  fi
 
   echo "[verify-installers] fetched /install /free /pro from $billing_url"
+  if [[ "$check_fleet" == "1" ]]; then
+    echo "[verify-installers] fetched /fleet from $billing_url"
+  fi
 
   for name in install free pro; do
     local payload=""
@@ -115,23 +128,43 @@ main() {
     [[ "$flow" == "install" ]] || fail "/$name flow expected 'install', got '$flow'"
   done
 
+  if [[ "$check_fleet" == "1" ]]; then
+    assert_contains "$fleet_script" "export MAESTRO_INSTALL_AUTO='1'" "fleet"
+    assert_contains "$fleet_script" "export MAESTRO_FLEET_PACKAGE_SPEC='" "fleet"
+    assert_contains "$fleet_script" "export MAESTRO_FLEET_REQUIRE_TAILSCALE='" "fleet"
+    assert_contains "$fleet_script" "export MAESTRO_FLEET_DEPLOY='" "fleet"
+    assert_contains "$fleet_script" "install-maestro-fleet.sh" "fleet"
+    assert_contains "$fleet_script" "install-maestro-fleet-linux.sh" "fleet"
+  fi
+
   if [[ -n "$expect_version" ]]; then
     local tag="v${expect_version#v}"
     local expected_marker="/releases/download/$tag/"
     assert_contains "$install_script" "$expected_marker" "install"
     assert_contains "$free_script" "$expected_marker" "free"
     assert_contains "$pro_script" "$expected_marker" "pro"
+    if [[ "$check_fleet" == "1" ]]; then
+      local fleet_tag="fleet-v${expect_version#v}"
+      local expected_fleet_marker="/releases/download/$fleet_tag/"
+      assert_contains "$fleet_script" "$expected_fleet_marker" "fleet"
+    fi
     echo "[verify-installers] release marker check passed for $tag"
   fi
 
-  local install_sha free_sha pro_sha
+  local install_sha free_sha pro_sha fleet_sha
   install_sha="$(echo "$install_script" | shasum -a 256 | awk '{print $1}')"
   free_sha="$(echo "$free_script" | shasum -a 256 | awk '{print $1}')"
   pro_sha="$(echo "$pro_script" | shasum -a 256 | awk '{print $1}')"
+  if [[ "$check_fleet" == "1" ]]; then
+    fleet_sha="$(echo "$fleet_script" | shasum -a 256 | awk '{print $1}')"
+  fi
 
   echo "[verify-installers] /install sha256: $install_sha"
   echo "[verify-installers] /free    sha256: $free_sha"
   echo "[verify-installers] /pro     sha256: $pro_sha"
+  if [[ "$check_fleet" == "1" ]]; then
+    echo "[verify-installers] /fleet   sha256: $fleet_sha"
+  fi
   echo "[verify-installers] PASS"
 }
 

@@ -89,6 +89,17 @@ Fleet UI:
 
 - `http://localhost:3000/command-center`
 
+Fleet remote install (no source checkout on customer machine):
+
+```bash
+MAESTRO_FLEET_PACKAGE_SPEC="<root_wheel_url> <fleet_wheel_url>" \
+MAESTRO_INSTALL_BASE_URL="<pinned_install_script_url>" \
+curl -fsSL "<pinned_linux_wrapper_script_url>" | bash
+```
+
+Use `bash scripts/release-maestro-fleet.sh <version>` to publish Fleet wheels and generate pinned install commands.
+`release-maestro-fleet.sh` also updates Railway billing vars for `/fleet` and smoke-checks the launcher endpoint.
+
 ## Documentation
 
 Primary documentation index:

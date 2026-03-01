@@ -329,6 +329,40 @@ def test_installer_launcher_install_defaults_to_pro_intent(monkeypatch):
     assert "export MAESTRO_INSTALL_INTENT='pro'" in response.text
 
 
+def test_installer_launcher_fleet_requires_package_spec(monkeypatch):
+    monkeypatch.delenv("MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC", raising=False)
+    monkeypatch.delenv("MAESTRO_FLEET_PACKAGE_SPEC", raising=False)
+
+    client = TestClient(billing_service.app)
+    response = client.get("/fleet")
+    assert response.status_code == 503
+    assert "missing_fleet_package_spec" in str(response.json().get("detail", ""))
+
+
+def test_installer_launcher_fleet_renders_script(monkeypatch):
+    monkeypatch.setenv(
+        "MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC",
+        "https://downloads.example.com/maestro_conagent_teams.whl https://downloads.example.com/maestro_fleet.whl",
+    )
+
+    client = TestClient(billing_service.app)
+    response = client.get(
+        "/install/fleet",
+        headers={"x-forwarded-proto": "https", "x-forwarded-host": "get.maestro.run"},
+    )
+    assert response.status_code == 200
+    assert (
+        "export MAESTRO_FLEET_PACKAGE_SPEC='https://downloads.example.com/maestro_conagent_teams.whl "
+        "https://downloads.example.com/maestro_fleet.whl'"
+    ) in response.text
+    assert "export MAESTRO_INSTALL_AUTO='1'" in response.text
+    assert "export MAESTRO_FLEET_REQUIRE_TAILSCALE='1'" in response.text
+    assert "export MAESTRO_FLEET_DEPLOY='1'" in response.text
+    assert "export MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
+    assert "install-maestro-fleet.sh" in response.text
+    assert "install-maestro-fleet-linux.sh" in response.text
+
+
 def test_checkout_success_and_cancel_pages_render():
     client = TestClient(billing_service.app)
 

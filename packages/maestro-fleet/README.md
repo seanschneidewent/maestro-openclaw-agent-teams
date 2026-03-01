@@ -14,10 +14,33 @@ Current staging behavior:
 pip install -e /absolute/path/to/repo -e /absolute/path/to/repo/packages/maestro-fleet
 ```
 
+## Remote install (customer machine)
+
+Install from pinned wheel URLs (no repo checkout):
+
+```bash
+MAESTRO_FLEET_PACKAGE_SPEC="<root_wheel_url> <fleet_wheel_url>" \
+MAESTRO_INSTALL_BASE_URL="<pinned_install_script_url>" \
+curl -fsSL "<pinned_linux_wrapper_script_url>" | bash
+```
+
+Release helper:
+
+```bash
+bash scripts/release-maestro-fleet.sh <version>
+```
+
+The release helper now:
+- publishes Fleet wheels to GitHub Release tag `fleet-v<version>`
+- updates Railway billing vars for `/fleet` launcher (`MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC`)
+- waits for Railway deploy success and smoke-checks `GET /fleet`
+
 ## Commands
 
 - `maestro-fleet enable`
 - `maestro-fleet status`
-- `maestro-fleet purchase`
+- `maestro-fleet project create`
+- `maestro-fleet license generate`
+- `maestro-fleet deploy`
 - `maestro-fleet command-center`
 - `maestro-fleet up --tui`

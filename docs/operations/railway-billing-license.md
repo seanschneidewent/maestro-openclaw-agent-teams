@@ -76,8 +76,12 @@ Optional:
 - `MAESTRO_STRIPE_BILLING_PORTAL_RETURN_URL` (default `<billing-base-url>/upgrade`)
 - `MAESTRO_AUTH_ALLOWED_DOMAINS` (comma-separated Google Workspace domain allow-list)
 - `MAESTRO_ENABLE_DEV_ENDPOINTS=0` (keep disabled in production)
-- `MAESTRO_INSTALLER_SCRIPT_BASE_URL` (override script source for `/free` and `/pro` launchers)
+- `MAESTRO_INSTALLER_SCRIPT_BASE_URL` (override script source for `/free`, `/pro`, and `/fleet` launchers)
 - `MAESTRO_INSTALLER_FREE_SCRIPT_URL` / `MAESTRO_INSTALLER_PRO_SCRIPT_URL` (explicit launcher script URLs)
+- `MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC` (private Fleet wheel pip args for `/fleet` launcher)
+- `MAESTRO_INSTALLER_FLEET_SCRIPT_URL` / `MAESTRO_INSTALLER_FLEET_BASE_SCRIPT_URL` (explicit Fleet wrapper/base installer URLs)
+- `MAESTRO_INSTALLER_FLEET_REQUIRE_TAILSCALE` (default `1`)
+- `MAESTRO_INSTALLER_FLEET_DEPLOY` (default `1`)
 
 Set in license service:
 
@@ -144,6 +148,7 @@ Billing service now exposes clean installer launchers:
 ```bash
 curl -fsSL https://<your-billing-domain>/free | bash
 curl -fsSL https://<your-billing-domain>/pro | bash
+curl -fsSL https://<your-billing-domain>/fleet | bash
 ```
 
 Recommended branded UX:
@@ -152,27 +157,36 @@ Recommended branded UX:
 - Publish:
   - `curl -fsSL https://get.maestro.run/free | bash`
   - `curl -fsSL https://get.maestro.run/pro | bash`
+  - `curl -fsSL https://get.maestro.run/fleet | bash`
 
 ## Automated Release + Deploy
 
-Use the release pipeline script to build wheels, publish GitHub release assets, update Railway installer vars, wait for deploy success, and smoke-check `/free` + `/pro`:
+Use the release pipeline script to build wheels, publish GitHub release assets, update Railway installer vars, wait for deploy success, and smoke-check `/free` + `/pro` (and `/fleet` when Fleet vars are configured):
 
 ```bash
 bash scripts/release-maestro-solo.sh 0.1.4
 ```
 
+Fleet release + launcher pin/update:
+
+```bash
+bash scripts/release-maestro-fleet.sh 0.1.0
+```
+
 What it validates:
 
 - Package versions are synchronized in both `pyproject.toml` and `__init__.py`.
-- Wheels for the requested version exist and are uploaded to release tag `v<version>`.
+- Solo wheels are uploaded to release tag `v<version>`; Fleet wheels are uploaded to `fleet-v<version>`.
 - Railway vars are pinned to the current git commit for installer scripts and to the release wheel URLs.
 - `/free` and `/pro` launcher output contains the exact pinned commit + wheel URLs.
+- `/fleet` launcher output contains pinned Fleet wheel URLs when `MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC` is set.
 
 Manual smoke after release:
 
 ```bash
 curl -fsSL https://<your-billing-domain>/free | bash
 curl -fsSL https://<your-billing-domain>/pro | bash
+curl -fsSL https://<your-billing-domain>/fleet | bash
 ```
 
 Both commands should render all four installer stages in one terminal:

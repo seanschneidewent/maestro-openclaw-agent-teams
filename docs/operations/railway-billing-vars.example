@@ -21,14 +21,19 @@ MAESTRO_STRIPE_PRICE_ID_SOLO_MONTHLY=price_replace_me
 MAESTRO_STRIPE_PRICE_ID_SOLO_YEARLY=price_replace_me
 MAESTRO_STRIPE_PRICE_ID_SOLO_TEST_MONTHLY=price_replace_me
 
-# Installer launcher (clean website commands: /free and /pro)
+# Installer launcher (clean website commands: /free, /pro, and /fleet)
 # Supports whitespace-separated pip args, same format as MAESTRO_*_PACKAGE_SPEC.
 MAESTRO_INSTALLER_CORE_PACKAGE_SPEC=https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_solo.whl
 MAESTRO_INSTALLER_PRO_PACKAGE_SPEC=https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_solo.whl
+MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC=https://downloads.example.com/maestro_conagent_teams.whl https://downloads.example.com/maestro_fleet.whl
 # Optional script source override (defaults to this repo's scripts on main):
 # MAESTRO_INSTALLER_SCRIPT_BASE_URL=https://raw.githubusercontent.com/seanschneidewent/maestro-openclaw-agent-teams/refs/heads/main/scripts
 # MAESTRO_INSTALLER_FREE_SCRIPT_URL=https://example.com/install-maestro-free-macos.sh
 # MAESTRO_INSTALLER_PRO_SCRIPT_URL=https://example.com/install-maestro-pro-macos.sh
+# MAESTRO_INSTALLER_FLEET_SCRIPT_URL=https://example.com/install-maestro-fleet-linux.sh
+# MAESTRO_INSTALLER_FLEET_BASE_SCRIPT_URL=https://example.com/install-maestro-fleet.sh
+# MAESTRO_INSTALLER_FLEET_REQUIRE_TAILSCALE=1
+# MAESTRO_INSTALLER_FLEET_DEPLOY=1
 
 # Production safety
 MAESTRO_ENABLE_DEV_ENDPOINTS=0
