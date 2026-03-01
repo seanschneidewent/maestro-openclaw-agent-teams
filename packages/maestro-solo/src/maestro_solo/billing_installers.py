@@ -104,6 +104,17 @@ def _installer_fleet_deploy() -> str:
     return configured or "1"
 
 
+def _append_download_and_exec(lines: list[str], script_url: str, *, tmp_prefix: str) -> None:
+    lines.extend(
+        [
+            f'tmp_script="$(mktemp "${{TMPDIR:-/tmp}}/{tmp_prefix}.XXXXXX.sh")"',
+            'trap \'rm -f "$tmp_script"\' EXIT',
+            f"curl -fsSL {_shell_single_quote(script_url)} -o \"$tmp_script\"",
+            'bash "$tmp_script"',
+        ]
+    )
+
+
 def build_installer_script(*, flow: str, billing_base_url: str, intent: str = "") -> str:
     clean_flow = _clean_text(flow).lower()
     if clean_flow not in {"free", "pro", "install"}:
@@ -156,7 +167,7 @@ def build_installer_script(*, flow: str, billing_base_url: str, intent: str = ""
     ]
     for key, value in env_assignments:
         lines.append(f"export {key}={_shell_single_quote(value)}")
-    lines.append(f"curl -fsSL {_shell_single_quote(script_url)} | bash")
+    _append_download_and_exec(lines, script_url, tmp_prefix="maestro-installer-launcher")
 
     return "\n".join(lines) + "\n"
 
@@ -184,5 +195,9 @@ def build_fleet_installer_script(*, billing_base_url: str) -> str:
     ]
     for key, value in env_assignments:
         lines.append(f"export {key}={_shell_single_quote(value)}")
-    lines.append(f"curl -fsSL {_shell_single_quote(_installer_fleet_script_url())} | bash")
+    _append_download_and_exec(
+        lines,
+        _installer_fleet_script_url(),
+        tmp_prefix="maestro-fleet-launcher",
+    )
     return "\n".join(lines) + "\n"
