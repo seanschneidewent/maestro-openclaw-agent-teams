@@ -2,9 +2,9 @@ import React, { useState } from 'react'
 
 export default function PurchaseCommandModal({ awareness, onClose }) {
   const [copied, setCopied] = useState(false)
-  const purchase = awareness?.purchase || {}
-  const command = purchase.purchase_command || 'maestro-purchase'
-  const badge = purchase.next_node_badge || '+'
+  const onboarding = awareness?.onboarding || awareness?.purchase || {}
+  const command = onboarding.project_create_command || awareness?.commands?.project_create || 'maestro-fleet project create'
+  const badge = onboarding.next_node_badge || '+'
 
   const copyCommand = async () => {
     try {
@@ -12,7 +12,7 @@ export default function PurchaseCommandModal({ awareness, onClose }) {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1000)
     } catch (error) {
-      console.error('Failed to copy purchase command', error)
+      console.error('Failed to copy project create command', error)
     }
   }
 
@@ -28,7 +28,7 @@ export default function PurchaseCommandModal({ awareness, onClose }) {
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <div className="text-[10px] uppercase tracking-widest font-mono text-slate-500">Node Provisioning</div>
-            <h2 className="text-xl text-white uppercase tracking-widest mt-1">Project Maestro Purchase</h2>
+            <h2 className="text-xl text-white uppercase tracking-widest mt-1">Project Maestro Create</h2>
           </div>
           <button
             type="button"
@@ -41,10 +41,8 @@ export default function PurchaseCommandModal({ awareness, onClose }) {
 
         <div className="border border-white/10 bg-black/40 p-4 mb-4">
           <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-2">Next Node Slot</div>
-          <div className={`font-mono text-lg ${badge === '+$' ? 'text-amber-400' : 'text-[#00e5ff]'}`}>{badge}</div>
-          <div className="text-xs text-slate-400 mt-2">
-            Free remaining: {purchase.free_project_slots_remaining ?? 0} / {purchase.free_project_slots_total ?? 1}
-          </div>
+          <div className="font-mono text-lg text-[#00e5ff]">{badge}</div>
+          <div className="text-xs text-slate-400 mt-2">Project onboarding in Fleet mode is local/offline only.</div>
         </div>
 
         <div className="border border-white/10 bg-black/40 p-4 mb-4">
@@ -60,7 +58,8 @@ export default function PurchaseCommandModal({ awareness, onClose }) {
         </div>
 
         <div className="border border-white/10 bg-black/40 p-4 text-xs text-slate-400 leading-relaxed">
-          This command provisions a dedicated OpenClaw project agent, captures project name and assignee, verifies card-on-file for paid slots, auto-activates Maestro licensing, and outputs the exact ingest command.
+          This command provisions a dedicated OpenClaw project agent, captures project name and assignee,
+          issues a local Fleet license key with expiry, and outputs the exact ingest command.
         </div>
       </div>
     </div>

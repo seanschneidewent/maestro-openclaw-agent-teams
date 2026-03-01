@@ -1,9 +1,15 @@
-# Fleet Purchase Workflow
+# Fleet Purchase Command (Disabled)
 
-Use the fleet namespace command:
+`maestro-fleet purchase` is disabled in Fleet mode.
+
+Use:
 
 ```bash
-maestro-fleet purchase
+maestro-fleet project create
 ```
 
-This provisions a project maestro node and updates fleet registry state.
+For local expiring key generation:
+
+```bash
+maestro-fleet license generate --project-name "Example Project"
+```

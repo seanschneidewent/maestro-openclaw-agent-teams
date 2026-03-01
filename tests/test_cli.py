@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from maestro.cli import build_parser
+import pytest
+
+from maestro.cli import _run_fleet, build_parser
 
 
 def test_setup_parser_mode():
@@ -27,11 +29,12 @@ def test_fleet_enable_parser():
     assert args.dry_run is True
 
 
-def test_fleet_purchase_parser():
+def test_fleet_project_create_parser():
     parser = build_parser()
     args = parser.parse_args([
         "fleet",
-        "purchase",
+        "project",
+        "create",
         "--project-name",
         "Test Project",
         "--assignee",
@@ -39,9 +42,62 @@ def test_fleet_purchase_parser():
         "--non-interactive",
     ])
     assert args.mode == "fleet"
-    assert args.fleet_command == "purchase"
+    assert args.fleet_command == "project"
+    assert args.fleet_project_command == "create"
     assert args.project_name == "Test Project"
     assert args.assignee == "Andy"
+    assert args.non_interactive is True
+
+
+def test_fleet_license_generate_parser():
+    parser = build_parser()
+    args = parser.parse_args([
+        "fleet",
+        "license",
+        "generate",
+        "--project-name",
+        "Tower A",
+        "--expiry-days",
+        "365",
+    ])
+    assert args.mode == "fleet"
+    assert args.fleet_command == "license"
+    assert args.fleet_license_command == "generate"
+    assert args.project_name == "Tower A"
+    assert args.expiry_days == 365
+
+
+def test_fleet_purchase_command_is_disabled(capsys):
+    parser = build_parser()
+    args = parser.parse_args(["fleet", "purchase"])
+    with pytest.raises(SystemExit) as exc:
+        _run_fleet(args)
+    assert int(exc.value.code) == 1
+    captured = capsys.readouterr()
+    assert "disabled" in captured.out
+
+
+def test_fleet_deploy_parser():
+    parser = build_parser()
+    args = parser.parse_args([
+        "fleet",
+        "deploy",
+        "--company-name",
+        "ACME",
+        "--project-name",
+        "Tower A",
+        "--assignee",
+        "Sean",
+        "--project-telegram-token",
+        "123:abc",
+        "--local",
+        "--non-interactive",
+    ])
+    assert args.mode == "fleet"
+    assert args.fleet_command == "deploy"
+    assert args.company_name == "ACME"
+    assert args.project_name == "Tower A"
+    assert args.local_license_mode is True
     assert args.non_interactive is True
 
 

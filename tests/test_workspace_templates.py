@@ -23,6 +23,8 @@ def test_render_tools_md_includes_active_provider():
     assert "Name:** TestCo" in content
     assert "`OPENAI_API_KEY` — Active default model key" in content
     assert "http://<tailscale-ip>:3000/command-center" in content
+    assert "Commander Behavior Contract" in content
+    assert "maestro-fleet project create" in content
 
 
 def test_render_workspace_env_for_non_gemini_primary():
@@ -74,3 +76,5 @@ def test_render_company_agents_md_has_control_plane_boundary():
     content = render_company_agents_md()
     assert "The Commander control-plane orchestrator" in content
     assert "Do not inspect or enumerate project plan files under `knowledge_store/`" in content
+    assert "Routing Rules" in content
+    assert "project-detail questions" in content

@@ -4,10 +4,14 @@ Tests for Maestro license enforcement layer.
 
 import os
 import tempfile
+import hashlib
+import hmac
+import json
 from pathlib import Path
 import pytest
 
 from maestro.license import (
+    MAESTRO_SECRET,
     generate_company_key,
     generate_project_key,
     validate_company_key,
@@ -129,11 +133,11 @@ class TestProjectLicense:
             "/tmp/test_store",
         )
         
-        assert key.startswith("MAESTRO-PROJECT-V1-")
+        assert key.startswith("MAESTRO-PROJECT-V2-")
         assert "CMPTEST123" in key
         assert "PRJTEST456" in key
         parts = key.split("-")
-        assert len(parts) == 8
+        assert len(parts) == 9
 
     def test_validate_project_key(self):
         """Should validate a valid project key."""
@@ -152,8 +156,38 @@ class TestProjectLicense:
         assert result["type"] == "project"
         assert result["company_id"] == "CMPTEST123"
         assert result["project_id"] == "PRJTEST456"
-        assert result["version"] == "V1"
+        assert result["version"] == "V2"
+        assert result["expires_at"]
         assert result["valid"] is True
+
+    def test_validate_project_key_requires_reissue_for_v1(self):
+        """Legacy V1 project keys should be rejected and require reissue."""
+        project_slug = "test-project"
+        store_path = "/tmp/test_store"
+        fingerprint = generate_project_fingerprint(project_slug, store_path)["fingerprint"]
+        issued_at = "20260301000000"
+        payload = f"MAESTRO-PROJECT-V1-CMPLEGACY-PRJLEGACY-{issued_at}-{fingerprint}"
+        signature = hmac.new(
+            MAESTRO_SECRET.encode(),
+            payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()[:12].upper()
+        legacy_key = f"MAESTRO-PROJECT-V1-CMPLEGACY-PRJLEGACY-{issued_at}-{fingerprint}-{signature}"
+
+        with pytest.raises(LicenseError, match="Legacy project key format"):
+            validate_project_key(legacy_key, project_slug, store_path)
+
+    def test_validate_project_key_expired(self):
+        """Expired key should fail local validation."""
+        key = generate_project_key(
+            "CMPTEST123",
+            "PRJTEST456",
+            "test-project",
+            "/tmp/test_store",
+            expiry_days=-1,
+        )
+        with pytest.raises(LicenseError, match="expired"):
+            validate_project_key(key, "test-project", "/tmp/test_store")
 
     def test_validate_project_key_fingerprint_mismatch(self):
         """Should reject project key with mismatched fingerprint."""
@@ -226,6 +260,26 @@ class TestKnowledgeStoreStamping:
             )
             
             with pytest.raises(LicenseError, match="not licensed"):
+                verify_knowledge_store(str(store_path), key, "test-project")
+
+    def test_verify_legacy_stamp_requires_reissue(self):
+        """Legacy stamp missing expiry should fail and require reissue."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = Path(tmpdir) / "knowledge_store"
+            store_path.mkdir()
+
+            key = generate_project_key(
+                "CMPTEST123",
+                "PRJTEST456",
+                "test-project",
+                str(store_path),
+            )
+            stamp_knowledge_store(str(store_path), key, "test-project")
+            legacy_payload = json.loads((store_path / "license.json").read_text(encoding="utf-8"))
+            legacy_payload.pop("expires_at", None)
+            (store_path / "license.json").write_text(json.dumps(legacy_payload, indent=2), encoding="utf-8")
+
+            with pytest.raises(LicenseError, match="legacy"):
                 verify_knowledge_store(str(store_path), key, "test-project")
 
     def test_verify_wrong_license_key(self):

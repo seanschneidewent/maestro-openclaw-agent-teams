@@ -1285,7 +1285,7 @@ def _service_status(
     }
 
 
-def build_purchase_status(
+def build_project_onboarding_status(
     store_root: Path,
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -1296,15 +1296,24 @@ def build_purchase_status(
         if isinstance(item, dict) and str(item.get("status", "active")).strip().lower() != "archived"
     ])
     free_remaining = max(0, FREE_PROJECT_SLOTS - active_count)
-    next_node_badge = "+" if free_remaining > 0 else "+$"
+    next_node_badge = "+"
     return {
-        "purchase_command": "maestro-purchase",
+        "project_create_command": "maestro-fleet project create",
         "free_project_slots_total": FREE_PROJECT_SLOTS,
         "free_project_slots_remaining": free_remaining,
         "active_project_count": active_count,
         "next_node_badge": next_node_badge,
-        "requires_paid_license": free_remaining <= 0,
+        "purchase_disabled": True,
+        "disabled_reason": "Fleet purchase flow is disabled. Use `maestro-fleet project create`.",
     }
+
+
+def build_purchase_status(
+    store_root: Path,
+    registry: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Backward-compatible alias for older callers."""
+    return build_project_onboarding_status(store_root, registry=registry)
 
 
 def build_awareness_state(
@@ -1319,7 +1328,7 @@ def build_awareness_state(
     registry = sync_fleet_registry(root)
     services = _service_status(command_runner=command_runner, home_dir=home_dir)
     network = resolve_network_urls(web_port=web_port, command_runner=command_runner)
-    purchase = build_purchase_status(root, registry=registry)
+    onboarding = build_project_onboarding_status(root, registry=registry)
     directives_summary = summarize_system_directives(root)
 
     fleet_projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
@@ -1399,9 +1408,10 @@ def build_awareness_state(
             "doctor": "maestro doctor --fix",
             "serve": f"maestro serve --port {web_port} --store {_quote_path(root)}",
             "start": f"maestro start --port {web_port} --store {_quote_path(root)}",
-            "purchase": "maestro-purchase",
+            "project_create": "maestro-fleet project create",
         },
-        "purchase": purchase,
+        "onboarding": onboarding,
+        "purchase": onboarding,
         "available_actions": [
             "sync_registry",
             "list_system_directives",

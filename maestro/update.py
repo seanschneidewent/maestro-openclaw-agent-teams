@@ -21,6 +21,7 @@ from .control_plane import (
     sync_fleet_registry,
 )
 from .profile import PROFILE_FLEET, PROFILE_SOLO, infer_profile_from_openclaw_config
+from .openclaw_guard import ensure_openclaw_override_allowed
 from .workspace_templates import (
     provider_env_key_for_model,
     render_company_agents_md,
@@ -671,6 +672,11 @@ def perform_update(
         return summary, 1
     current_install_state = load_install_state(home_dir=home)
     target_profile = _resolve_target_profile(config, current_install_state)
+    if target_profile == PROFILE_FLEET:
+        safe_override, override_message = ensure_openclaw_override_allowed(config)
+        if not safe_override:
+            summary.warnings.append(override_message)
+            return summary, 1
 
     workspace, workspace_forced = _resolve_workspace(config, home, workspace_override)
     summary.workspace = workspace

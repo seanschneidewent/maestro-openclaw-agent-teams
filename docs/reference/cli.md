@@ -17,7 +17,9 @@
 
 - `maestro-fleet enable [--dry-run] [--no-restart]`
 - `maestro-fleet status`
-- `maestro-fleet purchase [flags...]`
+- `maestro-fleet project create [flags...]`
+- `maestro-fleet license generate --project-name "..."`
+- `maestro-fleet deploy [--company-name ... --project-name ... --assignee ... --project-telegram-token ...]`
 - `maestro-fleet command-center [--open]`
 - `maestro-fleet ingest <folder> [--project-name "..."] [--dpi N] [--store ...]`
 - `maestro-fleet doctor [--fix] [--json] [--store ...] [--no-restart]`
@@ -28,7 +30,7 @@
 ## Compatibility Aliases (Deprecated)
 
 - `maestro-setup` forwards to `maestro-solo setup`
-- `maestro-purchase` forwards to `maestro-fleet purchase`
+- `maestro-purchase` is disabled in Fleet mode
 - `maestro fleet ...` forwards to `maestro-fleet ...` during transition
 - `maestro start` is deprecated; use `maestro-solo up --tui`
 

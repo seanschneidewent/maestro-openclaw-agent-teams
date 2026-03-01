@@ -472,6 +472,7 @@ class TestCommandCenterAPI:
             return
 
         monkeypatch.setattr(server, "watch_knowledge_store", noop_watch)
+        monkeypatch.setattr(server, "profile_fleet_enabled", lambda: True)
         server.store_path = single_project_store
 
         with TestClient(server.app) as client:
