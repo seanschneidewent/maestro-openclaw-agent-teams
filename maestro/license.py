@@ -16,7 +16,7 @@ import json
 import platform
 import subprocess
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,13 @@ MAESTRO_SECRET = "MAESTRO_TEST_SECRET_2026"
 class LicenseError(Exception):
     """License validation failure."""
     pass
+
+
+def _parse_utc_timestamp(value: str, *, field_name: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise LicenseError(f"Invalid {field_name} timestamp: {value}") from exc
 
 
 # ── Machine Fingerprinting ────────────────────────────────────────────────────
@@ -200,11 +207,13 @@ def generate_project_key(
     project_id: str,
     project_slug: str,
     knowledge_store_path: str,
+    *,
+    expiry_days: int = 365,
 ) -> str:
     """
     Generate a Project Maestro license key with machine fingerprint.
     
-    Format: MAESTRO-PROJECT-V1-{COMPANY_ID}-{PROJECT_ID}-{TIMESTAMP}-{FINGERPRINT}-{SIGNATURE}
+    Format: MAESTRO-PROJECT-V2-{COMPANY_ID}-{PROJECT_ID}-{ISSUED_AT}-{EXPIRES_AT}-{FINGERPRINT}-{SIGNATURE}
     
     Args:
         company_id: Parent company ID
@@ -215,20 +224,22 @@ def generate_project_key(
     Returns:
         Full license key string
     """
-    version = "V1"
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    version = "V2"
+    now = datetime.now(timezone.utc)
+    issued_at = now.strftime("%Y%m%d%H%M%S")
+    expires_at = (now + timedelta(days=int(expiry_days))).strftime("%Y%m%d%H%M%S")
     
     fingerprint_data = generate_project_fingerprint(project_slug, knowledge_store_path)
     fingerprint = fingerprint_data["fingerprint"]
     
-    payload = f"MAESTRO-PROJECT-{version}-{company_id}-{project_id}-{timestamp}-{fingerprint}"
+    payload = f"MAESTRO-PROJECT-{version}-{company_id}-{project_id}-{issued_at}-{expires_at}-{fingerprint}"
     signature = hmac.new(
         MAESTRO_SECRET.encode(),
         payload.encode(),
         hashlib.sha256,
     ).hexdigest()[:12].upper()
-    
-    return f"MAESTRO-PROJECT-{version}-{company_id}-{project_id}-{timestamp}-{fingerprint}-{signature}"
+
+    return f"MAESTRO-PROJECT-{version}-{company_id}-{project_id}-{issued_at}-{expires_at}-{fingerprint}-{signature}"
 
 
 def validate_project_key(
@@ -252,21 +263,29 @@ def validate_project_key(
     """
     parts = key.split("-")
     
-    if len(parts) != 8:
-        raise LicenseError(f"Invalid project key format (expected 8 parts, got {len(parts)})")
+    if len(parts) == 8 and len(parts) > 2 and parts[2] == "V1":
+        raise LicenseError(
+            "Legacy project key format (V1) is no longer accepted. "
+            "Reissue a new Fleet key with 1-year expiry."
+        )
+    if len(parts) != 9:
+        raise LicenseError(f"Invalid project key format (expected 9 parts, got {len(parts)})")
     
     if parts[0] != "MAESTRO" or parts[1] != "PROJECT":
         raise LicenseError("Invalid project key prefix")
-    
+
     version = parts[2]
     company_id = parts[3]
     project_id = parts[4]
-    timestamp = parts[5]
-    key_fingerprint = parts[6]
-    provided_sig = parts[7]
-    
+    issued_at = parts[5]
+    expires_at = parts[6]
+    key_fingerprint = parts[7]
+    provided_sig = parts[8]
+    if version != "V2":
+        raise LicenseError(f"Unsupported project key version: {version}")
+
     # Verify signature
-    payload = f"MAESTRO-PROJECT-{version}-{company_id}-{project_id}-{timestamp}-{key_fingerprint}"
+    payload = f"MAESTRO-PROJECT-{version}-{company_id}-{project_id}-{issued_at}-{expires_at}-{key_fingerprint}"
     expected_sig = hmac.new(
         MAESTRO_SECRET.encode(),
         payload.encode(),
@@ -275,7 +294,14 @@ def validate_project_key(
     
     if provided_sig != expected_sig:
         raise LicenseError("Invalid signature — key has been tampered with")
-    
+
+    expiry_dt = _parse_utc_timestamp(expires_at, field_name="expires_at")
+    if datetime.now(timezone.utc) > expiry_dt:
+        raise LicenseError(
+            f"Project license expired on {expiry_dt.strftime('%Y-%m-%d %H:%M:%SZ')}. "
+            "Reissue required."
+        )
+
     # Generate current fingerprint
     current_fp = generate_project_fingerprint(project_slug, knowledge_store_path)
     
@@ -295,7 +321,10 @@ def validate_project_key(
         "version": version,
         "company_id": company_id,
         "project_id": project_id,
-        "timestamp": timestamp,
+        "timestamp": issued_at,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "expires_at_iso": expiry_dt.isoformat(),
         "fingerprint": key_fingerprint,
         "fingerprint_data": current_fp,
         "valid": True,
@@ -308,7 +337,7 @@ def stamp_knowledge_store(
     knowledge_store_path: str,
     license_key: str,
     project_slug: str,
-) -> None:
+) -> dict[str, Any]:
     """
     Stamp a knowledge store with license metadata.
     
@@ -333,17 +362,21 @@ def stamp_knowledge_store(
     # Create license stamp
     license_data = {
         "license_key_hash": hashlib.sha256(license_key.encode()).hexdigest(),
+        "key_version": validation["version"],
         "fingerprint": validation["fingerprint"],
         "fingerprint_data": validation["fingerprint_data"]["fingerprint_data"],
         "machine_id": validation["fingerprint_data"]["machine_id"],
         "project_slug": project_slug,
+        "issued_at": validation.get("issued_at", ""),
+        "expires_at": validation.get("expires_at", ""),
         "stamped_at": datetime.now(timezone.utc).isoformat(),
-        "version": "V1",
+        "version": "V2",
     }
-    
+
     license_file = store_path / "license.json"
-    with open(license_file, "w") as f:
+    with open(license_file, "w", encoding="utf-8") as f:
         json.dump(license_data, f, indent=2)
+    return license_data
 
 
 def verify_knowledge_store(
@@ -374,7 +407,7 @@ def verify_knowledge_store(
             f"Run ingest with a valid project license to stamp the knowledge store."
         )
     
-    with open(license_file) as f:
+    with open(license_file, encoding="utf-8") as f:
         stamp = json.load(f)
     
     # Verify license key hash matches
@@ -394,5 +427,19 @@ def verify_knowledge_store(
             f"Expected: {stamp.get('fingerprint')}\n"
             f"Current:  {current_fp['fingerprint']}"
         )
-    
+
+    expires_at = str(stamp.get("expires_at", "")).strip()
+    if not expires_at:
+        raise LicenseError(
+            "Knowledge store license stamp is legacy (missing expiry). "
+            "Reissue a new Fleet license and restamp this store."
+        )
+
+    expiry_dt = _parse_utc_timestamp(expires_at, field_name="license stamp expires_at")
+    if datetime.now(timezone.utc) > expiry_dt:
+        raise LicenseError(
+            f"Knowledge store license expired on {expiry_dt.strftime('%Y-%m-%d %H:%M:%SZ')}. "
+            "Reissue required."
+        )
+
     return True

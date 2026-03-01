@@ -133,7 +133,7 @@ def test_awareness_state_contract(tmp_path: Path):
     assert "conversation_read" in awareness["available_actions"]
     assert "conversation_send" in awareness["available_actions"]
     assert awareness["commander"]["display_name"] == "The Commander"
-    assert awareness["purchase"]["purchase_command"] == "maestro-purchase"
+    assert awareness["onboarding"]["project_create_command"] == "maestro-fleet project create"
     assert "gateway_auth" in awareness["services"]["openclaw"]
     assert "device_pairing" in awareness["services"]["openclaw"]
     assert "routing" in awareness["services"]["telegram"]

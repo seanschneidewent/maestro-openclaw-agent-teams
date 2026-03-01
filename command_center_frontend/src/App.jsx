@@ -3,7 +3,7 @@ import AddNodeTile from './components/AddNodeTile'
 import DoctorPanel from './components/DoctorPanel'
 import NodeIntelligenceModal from './components/NodeIntelligenceModal'
 import ProjectNode from './components/ProjectNode'
-import PurchaseCommandModal from './components/PurchaseCommandModal'
+import ProjectCreateModal from './components/PurchaseCommandModal'
 import SystemDirectivesPanel from './components/SystemDirectivesPanel'
 import { api } from './lib/api'
 import { useCommandCenterWebSocket } from './hooks/useCommandCenterWebSocket'
@@ -51,7 +51,7 @@ export default function App() {
     clearSelection,
     syncSelectedProjectFromState,
   } = useProjectModalData()
-  const [showPurchaseModal, setShowPurchaseModal] = useState(false)
+  const [showProjectCreateModal, setShowProjectCreateModal] = useState(false)
   const [doctorRunning, setDoctorRunning] = useState(false)
   const [doctorReport, setDoctorReport] = useState(null)
   const [doctorError, setDoctorError] = useState('')
@@ -76,7 +76,7 @@ export default function App() {
     },
   })
 
-  const nextNodeBadge = awareness?.purchase?.next_node_badge || '+'
+  const nextNodeBadge = awareness?.onboarding?.next_node_badge || awareness?.purchase?.next_node_badge || '+'
 
   const commanderNode = useMemo(
     () => ({
@@ -196,7 +196,7 @@ export default function App() {
             {(state.projects || []).map((project) => (
               <ProjectNode key={project.slug} project={project} onSelect={selectProject} />
             ))}
-            <AddNodeTile badge={nextNodeBadge} onClick={() => setShowPurchaseModal(true)} />
+            <AddNodeTile badge={nextNodeBadge} onClick={() => setShowProjectCreateModal(true)} />
             {(!state.projects || state.projects.length === 0) && (
               <div className="col-span-3 border border-white/10 bg-black/40 p-3 text-center text-slate-500 text-xs">
                 No active project nodes yet. Use the add tile to provision the first project maestro.
@@ -242,13 +242,12 @@ export default function App() {
         </div>
       )}
 
-      {showPurchaseModal && (
-        <PurchaseCommandModal
+      {showProjectCreateModal && (
+        <ProjectCreateModal
           awareness={awareness}
-          onClose={() => setShowPurchaseModal(false)}
+          onClose={() => setShowProjectCreateModal(false)}
         />
       )}
     </div>
   )
 }
-
