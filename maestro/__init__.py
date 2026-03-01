@@ -5,4 +5,4 @@ Ingests construction plan PDFs, analyzes every sheet with AI vision,
 and gives superintendents instant answers about their plans.
 """
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"

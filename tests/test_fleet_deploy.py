@@ -269,3 +269,73 @@ def test_run_deploy_reuses_existing_server_port_from_pid_state(monkeypatch, tmp_
     )
     assert code == 0
     assert checked_port["port"] == 3010
+
+
+def test_run_deploy_prompts_for_new_key_when_existing_config_key_declined(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    config_path = home / ".openclaw" / "openclaw.json"
+    config = {
+        "env": {"GEMINI_API_KEY": "AIzaEXISTINGINVALID0000000000000000"},
+        "agents": {
+            "list": [
+                {"id": "maestro-company", "default": True, "model": "google/gemini-3-pro-preview"},
+            ]
+        },
+        "channels": {"telegram": {"enabled": True, "accounts": {}}},
+    }
+    _write_json(config_path, config)
+
+    store_root = tmp_path / "store"
+    captured_api_key: dict[str, str] = {}
+
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_prereqs",
+        lambda require_tailscale: fleet_deploy.PrereqResult(ok=True, failures=[], warnings=[]),
+    )
+    monkeypatch.setattr(fleet_deploy, "set_profile", lambda *args, **kwargs: {"profile": "fleet"})
+    monkeypatch.setattr(fleet_deploy, "_ensure_openclaw_config_exists", lambda *args, **kwargs: config_path)
+    monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
+    monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
+
+    def _fake_configure_company_openclaw(**kwargs):
+        captured_api_key["value"] = str(kwargs.get("api_key", ""))
+        return {
+            "config_path": str(config_path),
+            "workspace_root": str(tmp_path / "workspace-maestro"),
+            "provider_env_key": "GEMINI_API_KEY",
+            "binding_changes": [],
+        }
+
+    monkeypatch.setattr(fleet_deploy, "_configure_company_openclaw", _fake_configure_company_openclaw)
+    monkeypatch.setattr(fleet_deploy, "resolve_fleet_store_root", lambda _store: store_root)
+    monkeypatch.setattr(fleet_deploy, "save_install_state", lambda payload: None)
+    monkeypatch.setattr(fleet_deploy, "run_doctor", lambda **kwargs: 0)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "resolve_network_urls",
+        lambda web_port, route_path="/command-center": {
+            "recommended_url": f"http://localhost:{web_port}{route_path}",
+            "localhost_url": f"http://localhost:{web_port}{route_path}",
+            "tailnet_url": "",
+        },
+    )
+
+    # Decline existing key, then provide a fresh one at prompt.
+    monkeypatch.setattr(fleet_deploy.Confirm, "ask", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        fleet_deploy.Prompt,
+        "ask",
+        lambda *args, **kwargs: "AIzaNEWKEY00000000000000000000000000",
+    )
+
+    code = fleet_deploy.run_deploy(
+        company_name="TestCo",
+        model="google/gemini-3-pro-preview",
+        telegram_token="123456:ABCDEF",
+        non_interactive=False,
+        skip_remote_validation=True,
+        start_services=False,
+    )
+    assert code == 0
+    assert captured_api_key["value"] == "AIzaNEWKEY00000000000000000000000000"

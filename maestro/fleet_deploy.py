@@ -44,6 +44,13 @@ def _looks_like_google_access_token(value: str) -> bool:
     return token.startswith("ya29.") or token.startswith("eyJ")
 
 
+def _mask_secret(value: str) -> str:
+    text = str(value or "").strip()
+    if len(text) <= 8:
+        return "*" * len(text)
+    return f"{text[:4]}...{text[-4:]}"
+
+
 @dataclass
 class PrereqResult:
     ok: bool
@@ -480,6 +487,11 @@ def run_deploy(
     provider_env_key = provider_env_key_for_model(selected_model)
     env = config.get("env", {}) if isinstance(config.get("env"), dict) else {}
     existing_provider_key = str(env.get(provider_env_key, "")).strip() if provider_env_key else ""
+    prompt_label = (
+        "Default GEMINI_API_KEY for Company Maestro (Gemini API or Vertex AI key)"
+        if provider_env_key == "GEMINI_API_KEY"
+        else f"Default {provider_env_key} for Company Maestro"
+    )
 
     chosen_company_name = str(company_name or "").strip()
     if not chosen_company_name:
@@ -489,20 +501,35 @@ def run_deploy(
             chosen_company_name = Prompt.ask("Company name", default="Company").strip() or "Company"
 
     selected_api_key = str(api_key or "").strip()
+    used_existing_api_key = False
     if provider_env_key and not selected_api_key:
-        selected_api_key = existing_provider_key
+        if existing_provider_key and not non_interactive:
+            use_existing = Confirm.ask(
+                f"Use existing {provider_env_key} from OpenClaw config ({_mask_secret(existing_provider_key)})?",
+                default=True,
+            )
+            if use_existing:
+                selected_api_key = existing_provider_key
+                used_existing_api_key = True
+        elif existing_provider_key:
+            selected_api_key = existing_provider_key
+            used_existing_api_key = True
     if provider_env_key and not selected_api_key and non_interactive:
         console.print(f"[red]Missing API key for {provider_env_key}[/]")
         return 1
     if provider_env_key and not selected_api_key:
-        prompt_label = (
-            "Default GEMINI_API_KEY for Company Maestro (Gemini API or Vertex AI key)"
-            if provider_env_key == "GEMINI_API_KEY"
-            else f"Default {provider_env_key} for Company Maestro"
-        )
         selected_api_key = Prompt.ask(prompt_label).strip()
     if provider_env_key and selected_api_key and not skip_remote_validation:
         ok_key, detail_key = _validate_api_key(provider_env_key, selected_api_key)
+        if not ok_key and used_existing_api_key:
+            console.print(
+                f"[yellow]Existing {provider_env_key} failed validation ({detail_key}). Enter a different key.[/]"
+            )
+            replacement = Prompt.ask(prompt_label).strip()
+            if replacement:
+                selected_api_key = replacement
+                used_existing_api_key = False
+                ok_key, detail_key = _validate_api_key(provider_env_key, selected_api_key)
         if not ok_key:
             if non_interactive:
                 console.print(f"[red]API key validation failed: {detail_key}[/]")
