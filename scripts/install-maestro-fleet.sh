@@ -181,8 +181,17 @@ run_deploy_if_enabled() {
     return 0
   fi
   local -a cmd=("$VENV_DIR/bin/maestro-fleet" "deploy")
+  local arg_count="$#"
   if [[ "$REQUIRE_TAILSCALE" == "1" ]]; then
     cmd+=("--require-tailscale")
+  fi
+  if [[ ! -t 0 ]]; then
+    if [[ "$arg_count" -eq 0 ]]; then
+      warn "Non-interactive stdin detected with no deploy flags; skipping auto deploy."
+      log "Install complete. Run manually: $VENV_DIR/bin/maestro-fleet deploy"
+      return 0
+    fi
+    cmd+=("--non-interactive")
   fi
   cmd+=("$@")
   log "Starting Fleet deploy workflow."
