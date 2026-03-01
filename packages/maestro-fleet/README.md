@@ -6,6 +6,7 @@ Current staging behavior:
 
 - This package provides the dedicated `maestro-fleet` CLI.
 - Runtime behavior is delegated to the current Fleet runtime modules in `maestro/`.
+- `maestro-fleet up --tui` runs a Fleet-native setup monitor (separate from Solo monitor internals).
 - Solo and Fleet are split at the package + command level while Fleet internals are migrated into package-native modules.
 
 ## Local install (development)

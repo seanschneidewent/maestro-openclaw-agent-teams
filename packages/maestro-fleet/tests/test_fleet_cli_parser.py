@@ -5,16 +5,82 @@ from maestro_fleet import cli
 
 def test_parser_has_fleet_surface():
     parser = cli.build_parser()
-    args = parser.parse_args(["purchase", "--project-name", "ACME Tower", "--dry-run"])
-    assert args.command == "purchase"
+    args = parser.parse_args(["project", "create", "--project-name", "ACME Tower", "--dry-run"])
+    assert args.command == "project"
+    assert args.project_command == "create"
     assert args.project_name == "ACME Tower"
     assert args.dry_run is True
 
 
-def test_forward_purchase_args():
+def test_forward_project_create_args():
     parser = cli.build_parser()
-    args = parser.parse_args(["purchase", "--project-name", "ACME Tower", "--dry-run"])
+    args = parser.parse_args(["project", "create", "--project-name", "ACME Tower", "--dry-run"])
     forwarded = cli._to_legacy_argv(args)
-    assert forwarded[:2] == ["fleet", "purchase"]
+    assert forwarded[:3] == ["fleet", "project", "create"]
     assert "--project-name" in forwarded
     assert "--dry-run" in forwarded
+
+
+def test_forward_license_generate_args():
+    parser = cli.build_parser()
+    args = parser.parse_args(["license", "generate", "--project-name", "ACME Tower", "--expiry-days", "365"])
+    forwarded = cli._to_legacy_argv(args)
+    assert forwarded[:3] == ["fleet", "license", "generate"]
+    assert "--project-name" in forwarded
+    assert "--expiry-days" in forwarded
+
+
+def test_forward_deploy_args():
+    parser = cli.build_parser()
+    args = parser.parse_args([
+        "deploy",
+        "--company-name",
+        "ACME",
+        "--project-name",
+        "Tower A",
+        "--assignee",
+        "Sean",
+        "--project-telegram-token",
+        "123:abc",
+        "--local",
+        "--non-interactive",
+    ])
+    forwarded = cli._to_legacy_argv(args)
+    assert forwarded[:2] == ["fleet", "deploy"]
+    assert "--company-name" in forwarded
+    assert "--project-name" in forwarded
+    assert "--local" in forwarded
+
+
+def test_main_routes_up_tui_to_fleet_native_monitor(monkeypatch):
+    observed: dict[str, object] = {}
+
+    def _fake_run_up_tui(args):
+        observed["command"] = args.command
+        observed["tui"] = args.tui
+        return 0
+
+    def _fail_legacy_import():
+        raise AssertionError("legacy main should not be imported for `maestro-fleet up --tui`")
+
+    monkeypatch.setattr(cli, "_run_fleet_up_tui", _fake_run_up_tui)
+    monkeypatch.setattr(cli, "_import_legacy_main", _fail_legacy_import)
+
+    code = cli.main(["up", "--tui", "--skip-doctor"])
+    assert code == 0
+    assert observed.get("command") == "up"
+    assert observed.get("tui") is True
+
+
+def test_main_non_tui_up_still_delegates_to_legacy(monkeypatch):
+    observed: dict[str, object] = {}
+
+    def _fake_legacy(argv):
+        observed["argv"] = argv
+        return None
+
+    monkeypatch.setattr(cli, "_import_legacy_main", lambda: _fake_legacy)
+
+    code = cli.main(["up", "--skip-doctor"])
+    assert code == 0
+    assert observed.get("argv") == ["up", "--port", "3000", "--host", "0.0.0.0", "--skip-doctor"]

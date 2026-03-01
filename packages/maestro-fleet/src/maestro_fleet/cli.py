@@ -8,24 +8,56 @@ from pathlib import Path
 from typing import Callable
 
 
-def _import_legacy_main() -> Callable[[list[str] | None], None]:
+def _ensure_runtime_modules_on_path() -> None:
     try:
-        from maestro.cli import main as legacy_main
-
-        return legacy_main
+        import maestro  # noqa: F401
+        return
     except ModuleNotFoundError:
         # Editable installs in this monorepo may not include root package deps.
         repo_root = Path(__file__).resolve().parents[4]
         legacy_pkg = repo_root / "maestro"
         if legacy_pkg.exists():
-            sys.path.insert(0, str(repo_root))
-            from maestro.cli import main as legacy_main  # type: ignore
-
-            return legacy_main
+            if str(repo_root) not in sys.path:
+                sys.path.insert(0, str(repo_root))
+            return
     raise SystemExit(
         "maestro-fleet depends on Fleet runtime modules currently hosted in the root package.\n"
         "Install root package too: pip install -e /absolute/path/to/repo"
     )
+
+
+def _import_legacy_main() -> Callable[[list[str] | None], None]:
+    _ensure_runtime_modules_on_path()
+    from maestro.cli import main as legacy_main
+
+    return legacy_main
+
+
+def _run_fleet_up_tui(args: argparse.Namespace) -> int:
+    _ensure_runtime_modules_on_path()
+
+    from maestro.doctor import run_doctor
+    from maestro.install_state import resolve_fleet_store_root
+    from .monitor import run_up_tui
+
+    resolved_store = str(resolve_fleet_store_root(args.store))
+    if not args.skip_doctor:
+        doctor_code = run_doctor(
+            fix=not args.no_fix,
+            store_override=resolved_store,
+            restart_gateway=not args.no_restart,
+            json_output=False,
+            field_access_required=False,
+        )
+        if doctor_code != 0:
+            return doctor_code
+
+    run_up_tui(
+        port=int(args.port),
+        store=resolved_store,
+        host=str(args.host),
+    )
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,7 +73,32 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("status", help="Show Fleet profile/capability status")
 
-    purchase = subparsers.add_parser("purchase", help="Provision a project-specific Maestro")
+    project = subparsers.add_parser("project", help="Project Maestro lifecycle")
+    project_sub = project.add_subparsers(dest="project_command", required=True)
+    project_create = project_sub.add_parser("create", help="Create and provision a Project Maestro")
+    project_create.add_argument("--project-name")
+    project_create.add_argument("--assignee")
+    project_create.add_argument("--superintendent")
+    project_create.add_argument("--model")
+    project_create.add_argument("--api-key")
+    project_create.add_argument("--telegram-token")
+    project_create.add_argument("--pairing-code")
+    project_create.add_argument(
+        "--maestro-license-key",
+        "--project-license-key",
+        dest="maestro_license_key",
+        help=argparse.SUPPRESS,
+    )
+    project_create.add_argument("--store")
+    project_create.add_argument("--dry-run", action="store_true")
+    project_create.add_argument("--json", action="store_true")
+    project_create.add_argument("--non-interactive", action="store_true")
+    project_create.add_argument("--skip-remote-validation", action="store_true")
+    project_create.add_argument("--local", "--offline", dest="local_license_mode", action="store_true")
+    project_create.add_argument("--allow-openclaw-override", action="store_true")
+
+    # Legacy command kept only to return an explicit disable message from runtime.
+    purchase = subparsers.add_parser("purchase", help=argparse.SUPPRESS)
     purchase.add_argument("--project-name")
     purchase.add_argument("--assignee")
     purchase.add_argument("--superintendent")
@@ -49,17 +106,44 @@ def build_parser() -> argparse.ArgumentParser:
     purchase.add_argument("--api-key")
     purchase.add_argument("--telegram-token")
     purchase.add_argument("--pairing-code")
-    purchase.add_argument(
-        "--maestro-license-key",
-        "--project-license-key",
-        dest="maestro_license_key",
-        help=argparse.SUPPRESS,
-    )
+    purchase.add_argument("--maestro-license-key", "--project-license-key", dest="maestro_license_key", help=argparse.SUPPRESS)
     purchase.add_argument("--store")
     purchase.add_argument("--dry-run", action="store_true")
     purchase.add_argument("--json", action="store_true")
     purchase.add_argument("--non-interactive", action="store_true")
     purchase.add_argument("--skip-remote-validation", action="store_true")
+    purchase.add_argument("--local", "--offline", dest="local_license_mode", action="store_true")
+    purchase.add_argument("--allow-openclaw-override", action="store_true")
+
+    license_cmd = subparsers.add_parser("license", help="Fleet local license operations")
+    license_sub = license_cmd.add_subparsers(dest="license_command", required=True)
+    license_generate = license_sub.add_parser("generate", help="Generate a 1-year local Fleet project key")
+    license_generate.add_argument("--project-name", required=True)
+    license_generate.add_argument("--project-slug")
+    license_generate.add_argument("--store")
+    license_generate.add_argument("--company-id")
+    license_generate.add_argument("--project-id")
+    license_generate.add_argument("--expiry-days", type=int, default=365)
+    license_generate.add_argument("--json", action="store_true")
+
+    deploy = subparsers.add_parser("deploy", help="One-session Fleet remote deployment workflow")
+    deploy.add_argument("--company-name")
+    deploy.add_argument("--model")
+    deploy.add_argument("--api-key")
+    deploy.add_argument("--telegram-token")
+    deploy.add_argument("--project-name")
+    deploy.add_argument("--assignee")
+    deploy.add_argument("--superintendent")
+    deploy.add_argument("--project-telegram-token")
+    deploy.add_argument("--store")
+    deploy.add_argument("--port", type=int, default=3000)
+    deploy.add_argument("--host", type=str, default="0.0.0.0")
+    deploy.add_argument("--non-interactive", action="store_true")
+    deploy.add_argument("--skip-remote-validation", action="store_true")
+    deploy.add_argument("--local", "--offline", dest="local_license_mode", action="store_true")
+    deploy.add_argument("--require-tailscale", action="store_true")
+    deploy.add_argument("--allow-openclaw-override", action="store_true")
+    deploy.add_argument("--no-start", action="store_true")
 
     cc = subparsers.add_parser("command-center", help="Show/open command center URL")
     cc.add_argument("--open", action="store_true", help="Open URL in browser")
@@ -117,7 +201,7 @@ def _flag_args(args: argparse.Namespace, mapping: dict[str, str]) -> list[str]:
 
 def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
     command = str(args.command).strip()
-    if command in {"enable", "status", "purchase", "command-center"}:
+    if command in {"enable", "status", "purchase", "deploy", "command-center"}:
         base = ["fleet", command]
         if command == "enable":
             return base + _flag_args(args, {"no_restart": "--no-restart", "dry_run": "--dry-run"})
@@ -138,11 +222,76 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
                     "json": "--json",
                     "non_interactive": "--non-interactive",
                     "skip_remote_validation": "--skip-remote-validation",
+                    "local_license_mode": "--local",
+                    "allow_openclaw_override": "--allow-openclaw-override",
+                },
+            )
+        if command == "deploy":
+            return base + _flag_args(
+                args,
+                {
+                    "company_name": "--company-name",
+                    "model": "--model",
+                    "api_key": "--api-key",
+                    "telegram_token": "--telegram-token",
+                    "project_name": "--project-name",
+                    "assignee": "--assignee",
+                    "superintendent": "--superintendent",
+                    "project_telegram_token": "--project-telegram-token",
+                    "store": "--store",
+                    "port": "--port",
+                    "host": "--host",
+                    "non_interactive": "--non-interactive",
+                    "skip_remote_validation": "--skip-remote-validation",
+                    "local_license_mode": "--local",
+                    "require_tailscale": "--require-tailscale",
+                    "allow_openclaw_override": "--allow-openclaw-override",
+                    "no_start": "--no-start",
                 },
             )
         if command == "command-center":
             return base + _flag_args(args, {"open": "--open"})
         return base
+    if command == "project":
+        sub = str(getattr(args, "project_command", "")).strip()
+        if sub == "create":
+            return ["fleet", "project", "create"] + _flag_args(
+                args,
+                {
+                    "project_name": "--project-name",
+                    "assignee": "--assignee",
+                    "superintendent": "--superintendent",
+                    "model": "--model",
+                    "api_key": "--api-key",
+                    "telegram_token": "--telegram-token",
+                    "pairing_code": "--pairing-code",
+                    "maestro_license_key": "--maestro-license-key",
+                    "store": "--store",
+                    "dry_run": "--dry-run",
+                    "json": "--json",
+                    "non_interactive": "--non-interactive",
+                    "skip_remote_validation": "--skip-remote-validation",
+                    "local_license_mode": "--local",
+                    "allow_openclaw_override": "--allow-openclaw-override",
+                },
+            )
+        raise SystemExit(f"Unknown project command: {sub}")
+    if command == "license":
+        sub = str(getattr(args, "license_command", "")).strip()
+        if sub == "generate":
+            return ["fleet", "license", "generate"] + _flag_args(
+                args,
+                {
+                    "project_name": "--project-name",
+                    "project_slug": "--project-slug",
+                    "store": "--store",
+                    "company_id": "--company-id",
+                    "project_id": "--project-id",
+                    "expiry_days": "--expiry-days",
+                    "json": "--json",
+                },
+            )
+        raise SystemExit(f"Unknown license command: {sub}")
 
     if command == "ingest":
         return ["ingest", str(args.folder)] + _flag_args(
@@ -180,6 +329,19 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if str(args.command).strip() == "up" and bool(getattr(args, "tui", False)):
+        print("[fleet] launching dedicated Fleet setup TUI")
+        try:
+            return _run_fleet_up_tui(args)
+        except SystemExit as exc:
+            code = exc.code
+            if code is None:
+                return 0
+            if isinstance(code, int):
+                return code
+            print(str(code), file=sys.stderr)
+            return 1
 
     print("[fleet-staging] maestro-fleet delegates to current Fleet runtime modules in `maestro/`.")
     legacy_main = _import_legacy_main()
