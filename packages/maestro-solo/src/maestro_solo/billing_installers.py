@@ -107,7 +107,7 @@ def _installer_fleet_deploy() -> str:
 def _append_download_and_exec(lines: list[str], script_url: str, *, tmp_prefix: str) -> None:
     lines.extend(
         [
-            f'tmp_script="$(mktemp "${{TMPDIR:-/tmp}}/{tmp_prefix}.XXXXXX.sh")"',
+            f'tmp_script="$(mktemp "${{TMPDIR:-/tmp}}/{tmp_prefix}.XXXXXX")"',
             'trap \'rm -f "$tmp_script"\' EXIT',
             f"curl -fsSL {_shell_single_quote(script_url)} -o \"$tmp_script\"",
             'bash "$tmp_script"',

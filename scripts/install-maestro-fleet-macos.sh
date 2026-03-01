@@ -22,7 +22,7 @@ maybe_attach_tty() {
   return 0
 }
 
-TMP_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/maestro-fleet-install.XXXXXX.sh")"
+TMP_SCRIPT="$(mktemp "${TMPDIR:-/tmp}/maestro-fleet-install.XXXXXX")"
 trap cleanup EXIT
 curl -fsSL "$BASE_INSTALL_URL" -o "$TMP_SCRIPT"
 maybe_attach_tty
