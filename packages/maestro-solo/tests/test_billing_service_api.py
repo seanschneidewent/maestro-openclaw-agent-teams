@@ -361,6 +361,7 @@ def test_installer_launcher_fleet_renders_script(monkeypatch):
     assert "export MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
     assert "install-maestro-fleet.sh" in response.text
     assert "install-maestro-fleet-linux.sh" in response.text
+    assert 'bash "$tmp_script" "$@"' in response.text
 
 
 def test_checkout_success_and_cancel_pages_render():

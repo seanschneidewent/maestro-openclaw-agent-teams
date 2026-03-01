@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 import shutil
 import subprocess
 import sys
@@ -330,6 +331,25 @@ def _pid_running(pid: int) -> bool:
     return True
 
 
+def _port_listening(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        return sock.connect_ex((host, int(port))) == 0
+
+
+def _resolve_deploy_port(preferred_port: int, max_attempts: int = 20) -> tuple[int, bool]:
+    requested = int(preferred_port)
+    if requested <= 0:
+        requested = 3000
+    if not _port_listening(requested):
+        return requested, False
+    for offset in range(1, int(max_attempts) + 1):
+        candidate = requested + offset
+        if not _port_listening(candidate):
+            return candidate, True
+    return 0, True
+
+
 def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[str, Any]:
     state_dir = _fleet_state_dir()
     pid_path = state_dir / "serve.pid.json"
@@ -571,13 +591,24 @@ def run_deploy(
     if doctor_code != 0:
         return doctor_code
 
+    requested_port = int(port)
+    effective_port = requested_port
     detached = {"ok": True, "already_running": False, "pid": 0, "pid_path": "", "log_path": ""}
     if start_services:
-        detached = _start_detached_server(port=int(port), store_root=store_root, host=str(host))
+        resolved_port, shifted_port = _resolve_deploy_port(requested_port)
+        if resolved_port <= 0:
+            console.print(f"[red]No available port found near {requested_port} for Fleet web server.[/]")
+            return 1
+        effective_port = int(resolved_port)
+        if shifted_port and effective_port != requested_port:
+            console.print(
+                f"[yellow]Port {requested_port} is already in use; using {effective_port} for Fleet server.[/]"
+            )
+        detached = _start_detached_server(port=effective_port, store_root=store_root, host=str(host))
         if not detached.get("ok"):
             console.print(f"[red]Failed to start detached Fleet server: {detached.get('detail', 'unknown error')}[/]")
             return 1
-        if not _verify_command_center_http(int(port)):
+        if not _verify_command_center_http(effective_port):
             console.print(
                 "[red]Fleet server process started but command-center health check did not pass in time.[/]\n"
                 f"[yellow]Check logs: {detached.get('log_path', '')}[/]"
@@ -605,9 +636,9 @@ def run_deploy(
             project_username = str(project_entry.get("telegram_bot_username", "")).strip().lstrip("@")
 
     route = "/command-center"
-    network = resolve_network_urls(web_port=int(port), route_path=route)
-    command_center_url = str(network.get("recommended_url", f"http://localhost:{int(port)}{route}"))
-    local_url = str(network.get("localhost_url", f"http://localhost:{int(port)}{route}"))
+    network = resolve_network_urls(web_port=effective_port, route_path=route)
+    command_center_url = str(network.get("recommended_url", f"http://localhost:{effective_port}{route}"))
+    local_url = str(network.get("localhost_url", f"http://localhost:{effective_port}{route}"))
     tailnet_url = str(network.get("tailnet_url", "")).strip()
 
     summary_lines = [
