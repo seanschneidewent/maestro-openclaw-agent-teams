@@ -86,6 +86,16 @@ def _installer_auto_approve() -> str:
     return configured or "1"
 
 
+def _installer_fleet_auto_approve() -> str:
+    configured = _first_env_value(
+        "MAESTRO_INSTALLER_FLEET_AUTO",
+        "MAESTRO_FLEET_INSTALL_AUTO",
+        "MAESTRO_INSTALLER_AUTO",
+        "MAESTRO_INSTALL_AUTO",
+    )
+    return configured or "auto"
+
+
 def _installer_openclaw_profile() -> str:
     configured = _first_env_value("MAESTRO_INSTALLER_OPENCLAW_PROFILE", "MAESTRO_OPENCLAW_PROFILE")
     return configured or "maestro-solo"
@@ -178,7 +188,7 @@ def build_fleet_installer_script(*, billing_base_url: str) -> str:
         raise HTTPException(status_code=503, detail="installer_not_configured:missing_fleet_package_spec")
 
     env_assignments: list[tuple[str, str]] = [
-        ("MAESTRO_INSTALL_AUTO", _installer_auto_approve()),
+        ("MAESTRO_INSTALL_AUTO", _installer_fleet_auto_approve()),
         ("MAESTRO_FLEET_PACKAGE_SPEC", fleet_spec),
         ("MAESTRO_INSTALL_BASE_URL", _installer_fleet_base_script_url()),
         ("MAESTRO_FLEET_REQUIRE_TAILSCALE", _installer_fleet_require_tailscale()),

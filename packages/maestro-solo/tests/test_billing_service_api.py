@@ -355,7 +355,7 @@ def test_installer_launcher_fleet_renders_script(monkeypatch):
         "export MAESTRO_FLEET_PACKAGE_SPEC='https://downloads.example.com/maestro_conagent_teams.whl "
         "https://downloads.example.com/maestro_fleet.whl'"
     ) in response.text
-    assert "export MAESTRO_INSTALL_AUTO='1'" in response.text
+    assert "export MAESTRO_INSTALL_AUTO='auto'" in response.text
     assert "export MAESTRO_FLEET_REQUIRE_TAILSCALE='1'" in response.text
     assert "export MAESTRO_FLEET_DEPLOY='1'" in response.text
     assert "export MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
