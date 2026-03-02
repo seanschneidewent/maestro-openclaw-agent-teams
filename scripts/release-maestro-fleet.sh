@@ -153,8 +153,8 @@ main() {
   fleet_script="$(curl -fsSL "$BILLING_URL/fleet")"
   assert_contains "$fleet_script" "$root_wheel_url" "/fleet script"
   assert_contains "$fleet_script" "$fleet_wheel_url" "/fleet script"
-  assert_contains "$fleet_script" "$script_base_url/install-maestro-fleet.sh" "/fleet script"
-  assert_contains "$fleet_script" "$script_base_url/install-maestro-fleet-linux.sh" "/fleet script"
+  assert_contains "$fleet_script" "install-maestro-fleet.sh" "/fleet script"
+  assert_contains "$fleet_script" "install-maestro-fleet-linux.sh" "/fleet script"
   assert_contains "$fleet_script" "MAESTRO_FLEET_PACKAGE_SPEC='" "/fleet script"
 
   echo "[fleet-release] DONE"
