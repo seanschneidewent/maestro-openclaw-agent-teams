@@ -12,6 +12,7 @@ from .install_state import (
     normalize_install_state,
     save_install_state,
 )
+from .openclaw_profile import openclaw_config_path
 from .utils import load_json
 
 
@@ -37,8 +38,7 @@ def _coerce_bool(value: Any) -> bool | None:
 
 
 def _load_openclaw_config(home_dir: Path | None = None) -> dict[str, Any]:
-    home = (home_dir or Path.home()).resolve()
-    path = home / ".openclaw" / "openclaw.json"
+    path = openclaw_config_path(home_dir=home_dir)
     payload = load_json(path, default={})
     return payload if isinstance(payload, dict) else {}
 

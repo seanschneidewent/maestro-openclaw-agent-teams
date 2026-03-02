@@ -114,6 +114,15 @@ def _installer_fleet_deploy() -> str:
     return configured or "1"
 
 
+def _installer_fleet_openclaw_profile() -> str:
+    configured = _first_env_value(
+        "MAESTRO_INSTALLER_FLEET_OPENCLAW_PROFILE",
+        "MAESTRO_FLEET_OPENCLAW_PROFILE",
+        "MAESTRO_OPENCLAW_PROFILE",
+    )
+    return configured or "maestro-fleet"
+
+
 def _append_download_and_exec(lines: list[str], script_url: str, *, tmp_prefix: str) -> None:
     lines.extend(
         [
@@ -193,6 +202,7 @@ def build_fleet_installer_script(*, billing_base_url: str) -> str:
         ("MAESTRO_INSTALL_BASE_URL", _installer_fleet_base_script_url()),
         ("MAESTRO_FLEET_REQUIRE_TAILSCALE", _installer_fleet_require_tailscale()),
         ("MAESTRO_FLEET_DEPLOY", _installer_fleet_deploy()),
+        ("MAESTRO_OPENCLAW_PROFILE", _installer_fleet_openclaw_profile()),
     ]
     if billing_base_url:
         env_assignments.append(("MAESTRO_BILLING_URL", billing_base_url))

@@ -31,6 +31,11 @@ from .license import (
     validate_project_key,
 )
 from .openclaw_guard import ensure_openclaw_override_allowed
+from .openclaw_profile import (
+    openclaw_config_path,
+    openclaw_workspace_root,
+    prepend_openclaw_profile_args,
+)
 from .utils import load_json, save_json, slugify
 from .workspace_templates import provider_env_key_for_model, render_workspace_env
 
@@ -64,8 +69,10 @@ def _mask_secret(value: str) -> str:
 
 
 def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any], Path]:
-    home = (home_dir or Path.home()).resolve()
-    config_path = home / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(
+        home_dir=home_dir,
+        enforce_profile=True,
+    )
     config = load_json(config_path, default={})
     if not isinstance(config, dict):
         config = {}
@@ -339,7 +346,9 @@ def _update_openclaw_for_project(
 def _approve_pairing_code(pairing_code: str) -> tuple[bool, str]:
     try:
         result = subprocess.run(
-            ["openclaw", "pairing", "approve", "telegram", pairing_code],
+            prepend_openclaw_profile_args(
+                ["openclaw", "pairing", "approve", "telegram", pairing_code],
+            ),
             capture_output=True,
             text=True,
             timeout=20,
@@ -410,7 +419,9 @@ def _restart_openclaw_gateway(*, dry_run: bool) -> dict[str, Any]:
 
     try:
         restart = subprocess.run(
-            ["openclaw", "gateway", "restart"],
+            prepend_openclaw_profile_args(
+                ["openclaw", "gateway", "restart"],
+            ),
             capture_output=True,
             text=True,
             timeout=35,
@@ -426,7 +437,9 @@ def _restart_openclaw_gateway(*, dry_run: bool) -> dict[str, Any]:
         return {"ok": True, "detail": output or "Gateway restarted"}
 
     start = subprocess.run(
-        ["openclaw", "gateway", "start"],
+        prepend_openclaw_profile_args(
+            ["openclaw", "gateway", "start"],
+        ),
         capture_output=True,
         text=True,
         timeout=35,
@@ -631,7 +644,13 @@ def run_purchase(
     project_entry = result.get("project", {}) if isinstance(result.get("project"), dict) else {}
     project_store_path = Path(str(project_entry.get("project_store_path", planned_store_path))).resolve()
     agent_registration = result.get("agent_registration", {}) if isinstance(result.get("agent_registration"), dict) else {}
-    workspace_path = Path(str(agent_registration.get("workspace", ""))).expanduser() if agent_registration.get("workspace") else Path.home() / ".openclaw" / "workspace-maestro" / "projects" / project_slug
+    workspace_path = (
+        Path(str(agent_registration.get("workspace", ""))).expanduser()
+        if agent_registration.get("workspace")
+        else openclaw_workspace_root(
+            enforce_profile=True,
+        ) / "projects" / project_slug
+    )
 
     # Reload latest config first so we don't clobber project-agent registration.
     config, _ = _load_openclaw_config()

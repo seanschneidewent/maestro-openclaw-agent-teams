@@ -13,6 +13,10 @@ from .control_plane import sync_fleet_registry
 from .fleet_deploy import _is_maestro_managed_agent, _validate_api_key
 from .install_state import resolve_fleet_store_root
 from .openclaw_guard import ensure_openclaw_override_allowed
+from .openclaw_profile import (
+    openclaw_config_path,
+    prepend_openclaw_profile_args,
+)
 from .utils import load_json, save_json, slugify
 from .workspace_templates import provider_env_key_for_model, render_workspace_env
 
@@ -21,8 +25,10 @@ console = Console()
 
 
 def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any], Path]:
-    home = (home_dir or Path.home()).resolve()
-    config_path = home / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(
+        home_dir=home_dir,
+        enforce_profile=True,
+    )
     payload = load_json(config_path, default={})
     if not isinstance(payload, dict):
         payload = {}
@@ -32,7 +38,7 @@ def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any],
 def _restart_openclaw_gateway() -> tuple[bool, str]:
     try:
         restart = subprocess.run(
-            ["openclaw", "gateway", "restart"],
+            prepend_openclaw_profile_args(["openclaw", "gateway", "restart"]),
             capture_output=True,
             text=True,
             timeout=35,
@@ -48,7 +54,7 @@ def _restart_openclaw_gateway() -> tuple[bool, str]:
         return True, output or "Gateway restarted"
 
     start = subprocess.run(
-        ["openclaw", "gateway", "start"],
+        prepend_openclaw_profile_args(["openclaw", "gateway", "start"]),
         capture_output=True,
         text=True,
         timeout=35,

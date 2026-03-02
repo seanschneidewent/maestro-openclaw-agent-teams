@@ -548,7 +548,10 @@ def _run_fleet(args: argparse.Namespace):
     from .doctor import run_doctor
     from .purchase import _derive_company_id, _derive_project_id, _load_openclaw_config, _resolve_company_agent, run_purchase
     from .update import run_update
+    from .openclaw_profile import DEFAULT_FLEET_OPENCLAW_PROFILE, ensure_openclaw_profile_env
     from .utils import slugify
+
+    ensure_openclaw_profile_env(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
 
     command = str(args.fleet_command or "").strip()
     if command == "enable":

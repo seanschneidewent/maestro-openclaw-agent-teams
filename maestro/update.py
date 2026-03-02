@@ -22,6 +22,12 @@ from .control_plane import (
 )
 from .profile import PROFILE_FLEET, PROFILE_SOLO, infer_profile_from_openclaw_config
 from .openclaw_guard import ensure_openclaw_override_allowed
+from .openclaw_profile import (
+    openclaw_config_path,
+    openclaw_state_root,
+    openclaw_workspace_root,
+    prepend_openclaw_profile_shell,
+)
 from .workspace_templates import (
     provider_env_key_for_model,
     render_company_agents_md,
@@ -52,8 +58,9 @@ class UpdateSummary:
 
 
 def _default_command_runner(cmd: str) -> tuple[bool, str]:
+    profiled_cmd = prepend_openclaw_profile_shell(cmd)
     try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        result = subprocess.run(profiled_cmd, shell=True, capture_output=True, text=True)
     except Exception as exc:
         return False, str(exc)
 
@@ -190,7 +197,7 @@ def _resolve_workspace(config: dict, home_dir: Path, override: str | None) -> tu
         if isinstance(agent, dict) and agent.get("id") == "maestro" and agent.get("workspace"):
             return Path(str(agent["workspace"])).expanduser().resolve(), False
 
-    return (home_dir / ".openclaw" / "workspace-maestro").resolve(), False
+    return openclaw_workspace_root(home_dir=home_dir).resolve(), False
 
 
 def _resolve_company_agent(config: dict) -> dict:
@@ -516,7 +523,7 @@ def _sync_workspace_assets(
 
 def _ensure_session_dir(home_dir: Path, dry_run: bool, *, profile: str) -> bool:
     agent_id = "maestro-company" if profile == PROFILE_FLEET else "maestro-personal"
-    sessions = home_dir / ".openclaw" / "agents" / agent_id / "sessions"
+    sessions = openclaw_state_root(home_dir=home_dir) / "agents" / agent_id / "sessions"
     if sessions.exists():
         return False
     if not dry_run:
@@ -657,9 +664,9 @@ def perform_update(
     command_runner: CommandRunner | None = None,
 ) -> tuple[UpdateSummary, int]:
     summary = UpdateSummary()
-
     home = (home_dir or Path.home()).resolve()
-    config_path = home / ".openclaw" / "openclaw.json"
+
+    config_path = openclaw_config_path(home_dir=home)
     if not config_path.exists():
         summary.warnings.append(f"OpenClaw config not found: {config_path}")
         summary.warnings.append("Run maestro-setup first.")

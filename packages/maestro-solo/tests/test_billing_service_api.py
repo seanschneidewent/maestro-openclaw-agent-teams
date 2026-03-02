@@ -358,6 +358,7 @@ def test_installer_launcher_fleet_renders_script(monkeypatch):
     assert "export MAESTRO_INSTALL_AUTO='auto'" in response.text
     assert "export MAESTRO_FLEET_REQUIRE_TAILSCALE='1'" in response.text
     assert "export MAESTRO_FLEET_DEPLOY='1'" in response.text
+    assert "export MAESTRO_OPENCLAW_PROFILE='maestro-fleet'" in response.text
     assert "export MAESTRO_BILLING_URL='https://get.maestro.run'" in response.text
     assert "install-maestro-fleet.sh" in response.text
     assert "install-maestro-fleet-linux.sh" in response.text

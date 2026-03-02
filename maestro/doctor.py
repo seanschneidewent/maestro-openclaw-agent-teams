@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls
+from .openclaw_profile import (
+    openclaw_config_path,
+    openclaw_state_root,
+    prepend_openclaw_profile_args,
+)
 from .profile import PROFILE_FLEET, PROFILE_SOLO, resolve_profile
 from .utils import load_json, save_json
 from .install_state import resolve_fleet_store_root, save_install_state
@@ -57,7 +62,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _load_openclaw_config(home_dir: Path) -> tuple[dict[str, Any], Path]:
-    config_path = home_dir / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(home_dir=home_dir)
     payload = load_json(config_path)
     if not isinstance(payload, dict):
         payload = {}
@@ -370,7 +375,7 @@ def _rotate_stale_sessions(
     home_dir: Path,
     fix: bool,
 ) -> DoctorCheck:
-    sessions_dir = home_dir / ".openclaw" / "agents" / "maestro-company" / "sessions"
+    sessions_dir = openclaw_state_root(home_dir=home_dir) / "agents" / "maestro-company" / "sessions"
     sessions_path = sessions_dir / "sessions.json"
     if not sessions_path.exists():
         return DoctorCheck(
@@ -437,8 +442,9 @@ def _rotate_stale_sessions(
 
 
 def _run_cmd(args: list[str], timeout: int = 25) -> tuple[bool, str]:
+    profiled_args = prepend_openclaw_profile_args(args)
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()

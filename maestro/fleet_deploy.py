@@ -24,6 +24,11 @@ from .control_plane import ensure_telegram_account_bindings, resolve_network_url
 from .doctor import run_doctor
 from .install_state import resolve_fleet_store_root, save_install_state
 from .openclaw_guard import ensure_openclaw_override_allowed
+from .openclaw_profile import (
+    openclaw_config_path,
+    openclaw_workspace_root,
+    prepend_openclaw_profile_args,
+)
 from .profile import set_profile
 from .purchase import run_purchase
 from .update import run_update
@@ -186,8 +191,10 @@ def _now_iso() -> str:
 
 
 def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any], Path]:
-    home = (home_dir or Path.home()).resolve()
-    config_path = home / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(
+        home_dir=home_dir,
+        enforce_profile=True,
+    )
     payload = load_json(config_path, default={})
     if not isinstance(payload, dict):
         payload = {}
@@ -195,8 +202,10 @@ def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any],
 
 
 def _ensure_openclaw_config_exists(home_dir: Path | None = None) -> Path:
-    home = (home_dir or Path.home()).resolve()
-    config_path = home / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(
+        home_dir=home_dir,
+        enforce_profile=True,
+    )
     if not config_path.exists():
         save_json(config_path, {})
     return config_path
@@ -235,8 +244,9 @@ def _is_maestro_managed_agent(agent_id: str) -> bool:
 
 
 def _run_cmd(args: list[str], timeout: int = 12) -> tuple[bool, str]:
+    profiled_args = prepend_openclaw_profile_args(args)
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout, check=False)
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -402,7 +412,9 @@ def _configure_company_openclaw(
         None,
     )
 
-    default_workspace = (Path.home() / ".openclaw" / "workspace-maestro").resolve()
+    default_workspace = openclaw_workspace_root(
+        enforce_profile=True,
+    ).resolve()
     existing_workspace = ""
     if isinstance(existing, dict):
         existing_workspace = str(existing.get("workspace", "")).strip()

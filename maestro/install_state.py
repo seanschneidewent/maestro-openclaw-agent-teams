@@ -9,6 +9,7 @@ from typing import Any
 from datetime import datetime, timezone
 
 from .utils import load_json, save_json
+from .openclaw_profile import openclaw_config_path
 
 
 INSTALL_STATE_VERSION = 2
@@ -107,8 +108,7 @@ def record_active_project(
 
 
 def resolve_company_workspace(home_dir: Path | None = None) -> Path | None:
-    home = (home_dir or Path.home()).resolve()
-    config_path = home / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(home_dir=home_dir)
     config = load_json(config_path, default={})
     if not isinstance(config, dict):
         return None

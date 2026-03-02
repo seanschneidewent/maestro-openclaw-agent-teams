@@ -25,6 +25,12 @@ from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
+from .openclaw_profile import (
+    DEFAULT_FLEET_OPENCLAW_PROFILE,
+    openclaw_config_path,
+    openclaw_state_root,
+    prepend_openclaw_profile_shell,
+)
 
 # ── Theme ────────────────────────────────────────────────────────
 
@@ -127,9 +133,10 @@ class ServiceState:
 
 def run_cmd(cmd: str, timeout: int = 10) -> tuple[bool, str]:
     """Run a shell command, return (success, stdout)."""
+    profiled_cmd = prepend_openclaw_profile_shell(cmd, default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout
+            profiled_cmd, shell=True, capture_output=True, text=True, timeout=timeout
         )
         return result.returncode == 0, result.stdout.strip()
     except Exception:
@@ -187,7 +194,7 @@ def check_gateway(state: ServiceState, log: ActivityLog) -> bool:
 
 def check_company_agent(state: ServiceState, log: ActivityLog) -> bool:
     """Check if Company Maestro agent is configured."""
-    config_file = Path.home() / ".openclaw" / "openclaw.json"
+    config_file = openclaw_config_path(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
     if not config_file.exists():
         state.company_agent_online = False
         return False
@@ -208,7 +215,7 @@ def check_company_agent(state: ServiceState, log: ActivityLog) -> bool:
 
 def check_telegram(state: ServiceState, log: ActivityLog) -> bool:
     """Check if Telegram bot is configured."""
-    config_file = Path.home() / ".openclaw" / "openclaw.json"
+    config_file = openclaw_config_path(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
     if not config_file.exists():
         return False
 
@@ -233,7 +240,7 @@ def check_telegram(state: ServiceState, log: ActivityLog) -> bool:
 
 def check_api_key(state: ServiceState, log: ActivityLog) -> bool:
     """Check if AI provider API key is set."""
-    config_file = Path.home() / ".openclaw" / "openclaw.json"
+    config_file = openclaw_config_path(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
     if not config_file.exists():
         return False
 
@@ -258,7 +265,7 @@ def check_api_key(state: ServiceState, log: ActivityLog) -> bool:
 
 def check_config(state: ServiceState, log: ActivityLog) -> tuple[bool, int, int]:
     """Check Maestro config, return (ok, total_projects, active_projects)."""
-    config_file = Path.home() / ".openclaw" / "openclaw.json"
+    config_file = openclaw_config_path(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
     if not config_file.exists():
         return False, 0, 0
 

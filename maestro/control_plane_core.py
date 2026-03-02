@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .command_center import build_project_snapshot, discover_project_dirs
+from .openclaw_profile import (
+    openclaw_config_path,
+    openclaw_workspace_root,
+    prepend_openclaw_profile_args,
+)
 from .system_directives import summarize_system_directives
 from .utils import load_json, save_json, slugify
 
@@ -33,8 +38,9 @@ def _now_iso() -> str:
 
 
 def _default_runner(args: list[str], timeout: int = 6) -> tuple[bool, str]:
+    profiled_args = prepend_openclaw_profile_args(args)
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -83,8 +89,7 @@ def _project_index_timestamp(project_dir: Path) -> str:
 
 
 def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any], Path]:
-    home = (home_dir or Path.home()).resolve()
-    path = home / ".openclaw" / "openclaw.json"
+    path = openclaw_config_path(home_dir=home_dir)
     payload = load_json(path)
     if not isinstance(payload, dict):
         payload = {}
@@ -1153,11 +1158,10 @@ def register_project_agent(
 
     company_agent = _resolve_company_agent(config)
     company_workspace = str(company_agent.get("workspace", "")).strip()
-    home = (home_dir or Path.home()).resolve()
     workspace_root = (
         Path(company_workspace).expanduser().resolve()
         if company_workspace
-        else (home / ".openclaw" / "workspace-maestro").resolve()
+        else openclaw_workspace_root(home_dir=home_dir).resolve()
     )
     project_workspace = workspace_root / "projects" / project_slug
     project_agent_id = f"maestro-project-{project_slug}"

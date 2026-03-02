@@ -19,6 +19,7 @@ from rich.live import Live
 from rich.panel import Panel
 
 from .control_plane import resolve_network_urls
+from .openclaw_profile import openclaw_config_path, openclaw_state_root, prepend_openclaw_profile_args
 from .profile import PROFILE_SOLO, resolve_profile
 
 
@@ -100,8 +101,9 @@ class MonitorState:
 
 
 def _safe_run(args: list[str], timeout: int = 6) -> tuple[bool, str]:
+    profiled_args = prepend_openclaw_profile_args(args)
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -109,7 +111,7 @@ def _safe_run(args: list[str], timeout: int = 6) -> tuple[bool, str]:
 
 
 def _load_openclaw_config() -> dict[str, Any]:
-    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path()
     if not config_path.exists():
         return {}
     try:
@@ -151,7 +153,7 @@ def _load_token_stats(agent_id: str) -> tuple[int, int]:
     if not clean_agent_id:
         clean_agent_id = "maestro-personal"
 
-    sessions_path = Path.home() / ".openclaw" / "agents" / clean_agent_id / "sessions" / "sessions.json"
+    sessions_path = openclaw_state_root() / "agents" / clean_agent_id / "sessions" / "sessions.json"
     if not sessions_path.exists():
         return 0, 0
     try:

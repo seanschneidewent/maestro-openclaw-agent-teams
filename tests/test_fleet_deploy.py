@@ -440,3 +440,28 @@ def test_run_deploy_existing_key_prompt_defaults_to_no(monkeypatch, tmp_path: Pa
         None,
     )
     assert existing_key_prompt is False
+
+
+def test_fleet_openclaw_profile_isolated_from_shared_config(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    shared_path = home / ".openclaw" / "openclaw.json"
+    _write_json(
+        shared_path,
+        {
+            "agents": {
+                "list": [
+                    {"id": "main", "default": True, "model": "openai/gpt-5.2"},
+                ]
+            }
+        },
+    )
+
+    monkeypatch.setattr(fleet_deploy.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setenv("MAESTRO_OPENCLAW_PROFILE", "maestro-fleet")
+
+    created = fleet_deploy._ensure_openclaw_config_exists()
+    config, loaded_path = fleet_deploy._load_openclaw_config()
+
+    assert created == home / ".openclaw-maestro-fleet" / "openclaw.json"
+    assert loaded_path == created
+    assert config == {}
