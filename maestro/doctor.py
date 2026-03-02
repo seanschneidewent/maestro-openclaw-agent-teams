@@ -694,13 +694,22 @@ def _repair_cli_device_pairing(fix: bool) -> DoctorCheck:
 
 def _restart_gateway(home_dir: Path, fix: bool) -> DoctorCheck:
     ok, out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
-    if ok:
+    if ok and _gateway_running():
         return DoctorCheck(
             name="gateway_restart",
             ok=True,
             detail="openclaw gateway restart completed",
             fixed=fix,
         )
+    if ok:
+        _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+        if _gateway_running():
+            return DoctorCheck(
+                name="gateway_restart",
+                ok=True,
+                detail="openclaw gateway restart/start completed",
+                fixed=fix,
+            )
 
     # Fallback for mac LaunchAgent flows when restart races with stale PID.
     if platform.system().lower() == "darwin":
@@ -734,10 +743,25 @@ def _restart_gateway(home_dir: Path, fix: bool) -> DoctorCheck:
 
 
 def _gateway_running() -> bool:
-    ok, out = _run_cmd(["openclaw", "status"], timeout=10)
-    if not ok:
+    ok, out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=10)
+    if ok:
+        raw = str(out or "")
+        idx = raw.find("{")
+        if idx >= 0:
+            try:
+                payload = json.loads(raw[idx:])
+            except Exception:
+                payload = {}
+            if isinstance(payload, dict):
+                service = payload.get("service", {}) if isinstance(payload.get("service"), dict) else {}
+                runtime = service.get("runtime", {}) if isinstance(service.get("runtime"), dict) else {}
+                status = str(runtime.get("status", "")).strip().lower()
+                if status in {"running", "started", "active"}:
+                    return True
+    status_ok, status_out = _run_cmd(["openclaw", "status"], timeout=10)
+    if not status_ok:
         return False
-    lowered = out.lower()
+    lowered = str(status_out or "").lower()
     return "gateway service" in lowered and "running" in lowered
 
 

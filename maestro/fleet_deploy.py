@@ -777,6 +777,8 @@ def _gateway_running_from_status(status_out: str) -> bool:
 
 
 def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
+    actions: list[str] = []
+
     status_ok, status_out = _run_cmd(["openclaw", "status"], timeout=12)
     gw_ok, gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
     gw_status = _parse_json_from_output(gw_out)
@@ -788,18 +790,40 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
             "detail": gw_out if gw_out else status_out,
             "status_ok": status_ok,
             "gateway_status_ok": gw_ok,
+            "actions": actions,
         }
 
     restart_ok, restart_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
+    actions.append(f"gateway restart: {'ok' if restart_ok else 'failed'}")
+    if restart_out:
+        actions.append(restart_out)
     if not restart_ok:
         start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
         restart_ok = start_ok
         restart_out = start_out
+        actions.append(f"gateway start: {'ok' if start_ok else 'failed'}")
+        if start_out:
+            actions.append(start_out)
 
     recheck_ok, recheck_out = _run_cmd(["openclaw", "status"], timeout=12)
     recheck_gw_ok, recheck_gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
     recheck_gw_status = _parse_json_from_output(recheck_gw_out)
     running = _gateway_service_running(recheck_gw_status) or _gateway_running_from_status(recheck_out)
+    if not running:
+        install_ok, install_out = _run_cmd(["openclaw", "gateway", "install", "--force"], timeout=60)
+        actions.append(f"gateway install --force: {'ok' if install_ok else 'failed'}")
+        if install_out:
+            actions.append(install_out)
+        start2_ok, start2_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+        actions.append(f"gateway start (post-install): {'ok' if start2_ok else 'failed'}")
+        if start2_out:
+            actions.append(start2_out)
+        recheck2_ok, recheck2_out = _run_cmd(["openclaw", "status"], timeout=12)
+        recheck2_gw_ok, recheck2_gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
+        recheck2_gw_status = _parse_json_from_output(recheck2_gw_out)
+        running = _gateway_service_running(recheck2_gw_status) or _gateway_running_from_status(recheck2_out)
+        recheck_ok, recheck_out = recheck2_ok, recheck2_out
+        recheck_gw_ok, recheck_gw_out = recheck2_gw_ok, recheck2_gw_out
     return {
         "ok": running,
         "already_running": False,
@@ -808,6 +832,7 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
         "detail": recheck_gw_out if recheck_gw_out else recheck_out,
         "status_ok": recheck_ok,
         "gateway_status_ok": recheck_gw_ok,
+        "actions": actions,
     }
 
 
@@ -1214,10 +1239,14 @@ def run_deploy(
             non_interactive=bool(non_interactive),
         )
     else:
+        action_lines = gateway_for_pairing.get("actions", [])
+        action_text = "\n".join(f"- {line}" for line in action_lines if isinstance(line, str) and line.strip())
         console.print(
             "[yellow]Gateway is not running after auto-retry; skipping Telegram pairing approval for now.[/]\n"
             "[yellow]Run: openclaw --profile maestro-fleet gateway restart[/]"
         )
+        if action_text:
+            console.print(f"[dim]Gateway recovery attempts:\n{action_text}[/]")
         pairing_result = {
             "approved": False,
             "skipped": True,
