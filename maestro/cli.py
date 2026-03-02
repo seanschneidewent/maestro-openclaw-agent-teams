@@ -292,7 +292,12 @@ def _add_fleet_license_generate_flags(parser: argparse.ArgumentParser):
 def _add_fleet_deploy_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--company-name")
     parser.add_argument("--model")
+    parser.add_argument("--commander-model")
+    parser.add_argument("--project-model")
     parser.add_argument("--api-key")
+    parser.add_argument("--gemini-api-key")
+    parser.add_argument("--openai-api-key")
+    parser.add_argument("--anthropic-api-key")
     parser.add_argument("--telegram-token")
     parser.add_argument("--project-name")
     parser.add_argument("--assignee")
@@ -309,6 +314,16 @@ def _add_fleet_deploy_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--no-start", action="store_true")
 
 
+def _add_fleet_set_model_flags(parser: argparse.ArgumentParser, *, include_project: bool):
+    if include_project:
+        parser.add_argument("--project", required=True, help="Project slug or project name")
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--api-key")
+    parser.add_argument("--skip-remote-validation", action="store_true")
+    parser.add_argument("--allow-openclaw-override", action="store_true")
+    parser.add_argument("--store", help="Override fleet store root")
+
+
 def _add_fleet_parser(subparsers: argparse._SubParsersAction):
     parser = subparsers.add_parser("fleet", help="Fleet/enterprise command surface")
     fleet_sub = parser.add_subparsers(dest="fleet_command", required=True)
@@ -323,6 +338,8 @@ def _add_fleet_parser(subparsers: argparse._SubParsersAction):
     project_sub = project.add_subparsers(dest="fleet_project_command", required=True)
     project_create = project_sub.add_parser("create", help="Create and provision a Project Maestro")
     _add_fleet_project_create_flags(project_create)
+    project_set_model = project_sub.add_parser("set-model", help="Set model for an existing Project Maestro")
+    _add_fleet_set_model_flags(project_set_model, include_project=True)
 
     # Legacy parser kept only to print an explicit disable message.
     purchase = fleet_sub.add_parser("purchase", help=argparse.SUPPRESS)
@@ -332,6 +349,11 @@ def _add_fleet_parser(subparsers: argparse._SubParsersAction):
     license_sub = license_cmd.add_subparsers(dest="fleet_license_command", required=True)
     license_generate = license_sub.add_parser("generate", help="Generate a 1-year local Fleet project key")
     _add_fleet_license_generate_flags(license_generate)
+
+    commander = fleet_sub.add_parser("commander", help="Commander lifecycle operations")
+    commander_sub = commander.add_subparsers(dest="fleet_commander_command", required=True)
+    commander_set_model = commander_sub.add_parser("set-model", help="Set commander model")
+    _add_fleet_set_model_flags(commander_set_model, include_project=False)
 
     deploy = fleet_sub.add_parser("deploy", help="One-session Fleet remote deployment workflow")
     _add_fleet_deploy_flags(deploy)
@@ -520,6 +542,7 @@ def _open_url(url: str):
 def _run_fleet(args: argparse.Namespace):
     from .control_plane import resolve_network_urls
     from .fleet_deploy import run_deploy
+    from .fleet_models import run_set_commander_model, run_set_project_model
     from .install_state import resolve_fleet_store_root
     from .license import generate_project_key, validate_project_key
     from .doctor import run_doctor
@@ -581,7 +604,12 @@ def _run_fleet(args: argparse.Namespace):
         code = run_deploy(
             company_name=args.company_name,
             model=args.model,
+            commander_model=args.commander_model,
+            project_model=args.project_model,
             api_key=args.api_key,
+            gemini_api_key=args.gemini_api_key,
+            openai_api_key=args.openai_api_key,
+            anthropic_api_key=args.anthropic_api_key,
             telegram_token=args.telegram_token,
             project_name=args.project_name,
             assignee=args.assignee,
@@ -600,6 +628,24 @@ def _run_fleet(args: argparse.Namespace):
         if code != 0:
             sys.exit(code)
         return
+
+    if command == "commander":
+        if not fleet_enabled():
+            print("Fleet mode is not enabled.")
+            print("Run: maestro fleet enable")
+            sys.exit(1)
+        if str(args.fleet_commander_command or "").strip() == "set-model":
+            code = run_set_commander_model(
+                model=args.model,
+                api_key=args.api_key,
+                skip_remote_validation=bool(args.skip_remote_validation),
+                allow_openclaw_override=bool(args.allow_openclaw_override),
+                store_override=args.store,
+            )
+            if code != 0:
+                sys.exit(code)
+            return
+        raise SystemExit(f"Unknown fleet commander command: {args.fleet_commander_command}")
 
     if command == "project":
         if not fleet_enabled():
@@ -623,6 +669,18 @@ def _run_fleet(args: argparse.Namespace):
                 skip_remote_validation=bool(args.skip_remote_validation),
                 local_license_mode=True,
                 allow_openclaw_override=bool(args.allow_openclaw_override),
+            )
+            if code != 0:
+                sys.exit(code)
+            return
+        if str(args.fleet_project_command or "").strip() == "set-model":
+            code = run_set_project_model(
+                project=args.project,
+                model=args.model,
+                api_key=args.api_key,
+                skip_remote_validation=bool(args.skip_remote_validation),
+                allow_openclaw_override=bool(args.allow_openclaw_override),
+                store_override=args.store,
             )
             if code != 0:
                 sys.exit(code)

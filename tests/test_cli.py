@@ -49,6 +49,41 @@ def test_fleet_project_create_parser():
     assert args.non_interactive is True
 
 
+def test_fleet_project_set_model_parser():
+    parser = build_parser()
+    args = parser.parse_args([
+        "fleet",
+        "project",
+        "set-model",
+        "--project",
+        "tower-a",
+        "--model",
+        "anthropic/claude-opus-4-6",
+        "--skip-remote-validation",
+    ])
+    assert args.mode == "fleet"
+    assert args.fleet_command == "project"
+    assert args.fleet_project_command == "set-model"
+    assert args.project == "tower-a"
+    assert args.model == "anthropic/claude-opus-4-6"
+    assert args.skip_remote_validation is True
+
+
+def test_fleet_commander_set_model_parser():
+    parser = build_parser()
+    args = parser.parse_args([
+        "fleet",
+        "commander",
+        "set-model",
+        "--model",
+        "openai/gpt-5.2",
+    ])
+    assert args.mode == "fleet"
+    assert args.fleet_command == "commander"
+    assert args.fleet_commander_command == "set-model"
+    assert args.model == "openai/gpt-5.2"
+
+
 def test_fleet_license_generate_parser():
     parser = build_parser()
     args = parser.parse_args([
@@ -84,6 +119,16 @@ def test_fleet_deploy_parser():
         "deploy",
         "--company-name",
         "ACME",
+        "--commander-model",
+        "anthropic/claude-opus-4-6",
+        "--project-model",
+        "openai/gpt-5.2",
+        "--gemini-api-key",
+        "AIzaGeminiTestKey000000000000000000000",
+        "--openai-api-key",
+        "sk-test-openai",
+        "--anthropic-api-key",
+        "sk-ant-test",
         "--project-name",
         "Tower A",
         "--assignee",
@@ -96,6 +141,9 @@ def test_fleet_deploy_parser():
     assert args.mode == "fleet"
     assert args.fleet_command == "deploy"
     assert args.company_name == "ACME"
+    assert args.commander_model == "anthropic/claude-opus-4-6"
+    assert args.project_model == "openai/gpt-5.2"
+    assert args.gemini_api_key.startswith("AIza")
     assert args.project_name == "Tower A"
     assert args.local_license_mode is True
     assert args.non_interactive is True

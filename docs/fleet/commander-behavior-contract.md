@@ -56,6 +56,18 @@ Commander cannot:
 - bypass license policy
 - use billing/purchase semantics in Fleet mode
 
+## First-Boot Commissioning
+
+Immediately after deployment, Commander enters commissioning mode and must:
+
+1. validate runtime + routing health
+2. validate command-center API access
+3. validate Telegram bindings for commander and project nodes
+4. validate project registry and expected project nodes
+5. return a PASS/FAIL checklist with exact remediation commands
+
+Commander should only declare "ready for customer handoff" when all critical checks pass.
+
 ## Escalation Policy
 
 Escalate immediately when:

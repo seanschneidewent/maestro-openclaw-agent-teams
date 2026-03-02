@@ -18,6 +18,7 @@ import httpx
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
+from rich.table import Table
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls, sync_fleet_registry
 from .doctor import run_doctor
@@ -33,6 +34,22 @@ from .workspace_templates import provider_env_key_for_model
 console = Console()
 
 VERTEX_API_KEY_RE = re.compile(r"^AIza[0-9A-Za-z_-]{24,}$")
+KEY_ORDER = ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+MODEL_CHOICES = {
+    "1": "anthropic/claude-opus-4-6",
+    "2": "openai/gpt-5.2",
+    "3": "google/gemini-3-pro-preview",
+}
+MODEL_LABELS = {
+    "anthropic/claude-opus-4-6": "Anthropic Claude Opus 4.6",
+    "openai/gpt-5.2": "OpenAI GPT-5.2",
+    "google/gemini-3-pro-preview": "Google Gemini 3 Pro",
+}
+KEY_LABELS = {
+    "GEMINI_API_KEY": "Gemini key (Vertex/Gemini)",
+    "OPENAI_API_KEY": "OpenAI API key",
+    "ANTHROPIC_API_KEY": "Anthropic API key",
+}
 
 
 def _looks_like_vertex_api_key(value: str) -> bool:
@@ -49,6 +66,112 @@ def _mask_secret(value: str) -> str:
     if len(text) <= 8:
         return "*" * len(text)
     return f"{text[:4]}...{text[-4:]}"
+
+
+def _step_header(step: int, total_steps: int, title: str, *, enabled: bool):
+    if not enabled:
+        return
+    console.print()
+    filled = max(1, int((float(step) / float(total_steps)) * 30))
+    bar = "━" * filled + "─" * max(0, 30 - filled)
+    pct = int((float(step) / float(total_steps)) * 100)
+    console.print(
+        Panel(
+            f"[bold cyan]{title}[/]\n[dim]Step {step} of {total_steps}[/]\n[cyan]{bar}[/] [dim]{pct}%[/]",
+            border_style="cyan",
+        )
+    )
+
+
+def _provider_prompt_label(provider_env_key: str) -> str:
+    if provider_env_key == "GEMINI_API_KEY":
+        return "GEMINI_API_KEY (Gemini API or Vertex AI key)"
+    if provider_env_key == "OPENAI_API_KEY":
+        return "OPENAI_API_KEY"
+    if provider_env_key == "ANTHROPIC_API_KEY":
+        return "ANTHROPIC_API_KEY"
+    return provider_env_key
+
+
+def _collect_provider_key(
+    *,
+    provider_env_key: str,
+    provided_key: str,
+    existing_key: str,
+    non_interactive: bool,
+    skip_remote_validation: bool,
+    required: bool,
+) -> tuple[str, bool]:
+    selected = str(provided_key or "").strip()
+    used_existing = False
+
+    if not selected and existing_key:
+        if non_interactive:
+            selected = existing_key
+            used_existing = True
+        else:
+            use_existing = Confirm.ask(
+                f"Use existing {provider_env_key} from OpenClaw config ({_mask_secret(existing_key)})?",
+                default=False,
+            )
+            if use_existing:
+                selected = existing_key
+                used_existing = True
+
+    prompt_label = _provider_prompt_label(provider_env_key)
+    if not selected and not non_interactive:
+        if required:
+            selected = Prompt.ask(prompt_label).strip()
+        else:
+            selected = Prompt.ask(prompt_label, default="").strip()
+    if not selected:
+        if required:
+            console.print(f"[red]{provider_env_key} is required to continue.[/]")
+            return "", False
+        return "", True
+
+    if not skip_remote_validation:
+        ok_key, detail_key = _validate_api_key(provider_env_key, selected)
+        if not ok_key and used_existing and not non_interactive:
+            console.print(
+                f"[yellow]Existing {provider_env_key} failed validation ({detail_key}). Enter a different key.[/]"
+            )
+            replacement = Prompt.ask(prompt_label, default="").strip()
+            if replacement:
+                selected = replacement
+                ok_key, detail_key = _validate_api_key(provider_env_key, selected)
+        if not ok_key:
+            if non_interactive:
+                console.print(f"[red]API key validation failed for {provider_env_key}: {detail_key}[/]")
+                return "", False
+            proceed = Confirm.ask(
+                f"{provider_env_key} validation failed ({detail_key}). Continue anyway?",
+                default=False,
+            )
+            if not proceed:
+                if required:
+                    return "", False
+                return "", True
+    return selected, True
+
+
+def _prompt_model_selection(*, title: str, default_model: str, non_interactive: bool) -> str:
+    if non_interactive:
+        return default_model
+    model_options = [
+        ("1", "anthropic/claude-opus-4-6"),
+        ("2", "openai/gpt-5.2"),
+        ("3", "google/gemini-3-pro-preview"),
+    ]
+    default_choice = next((choice for choice, model in model_options if model == default_model), "1")
+    table = Table(show_header=False, box=None, padding=(0, 1))
+    for choice, model in model_options:
+        label = MODEL_LABELS.get(model, model)
+        suffix = " (default)" if choice == default_choice else ""
+        table.add_row(f"[cyan]{choice}[/]", f"{label}{suffix}")
+    console.print(Panel(table, title=title, border_style="cyan"))
+    choice = Prompt.ask("Choice", choices=[item[0] for item in model_options], default=default_choice)
+    return MODEL_CHOICES.get(choice, default_model)
 
 
 @dataclass
@@ -239,6 +362,7 @@ def _configure_company_openclaw(
     *,
     model: str,
     api_key: str | None,
+    provider_keys: dict[str, str] | None = None,
     telegram_token: str,
     allow_openclaw_override: bool,
 ) -> dict[str, Any]:
@@ -256,6 +380,11 @@ def _configure_company_openclaw(
 
     if not isinstance(config.get("env"), dict):
         config["env"] = {}
+    if isinstance(provider_keys, dict):
+        for key in KEY_ORDER:
+            value = str(provider_keys.get(key, "")).strip()
+            if value:
+                config["env"][key] = value
     provider_env_key = provider_env_key_for_model(model)
     if provider_env_key and isinstance(api_key, str) and api_key.strip():
         config["env"][provider_env_key] = api_key.strip()
@@ -456,11 +585,159 @@ def _verify_command_center_http(port: int, timeout_seconds: int = 25) -> bool:
     return False
 
 
+def _commissioning_report(
+    *,
+    store_root: Path,
+    web_port: int,
+    require_tailscale: bool,
+    expected_project_slug: str,
+    services_started: bool,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+
+    config, _ = _load_openclaw_config()
+    agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
+    commander = next(
+        (
+            item for item in agent_list
+            if isinstance(item, dict) and str(item.get("id", "")).strip() == "maestro-company"
+        ),
+        None,
+    )
+    checks.append({
+        "name": "commander_agent",
+        "ok": isinstance(commander, dict),
+        "level": "critical",
+        "detail": "maestro-company present" if isinstance(commander, dict) else "maestro-company agent missing",
+        "fix": "maestro-fleet deploy",
+    })
+    checks.append({
+        "name": "commander_default",
+        "ok": bool(commander.get("default")) if isinstance(commander, dict) else False,
+        "level": "critical",
+        "detail": "maestro-company is default agent" if isinstance(commander, dict) and bool(commander.get("default")) else "maestro-company is not default",
+        "fix": "maestro-fleet commander set-model --model anthropic/claude-opus-4-6",
+    })
+
+    channels = config.get("channels", {}) if isinstance(config.get("channels"), dict) else {}
+    telegram = channels.get("telegram", {}) if isinstance(channels.get("telegram"), dict) else {}
+    accounts = telegram.get("accounts", {}) if isinstance(telegram.get("accounts"), dict) else {}
+    has_commander_binding = isinstance(accounts.get("maestro-company"), dict)
+    checks.append({
+        "name": "commander_telegram_account",
+        "ok": has_commander_binding,
+        "level": "critical",
+        "detail": "Commander Telegram account configured" if has_commander_binding else "Commander Telegram account missing",
+        "fix": "maestro-fleet deploy",
+    })
+
+    openclaw_ok, openclaw_out = _run_cmd(["openclaw", "status"], timeout=8)
+    openclaw_running = openclaw_ok and "running" in str(openclaw_out).lower()
+    checks.append({
+        "name": "openclaw_gateway",
+        "ok": openclaw_running,
+        "level": "warning",
+        "detail": openclaw_out or "openclaw status unavailable",
+        "fix": "openclaw gateway restart",
+    })
+
+    command_center_ok = True
+    if services_started:
+        command_center_ok = _verify_command_center_http(int(web_port), timeout_seconds=6)
+    checks.append({
+        "name": "command_center_api",
+        "ok": bool(command_center_ok),
+        "level": "critical" if services_started else "warning",
+        "detail": (
+            f"http://127.0.0.1:{int(web_port)}/api/command-center/state reachable"
+            if command_center_ok else f"http://127.0.0.1:{int(web_port)}/api/command-center/state unavailable"
+        ),
+        "fix": "maestro-fleet up --tui",
+    })
+
+    registry = sync_fleet_registry(store_root)
+    projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
+    active_projects = [
+        item for item in projects
+        if isinstance(item, dict) and str(item.get("status", "active")).strip().lower() != "archived"
+    ]
+    checks.append({
+        "name": "registry_projects",
+        "ok": True,
+        "level": "warning",
+        "detail": f"{len(active_projects)} active project maestro(s) registered",
+        "fix": "maestro-fleet project create --project-name \"...\" --assignee \"...\"",
+    })
+    if expected_project_slug:
+        expected_exists = any(
+            str(item.get("project_slug", "")).strip() == expected_project_slug
+            for item in active_projects if isinstance(item, dict)
+        )
+        checks.append({
+            "name": "initial_project_registered",
+            "ok": expected_exists,
+            "level": "critical",
+            "detail": (
+                f"Initial project '{expected_project_slug}' registered"
+                if expected_exists else f"Initial project '{expected_project_slug}' missing from registry"
+            ),
+            "fix": "maestro-fleet project create --project-name \"...\" --assignee \"...\"",
+        })
+
+    tailscale_ok = True
+    tailscale_detail = "Tailscale check not required"
+    if require_tailscale:
+        tailscale_cmd_ok, tailscale_out = _run_cmd(["tailscale", "ip", "-4"], timeout=8)
+        tailscale_ok = bool(tailscale_cmd_ok and str(tailscale_out).strip())
+        tailscale_detail = str(tailscale_out).strip() or "No tailnet IPv4 detected"
+    checks.append({
+        "name": "tailscale_access",
+        "ok": tailscale_ok,
+        "level": "critical" if require_tailscale else "warning",
+        "detail": tailscale_detail,
+        "fix": "tailscale up",
+    })
+
+    critical_failures = [item for item in checks if item.get("level") == "critical" and not bool(item.get("ok"))]
+    return {
+        "ok": len(critical_failures) == 0,
+        "checks": checks,
+        "critical_failures": critical_failures,
+    }
+
+
+def _print_commissioning_report(report: dict[str, Any]):
+    checks = report.get("checks", []) if isinstance(report, dict) else []
+    lines: list[str] = []
+    for item in checks:
+        if not isinstance(item, dict):
+            continue
+        dot = "[green]PASS[/]" if bool(item.get("ok")) else "[red]FAIL[/]"
+        level = str(item.get("level", "")).strip().lower()
+        name = str(item.get("name", "")).strip()
+        detail = str(item.get("detail", "")).strip()
+        fix = str(item.get("fix", "")).strip()
+        lines.append(f"{dot}  {name} ({level})")
+        if detail:
+            lines.append(f"[dim]      {detail}[/]")
+        if not bool(item.get("ok")) and fix:
+            lines.append(f"[yellow]      fix: {fix}[/]")
+    title = "Commander Commissioning: READY" if bool(report.get("ok")) else "Commander Commissioning: ACTION REQUIRED"
+    border = "green" if bool(report.get("ok")) else "red"
+    console.print(Panel("\n".join(lines) if lines else "No checks executed.", title=title, border_style=border))
+
+
 def run_deploy(
     *,
     company_name: str | None = None,
     model: str | None = None,
+    commander_model: str | None = None,
+    project_model: str | None = None,
     api_key: str | None = None,
+    gemini_api_key: str | None = None,
+    openai_api_key: str | None = None,
+    anthropic_api_key: str | None = None,
     telegram_token: str | None = None,
     project_name: str | None = None,
     assignee: str | None = None,
@@ -478,7 +755,10 @@ def run_deploy(
 ) -> int:
     console.print("[bold cyan]Maestro Fleet Deploy[/]")
     console.print("One-session deployment for remote customer handoff.")
+    interactive_setup = not bool(non_interactive)
+    total_steps = 8
 
+    _step_header(1, total_steps, "Prerequisites", enabled=interactive_setup)
     prereq = _check_prereqs(require_tailscale=require_tailscale)
     if prereq.warnings:
         for warning in prereq.warnings:
@@ -495,19 +775,31 @@ def run_deploy(
     if update_code != 0:
         return update_code
 
+    _step_header(2, total_steps, "Commander + Project Models", enabled=interactive_setup)
     config, _ = _load_openclaw_config()
     current_company = _resolve_company_agent(config)
-    default_model = str(current_company.get("model", "openai/gpt-5.2")).strip() or "openai/gpt-5.2"
-    selected_model = str(model or "").strip() or default_model
+    default_model = str(current_company.get("model", "anthropic/claude-opus-4-6")).strip() or "anthropic/claude-opus-4-6"
+    selected_model = str(commander_model or model or "").strip() or default_model
+    if interactive_setup and not str(commander_model or model or "").strip():
+        selected_model = _prompt_model_selection(
+            title="Commander Model",
+            default_model=selected_model,
+            non_interactive=non_interactive,
+        )
+    selected_project_model = str(project_model or "").strip() or selected_model
+    if interactive_setup and not str(project_model or "").strip():
+        selected_project_model = _prompt_model_selection(
+            title="Default Project Maestro Model",
+            default_model=selected_project_model,
+            non_interactive=non_interactive,
+        )
     provider_env_key = provider_env_key_for_model(selected_model)
-    env = config.get("env", {}) if isinstance(config.get("env"), dict) else {}
-    existing_provider_key = str(env.get(provider_env_key, "")).strip() if provider_env_key else ""
-    prompt_label = (
-        "Default GEMINI_API_KEY for Company Maestro (Gemini API or Vertex AI key)"
-        if provider_env_key == "GEMINI_API_KEY"
-        else f"Default {provider_env_key} for Company Maestro"
-    )
+    if not provider_env_key:
+        console.print(f"[red]Unsupported commander model: {selected_model}[/]")
+        return 1
 
+    _step_header(3, total_steps, "Company Profile", enabled=interactive_setup)
+    env = config.get("env", {}) if isinstance(config.get("env"), dict) else {}
     chosen_company_name = str(company_name or "").strip()
     if not chosen_company_name:
         if non_interactive:
@@ -515,50 +807,38 @@ def run_deploy(
         else:
             chosen_company_name = Prompt.ask("Company name", default="Company").strip() or "Company"
 
-    selected_api_key = str(api_key or "").strip()
-    used_existing_api_key = False
-    if provider_env_key and not selected_api_key:
-        if existing_provider_key and not non_interactive:
-            use_existing = Confirm.ask(
-                f"Use existing {provider_env_key} from OpenClaw config ({_mask_secret(existing_provider_key)})?",
-                default=False,
-            )
-            if use_existing:
-                selected_api_key = existing_provider_key
-                used_existing_api_key = True
-        elif existing_provider_key:
-            selected_api_key = existing_provider_key
-            used_existing_api_key = True
-    if provider_env_key and not selected_api_key and non_interactive:
-        console.print(f"[red]Missing API key for {provider_env_key}[/]")
-        return 1
-    if provider_env_key and not selected_api_key:
-        selected_api_key = Prompt.ask(prompt_label).strip()
-        if not selected_api_key:
-            console.print(f"[red]{provider_env_key} is required to continue.[/]")
-            return 1
-    if provider_env_key and selected_api_key and not skip_remote_validation:
-        ok_key, detail_key = _validate_api_key(provider_env_key, selected_api_key)
-        if not ok_key and used_existing_api_key:
-            console.print(
-                f"[yellow]Existing {provider_env_key} failed validation ({detail_key}). Enter a different key.[/]"
-            )
-            replacement = Prompt.ask(prompt_label).strip()
-            if replacement:
-                selected_api_key = replacement
-                used_existing_api_key = False
-                ok_key, detail_key = _validate_api_key(provider_env_key, selected_api_key)
-            else:
-                console.print(f"[red]{provider_env_key} is required to continue.[/]")
-                return 1
-        if not ok_key:
-            if non_interactive:
-                console.print(f"[red]API key validation failed: {detail_key}[/]")
-                return 1
-            proceed = Confirm.ask(f"API key validation failed ({detail_key}). Continue anyway?", default=False)
-            if not proceed:
-                return 1
+    _step_header(4, total_steps, "Provider Keys", enabled=interactive_setup)
+    provider_inputs = {
+        "GEMINI_API_KEY": str(gemini_api_key or "").strip(),
+        "OPENAI_API_KEY": str(openai_api_key or "").strip(),
+        "ANTHROPIC_API_KEY": str(anthropic_api_key or "").strip(),
+    }
+    legacy_key = str(api_key or "").strip()
+    if legacy_key and provider_env_key and not provider_inputs.get(provider_env_key):
+        provider_inputs[provider_env_key] = legacy_key
 
+    for env_key in KEY_ORDER:
+        provided_value = str(provider_inputs.get(env_key, "")).strip()
+        existing_value = str(env.get(env_key, "")).strip()
+        required = env_key == "GEMINI_API_KEY" and interactive_setup
+        selected_key, ok = _collect_provider_key(
+            provider_env_key=env_key,
+            provided_key=provided_value,
+            existing_key=existing_value,
+            non_interactive=non_interactive,
+            skip_remote_validation=skip_remote_validation,
+            required=required,
+        )
+        if not ok:
+            return 1
+        provider_inputs[env_key] = selected_key
+
+    selected_api_key = str(provider_inputs.get(provider_env_key, "")).strip()
+    if not selected_api_key:
+        console.print(f"[red]Missing key for commander model provider: {provider_env_key}[/]")
+        return 1
+
+    _step_header(5, total_steps, "Commander Telegram", enabled=interactive_setup)
     selected_company_telegram = str(telegram_token or "").strip() or _resolve_company_token(config)
     if not selected_company_telegram and non_interactive:
         console.print("[red]Missing --telegram-token for Company Maestro[/]")
@@ -580,6 +860,7 @@ def run_deploy(
         company_cfg = _configure_company_openclaw(
             model=selected_model,
             api_key=selected_api_key,
+            provider_keys=provider_inputs,
             telegram_token=selected_company_telegram,
             allow_openclaw_override=allow_openclaw_override,
         )
@@ -599,10 +880,13 @@ def run_deploy(
             "store_root": str(store_root),
             "fleet_store_root": str(store_root),
             "company_name": chosen_company_name,
+            "commander_model": selected_model,
+            "project_model": selected_project_model,
             "updated_at": _now_iso(),
         }
     )
 
+    _step_header(6, total_steps, "Initial Project Maestro", enabled=interactive_setup)
     create_project = bool(project_name or assignee or project_telegram_token)
     if not create_project and not non_interactive:
         create_project = Confirm.ask("Provision an initial project Maestro now?", default=True)
@@ -627,12 +911,20 @@ def run_deploy(
         if not selected_project_telegram:
             selected_project_telegram = Prompt.ask("Initial project Telegram bot token").strip()
 
+        project_provider_env_key = provider_env_key_for_model(selected_project_model)
+        project_api_key = str(provider_inputs.get(project_provider_env_key or "", "")).strip()
+        if project_provider_env_key and not project_api_key:
+            console.print(
+                f"[red]Missing {project_provider_env_key} required for project model {selected_project_model}[/]"
+            )
+            return 1
+
         purchase_code = run_purchase(
             project_name=chosen_project_name,
             assignee=chosen_assignee,
             superintendent=superintendent,
-            model=selected_model,
-            api_key=selected_api_key,
+            model=selected_project_model,
+            api_key=project_api_key,
             telegram_token=selected_project_telegram,
             store_override=str(store_root),
             dry_run=False,
@@ -648,6 +940,7 @@ def run_deploy(
     else:
         project_slug = ""
 
+    _step_header(7, total_steps, "Doctor + Runtime Health", enabled=interactive_setup)
     doctor_code = run_doctor(
         fix=True,
         store_override=str(store_root),
@@ -687,6 +980,17 @@ def run_deploy(
             )
             return 1
 
+    _step_header(8, total_steps, "Commander Commissioning", enabled=interactive_setup)
+    commissioning = _commissioning_report(
+        store_root=store_root,
+        web_port=effective_port,
+        require_tailscale=bool(require_tailscale),
+        expected_project_slug=project_slug,
+        services_started=bool(start_services),
+    )
+    _print_commissioning_report(commissioning)
+    commissioning_ready = bool(commissioning.get("ok"))
+
     final_config, _ = _load_openclaw_config()
     channels = final_config.get("channels", {}) if isinstance(final_config.get("channels"), dict) else {}
     telegram = channels.get("telegram", {}) if isinstance(channels.get("telegram"), dict) else {}
@@ -718,11 +1022,16 @@ def run_deploy(
         f"Profile: fleet",
         f"Store Root: {store_root}",
         f"Workspace Root: {company_cfg['workspace_root']}",
-        f"Model: {selected_model}",
+        f"Commander Model: {selected_model}",
+        f"Project Model: {selected_project_model}",
         "License Mode: local/offline",
         f"Command Center: {command_center_url}",
         f"Command Center (local): {local_url}",
     ]
+    for key_name in KEY_ORDER:
+        summary_lines.append(
+            f"{KEY_LABELS.get(key_name, key_name)}: {'configured' if provider_inputs.get(key_name) else 'missing'}"
+        )
     if tailnet_url:
         summary_lines.append(f"Command Center (tailnet): {tailnet_url}")
     if start_services:
@@ -738,7 +1047,17 @@ def run_deploy(
             summary_lines.append(f"Text initial project Maestro: @{project_username}")
         else:
             summary_lines.append(f"Initial project Maestro slug: {project_slug}")
+    summary_lines.append(
+        "Commander Commissioning: READY"
+        if commissioning_ready else "Commander Commissioning: ACTION REQUIRED"
+    )
 
     console.print()
-    console.print(Panel("\n".join(summary_lines), title="Fleet Deployment Summary", border_style="cyan"))
+    console.print(
+        Panel(
+            "\n".join(summary_lines),
+            title="Fleet Deployment Summary",
+            border_style="cyan" if commissioning_ready else "yellow",
+        )
+    )
     return 0

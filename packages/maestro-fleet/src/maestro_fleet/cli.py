@@ -96,6 +96,13 @@ def build_parser() -> argparse.ArgumentParser:
     project_create.add_argument("--skip-remote-validation", action="store_true")
     project_create.add_argument("--local", "--offline", dest="local_license_mode", action="store_true")
     project_create.add_argument("--allow-openclaw-override", action="store_true")
+    project_set_model = project_sub.add_parser("set-model", help="Set model for an existing Project Maestro")
+    project_set_model.add_argument("--project", required=True, help="Project slug or project name")
+    project_set_model.add_argument("--model", required=True)
+    project_set_model.add_argument("--api-key")
+    project_set_model.add_argument("--skip-remote-validation", action="store_true")
+    project_set_model.add_argument("--allow-openclaw-override", action="store_true")
+    project_set_model.add_argument("--store")
 
     # Legacy command kept only to return an explicit disable message from runtime.
     purchase = subparsers.add_parser("purchase", help=argparse.SUPPRESS)
@@ -129,7 +136,12 @@ def build_parser() -> argparse.ArgumentParser:
     deploy = subparsers.add_parser("deploy", help="One-session Fleet remote deployment workflow")
     deploy.add_argument("--company-name")
     deploy.add_argument("--model")
+    deploy.add_argument("--commander-model")
+    deploy.add_argument("--project-model")
     deploy.add_argument("--api-key")
+    deploy.add_argument("--gemini-api-key")
+    deploy.add_argument("--openai-api-key")
+    deploy.add_argument("--anthropic-api-key")
     deploy.add_argument("--telegram-token")
     deploy.add_argument("--project-name")
     deploy.add_argument("--assignee")
@@ -144,6 +156,15 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--require-tailscale", action="store_true")
     deploy.add_argument("--allow-openclaw-override", action="store_true")
     deploy.add_argument("--no-start", action="store_true")
+
+    commander = subparsers.add_parser("commander", help="Commander lifecycle operations")
+    commander_sub = commander.add_subparsers(dest="commander_command", required=True)
+    commander_set_model = commander_sub.add_parser("set-model", help="Set commander model")
+    commander_set_model.add_argument("--model", required=True)
+    commander_set_model.add_argument("--api-key")
+    commander_set_model.add_argument("--skip-remote-validation", action="store_true")
+    commander_set_model.add_argument("--allow-openclaw-override", action="store_true")
+    commander_set_model.add_argument("--store")
 
     cc = subparsers.add_parser("command-center", help="Show/open command center URL")
     cc.add_argument("--open", action="store_true", help="Open URL in browser")
@@ -232,7 +253,12 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
                 {
                     "company_name": "--company-name",
                     "model": "--model",
+                    "commander_model": "--commander-model",
+                    "project_model": "--project-model",
                     "api_key": "--api-key",
+                    "gemini_api_key": "--gemini-api-key",
+                    "openai_api_key": "--openai-api-key",
+                    "anthropic_api_key": "--anthropic-api-key",
                     "telegram_token": "--telegram-token",
                     "project_name": "--project-name",
                     "assignee": "--assignee",
@@ -275,7 +301,33 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
                     "allow_openclaw_override": "--allow-openclaw-override",
                 },
             )
+        if sub == "set-model":
+            return ["fleet", "project", "set-model"] + _flag_args(
+                args,
+                {
+                    "project": "--project",
+                    "model": "--model",
+                    "api_key": "--api-key",
+                    "skip_remote_validation": "--skip-remote-validation",
+                    "allow_openclaw_override": "--allow-openclaw-override",
+                    "store": "--store",
+                },
+            )
         raise SystemExit(f"Unknown project command: {sub}")
+    if command == "commander":
+        sub = str(getattr(args, "commander_command", "")).strip()
+        if sub == "set-model":
+            return ["fleet", "commander", "set-model"] + _flag_args(
+                args,
+                {
+                    "model": "--model",
+                    "api_key": "--api-key",
+                    "skip_remote_validation": "--skip-remote-validation",
+                    "allow_openclaw_override": "--allow-openclaw-override",
+                    "store": "--store",
+                },
+            )
+        raise SystemExit(f"Unknown commander command: {sub}")
     if command == "license":
         sub = str(getattr(args, "license_command", "")).strip()
         if sub == "generate":

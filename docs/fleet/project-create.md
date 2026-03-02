@@ -18,6 +18,14 @@ Behavior in Fleet mode:
 - OpenClaw agent + Telegram routing configuration
 - Gateway reload and ingest command output
 
+Switch an existing project to a different model/provider:
+
+```bash
+maestro-fleet project set-model \
+  --project "CFA Love Field" \
+  --model "anthropic/claude-opus-4-6"
+```
+
 Generate a key explicitly (no project creation):
 
 ```bash

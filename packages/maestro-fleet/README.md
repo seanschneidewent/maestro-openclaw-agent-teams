@@ -41,6 +41,8 @@ The release helper now:
 - `maestro-fleet enable`
 - `maestro-fleet status`
 - `maestro-fleet project create`
+- `maestro-fleet project set-model`
+- `maestro-fleet commander set-model`
 - `maestro-fleet license generate`
 - `maestro-fleet deploy`
 - `maestro-fleet command-center`

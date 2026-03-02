@@ -79,7 +79,10 @@ MAESTRO_USE_LOCAL_REPO=1 bash scripts/install-maestro-fleet.sh
 ## Session Inputs to Collect
 
 - Company name
-- Default model/provider key for Commander
+- Commander model + default project model
+- `GEMINI_API_KEY` (required for ingest/vision)
+- `OPENAI_API_KEY` (recommended)
+- `ANTHROPIC_API_KEY` (recommended; best commander instruction following)
 - Commander Telegram bot token
 - Initial project name + assignee
 - Initial project Telegram bot token
@@ -95,8 +98,11 @@ maestro-fleet deploy
 ```bash
 maestro-fleet deploy \
   --company-name "ACME Construction" \
-  --model "openai/gpt-5.2" \
-  --api-key "sk-..." \
+  --commander-model "anthropic/claude-opus-4-6" \
+  --project-model "openai/gpt-5.2" \
+  --gemini-api-key "AIza..." \
+  --openai-api-key "sk-..." \
+  --anthropic-api-key "sk-ant-..." \
   --telegram-token "<company_bot_token>" \
   --project-name "Terminal Buildout" \
   --assignee "Sean" \

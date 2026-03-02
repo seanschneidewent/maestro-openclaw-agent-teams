@@ -21,6 +21,40 @@ def test_forward_project_create_args():
     assert "--dry-run" in forwarded
 
 
+def test_forward_project_set_model_args():
+    parser = cli.build_parser()
+    args = parser.parse_args([
+        "project",
+        "set-model",
+        "--project",
+        "tower-a",
+        "--model",
+        "anthropic/claude-opus-4-6",
+        "--skip-remote-validation",
+    ])
+    forwarded = cli._to_legacy_argv(args)
+    assert forwarded[:3] == ["fleet", "project", "set-model"]
+    assert "--project" in forwarded
+    assert "--model" in forwarded
+    assert "--skip-remote-validation" in forwarded
+
+
+def test_forward_commander_set_model_args():
+    parser = cli.build_parser()
+    args = parser.parse_args([
+        "commander",
+        "set-model",
+        "--model",
+        "openai/gpt-5.2",
+        "--api-key",
+        "sk-test",
+    ])
+    forwarded = cli._to_legacy_argv(args)
+    assert forwarded[:3] == ["fleet", "commander", "set-model"]
+    assert "--model" in forwarded
+    assert "--api-key" in forwarded
+
+
 def test_forward_license_generate_args():
     parser = cli.build_parser()
     args = parser.parse_args(["license", "generate", "--project-name", "ACME Tower", "--expiry-days", "365"])
@@ -36,6 +70,16 @@ def test_forward_deploy_args():
         "deploy",
         "--company-name",
         "ACME",
+        "--commander-model",
+        "anthropic/claude-opus-4-6",
+        "--project-model",
+        "openai/gpt-5.2",
+        "--gemini-api-key",
+        "AIzaGeminiTestKey000000000000000000000",
+        "--openai-api-key",
+        "sk-openai",
+        "--anthropic-api-key",
+        "sk-ant",
         "--project-name",
         "Tower A",
         "--assignee",
@@ -48,6 +92,8 @@ def test_forward_deploy_args():
     forwarded = cli._to_legacy_argv(args)
     assert forwarded[:2] == ["fleet", "deploy"]
     assert "--company-name" in forwarded
+    assert "--commander-model" in forwarded
+    assert "--project-model" in forwarded
     assert "--project-name" in forwarded
     assert "--local" in forwarded
 
