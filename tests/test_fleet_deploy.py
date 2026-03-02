@@ -493,6 +493,7 @@ def test_run_cmd_defaults_openclaw_profile_to_maestro_fleet(monkeypatch):
 
     def _fake_run(args, **kwargs):
         observed["args"] = list(args)
+        observed["env"] = dict(kwargs.get("env", {}) or {})
 
         class _Result:
             returncode = 0
@@ -508,6 +509,7 @@ def test_run_cmd_defaults_openclaw_profile_to_maestro_fleet(monkeypatch):
     assert out == "ok"
     assert observed["args"][:3] == ["openclaw", "--profile", "maestro-fleet"]
     assert observed["args"][3:] == ["status"]
+    assert str(observed.get("env", {}).get("OPENCLAW_GATEWAY_PORT", "")).isdigit()
 
 
 def test_run_cmd_does_not_add_profile_to_non_openclaw(monkeypatch):
@@ -516,6 +518,7 @@ def test_run_cmd_does_not_add_profile_to_non_openclaw(monkeypatch):
 
     def _fake_run(args, **kwargs):
         observed["args"] = list(args)
+        observed["env"] = dict(kwargs.get("env", {}) or {})
 
         class _Result:
             returncode = 0
@@ -530,6 +533,7 @@ def test_run_cmd_does_not_add_profile_to_non_openclaw(monkeypatch):
     assert ok is True
     assert out == "ok"
     assert observed["args"] == ["tailscale", "ip", "-4"]
+    assert "OPENCLAW_GATEWAY_PORT" not in observed.get("env", {})
 
 
 def test_ensure_gateway_running_for_pairing_when_already_running(monkeypatch):

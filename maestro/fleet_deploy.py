@@ -258,8 +258,18 @@ def _run_cmd(args: list[str], timeout: int = 12) -> tuple[bool, str]:
     # Fleet deploy should never target the shared OpenClaw state by accident.
     # If no MAESTRO_OPENCLAW_PROFILE is set, default all OpenClaw calls to maestro-fleet.
     profiled_args = prepend_openclaw_profile_args(args, default_profile="maestro-fleet")
+    env = os.environ.copy()
+    if profiled_args and profiled_args[0] == "openclaw":
+        env.setdefault("OPENCLAW_GATEWAY_PORT", str(_fleet_gateway_port()))
     try:
-        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout, check=False)
+        result = subprocess.run(
+            profiled_args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -270,6 +280,7 @@ def _run_cmd_raw(args: list[str], timeout: int = 12, *, clear_profile_env: bool 
     env = os.environ.copy()
     if clear_profile_env:
         env.pop("MAESTRO_OPENCLAW_PROFILE", None)
+        env.pop("OPENCLAW_GATEWAY_PORT", None)
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False, env=env)
     except Exception as exc:
@@ -496,7 +507,10 @@ def _complete_commander_pairing(
         console.print("[green]Commander Telegram pairing approved.[/]")
     else:
         console.print(f"[yellow]Commander pairing not approved yet: {detail}[/]")
-        console.print(f"[bold white]Run when ready:[/] openclaw pairing approve telegram {selected}")
+        console.print(
+            f"[bold white]Run when ready:[/] OPENCLAW_GATEWAY_PORT={_fleet_gateway_port()} "
+            f"openclaw --profile maestro-fleet pairing approve telegram {selected}"
+        )
     return {"approved": ok, "skipped": False, "pairing_code": selected, "detail": detail}
 
 
@@ -1239,7 +1253,10 @@ def run_deploy(
         else:
             console.print(
                 "[yellow]Gateway device-token mismatch detected and auto-repair did not fully resolve.[/]\n"
-                "[yellow]Run: openclaw --profile maestro-fleet gateway token rotate && openclaw --profile maestro-fleet gateway restart[/]"
+                f"[yellow]Run: OPENCLAW_GATEWAY_PORT={_fleet_gateway_port()} "
+                "openclaw --profile maestro-fleet gateway token rotate && "
+                f"OPENCLAW_GATEWAY_PORT={_fleet_gateway_port()} "
+                "openclaw --profile maestro-fleet gateway restart[/]"
             )
 
     gateway_for_pairing = _ensure_gateway_running_for_pairing()
@@ -1256,7 +1273,8 @@ def run_deploy(
         action_text = "\n".join(f"- {line}" for line in action_lines if isinstance(line, str) and line.strip())
         console.print(
             "[yellow]Gateway is not running after auto-retry; skipping Telegram pairing approval for now.[/]\n"
-            "[yellow]Run: openclaw --profile maestro-fleet gateway restart[/]"
+            f"[yellow]Run: OPENCLAW_GATEWAY_PORT={_fleet_gateway_port()} "
+            "openclaw --profile maestro-fleet gateway restart[/]"
         )
         if action_text:
             console.print(f"[dim]Gateway recovery attempts:\n{action_text}[/]")
