@@ -35,6 +35,7 @@ from .workspace_templates import (
 
 PROVIDER_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY")
 _ENV_TRUE = {"1", "true", "yes", "on"}
+DEFAULT_FLEET_GATEWAY_PORT = 18889
 
 
 @dataclass
@@ -59,6 +60,15 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in _ENV_TRUE
+
+
+def _fleet_gateway_port() -> int:
+    raw = str(os.environ.get("MAESTRO_FLEET_GATEWAY_PORT", "")).strip()
+    if raw.isdigit():
+        value = int(raw)
+        if 1 <= value <= 65535:
+            return value
+    return DEFAULT_FLEET_GATEWAY_PORT
 
 
 def _load_openclaw_config(home_dir: Path) -> tuple[dict[str, Any], Path]:
@@ -106,16 +116,18 @@ def _infer_store_root(store_override: str | None, workspace_root: Path | None) -
     return resolve_fleet_store_root(store_override=store_override)
 
 
-def _launchagent_path(home_dir: Path) -> Path:
-    return home_dir / "Library" / "LaunchAgents" / "ai.openclaw.gateway.plist"
+def _launchagent_path(home_dir: Path, *, profile: str) -> Path:
+    label = "ai.openclaw.maestro-fleet.plist" if profile == PROFILE_FLEET else "ai.openclaw.gateway.plist"
+    return home_dir / "Library" / "LaunchAgents" / label
 
 
 def _sync_launchagent_env(
     home_dir: Path,
     config_env: dict[str, Any],
+    profile: str,
     fix: bool,
 ) -> DoctorCheck:
-    plist_path = _launchagent_path(home_dir)
+    plist_path = _launchagent_path(home_dir, profile=profile)
     if platform.system().lower() != "darwin":
         return DoctorCheck(
             name="launchagent_env_sync",
@@ -569,26 +581,29 @@ def _sync_gateway_launchagent_token(
             warning=True,
         )
 
-    # Fleet runs in an isolated OpenClaw profile, but launchd/systemd service
-    # installation is host-global in practice. Reinstalling here can stomp an
-    # existing non-fleet OpenClaw service on the same machine.
+    # Fleet runs in its own profiled LaunchAgent label. Ensure the profiled
+    # service is explicitly installed and started on a dedicated port.
     if profile == PROFILE_FLEET:
-        restart_ok, restart_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
-        if not restart_ok:
-            start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
-            restart_ok = start_ok
-            restart_out = start_out
-        if restart_ok:
+        port = _fleet_gateway_port()
+        install_ok, install_out = _run_cmd(
+            ["openclaw", "gateway", "install", "--force", "--port", str(port)],
+            timeout=60,
+        )
+        start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+        if (install_ok or start_ok) and _gateway_running():
             return DoctorCheck(
                 name="gateway_launchagent_sync",
                 ok=True,
-                detail="Fleet mode: skipped LaunchAgent reinstall; restarted gateway in-profile",
+                detail=f"Fleet mode: refreshed profiled gateway service on port {port}",
                 fixed=True,
             )
         return DoctorCheck(
             name="gateway_launchagent_sync",
             ok=False,
-            detail=f"Fleet mode: LaunchAgent reinstall skipped; gateway restart failed: {restart_out}",
+            detail=(
+                f"Fleet mode gateway refresh failed: install={install_out or install_ok}, "
+                f"start={start_out or start_ok}"
+            ),
             warning=True,
         )
 
@@ -692,7 +707,7 @@ def _repair_cli_device_pairing(fix: bool) -> DoctorCheck:
     )
 
 
-def _restart_gateway(home_dir: Path, fix: bool) -> DoctorCheck:
+def _restart_gateway(home_dir: Path, fix: bool, *, profile: str) -> DoctorCheck:
     ok, out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
     if ok and _gateway_running():
         return DoctorCheck(
@@ -711,15 +726,34 @@ def _restart_gateway(home_dir: Path, fix: bool) -> DoctorCheck:
                 fixed=fix,
             )
 
+    if profile == PROFILE_FLEET:
+        port = _fleet_gateway_port()
+        _run_cmd(["openclaw", "gateway", "install", "--force", "--port", str(port)], timeout=60)
+        start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+        if start_ok and _gateway_running():
+            return DoctorCheck(
+                name="gateway_restart",
+                ok=True,
+                detail=f"openclaw gateway reinstalled and started on port {port}",
+                fixed=fix,
+            )
+        return DoctorCheck(
+            name="gateway_restart",
+            ok=False,
+            detail=f"Gateway restart/start failed in fleet mode: {start_out or out}",
+            warning=True,
+        )
+
     # Fallback for mac LaunchAgent flows when restart races with stale PID.
     if platform.system().lower() == "darwin":
-        plist_path = _launchagent_path(home_dir)
+        plist_path = _launchagent_path(home_dir, profile=profile)
         if plist_path.exists():
             uid = str(os.getuid())
-            _run_cmd(["launchctl", "bootout", f"gui/{uid}/ai.openclaw.gateway"], timeout=15)
+            label = "ai.openclaw.gateway"
+            _run_cmd(["launchctl", "bootout", f"gui/{uid}/{label}"], timeout=15)
             _run_cmd(["pkill", "-f", "openclaw-gateway"], timeout=8)
             _run_cmd(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)], timeout=15)
-            kick_ok, kick_out = _run_cmd(["launchctl", "kickstart", "-k", f"gui/{uid}/ai.openclaw.gateway"], timeout=15)
+            kick_ok, kick_out = _run_cmd(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"], timeout=15)
             if kick_ok:
                 return DoctorCheck(
                     name="gateway_restart",
@@ -848,7 +882,7 @@ def build_doctor_report(
     ))
     checks.append(_sync_workspace_agents_md(workspace, profile=profile, fix=fix))
     checks.append(_sync_workspace_env_role(workspace, expected_role=expected_role, fix=fix))
-    checks.append(_sync_launchagent_env(home, config_env=config_env, fix=fix))
+    checks.append(_sync_launchagent_env(home, config_env=config_env, profile=profile, fix=fix))
     checks.append(_rotate_stale_sessions(home, fix=fix))
     checks.append(_sync_telegram_bindings(config, config_path=config_path, fix=fix))
     gateway_token_check = _sync_gateway_auth_tokens(config, config_path=config_path, fix=fix)
@@ -862,7 +896,7 @@ def build_doctor_report(
     )
 
     if restart_gateway and fix:
-        checks.append(_restart_gateway(home, fix=fix))
+        checks.append(_restart_gateway(home, fix=fix, profile=profile))
         time.sleep(1.0)
 
     checks.append(_repair_cli_device_pairing(fix=fix))

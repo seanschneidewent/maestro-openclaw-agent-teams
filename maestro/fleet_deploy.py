@@ -56,6 +56,7 @@ KEY_LABELS = {
     "OPENAI_API_KEY": "OpenAI API key",
     "ANTHROPIC_API_KEY": "Anthropic API key",
 }
+DEFAULT_FLEET_GATEWAY_PORT = 18889
 
 
 def _looks_like_vertex_api_key(value: str) -> bool:
@@ -72,6 +73,15 @@ def _mask_secret(value: str) -> str:
     if len(text) <= 8:
         return "*" * len(text)
     return f"{text[:4]}...{text[-4:]}"
+
+
+def _fleet_gateway_port() -> int:
+    raw = str(os.environ.get("MAESTRO_FLEET_GATEWAY_PORT", "")).strip()
+    if raw.isdigit():
+        value = int(raw)
+        if 1 <= value <= 65535:
+            return value
+    return DEFAULT_FLEET_GATEWAY_PORT
 
 
 def _step_header(step: int, total_steps: int, title: str, *, enabled: bool):
@@ -307,7 +317,7 @@ def _gateway_port(gateway_status: dict[str, Any]) -> int:
     return 0
 
 
-def _check_shared_gateway_collision(*, fleet_port: int) -> dict[str, Any]:
+def _check_shared_gateway_collision(*, target_gateway_port: int) -> dict[str, Any]:
     shared_ok, shared_out = _run_cmd_raw(
         ["openclaw", "gateway", "status", "--json"],
         timeout=12,
@@ -323,7 +333,7 @@ def _check_shared_gateway_collision(*, fleet_port: int) -> dict[str, Any]:
     shared_running = _gateway_service_running(shared_status)
     fleet_running = _gateway_service_running(fleet_status)
     shared_port = _gateway_port(shared_status) or 18789
-    effective_fleet_port = _gateway_port(fleet_status) or int(fleet_port)
+    effective_fleet_port = _gateway_port(fleet_status) or int(target_gateway_port)
     port_collision = int(shared_port) == int(effective_fleet_port)
 
     blocked = bool(shared_running and port_collision and not fleet_running)
@@ -810,7 +820,10 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
     recheck_gw_status = _parse_json_from_output(recheck_gw_out)
     running = _gateway_service_running(recheck_gw_status) or _gateway_running_from_status(recheck_out)
     if not running:
-        install_ok, install_out = _run_cmd(["openclaw", "gateway", "install", "--force"], timeout=60)
+        install_ok, install_out = _run_cmd(
+            ["openclaw", "gateway", "install", "--force", "--port", str(_fleet_gateway_port())],
+            timeout=60,
+        )
         actions.append(f"gateway install --force: {'ok' if install_ok else 'failed'}")
         if install_out:
             actions.append(install_out)
@@ -1023,7 +1036,7 @@ def run_deploy(
     set_profile("fleet", fleet=True)
     _ensure_openclaw_config_exists()
 
-    collision = _check_shared_gateway_collision(fleet_port=int(port))
+    collision = _check_shared_gateway_collision(target_gateway_port=_fleet_gateway_port())
     if collision.get("blocked"):
         shared_port = int(collision.get("shared_port", 18789))
         console.print(

@@ -161,7 +161,7 @@ def test_run_deploy_uses_shifted_port_when_requested_port_busy(monkeypatch, tmp_
     monkeypatch.setattr(
         fleet_deploy,
         "_check_shared_gateway_collision",
-        lambda fleet_port: {"blocked": False},
+        lambda target_gateway_port: {"blocked": False},
     )
     monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
@@ -242,7 +242,7 @@ def test_run_deploy_reuses_existing_server_port_from_pid_state(monkeypatch, tmp_
     monkeypatch.setattr(
         fleet_deploy,
         "_check_shared_gateway_collision",
-        lambda fleet_port: {"blocked": False},
+        lambda target_gateway_port: {"blocked": False},
     )
     monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
@@ -329,7 +329,7 @@ def test_run_deploy_prompts_for_new_key_when_existing_config_key_declined(monkey
     monkeypatch.setattr(
         fleet_deploy,
         "_check_shared_gateway_collision",
-        lambda fleet_port: {"blocked": False},
+        lambda target_gateway_port: {"blocked": False},
     )
     monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
@@ -403,7 +403,7 @@ def test_run_deploy_existing_key_prompt_defaults_to_no(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(
         fleet_deploy,
         "_check_shared_gateway_collision",
-        lambda fleet_port: {"blocked": False},
+        lambda target_gateway_port: {"blocked": False},
     )
     monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
@@ -577,7 +577,7 @@ def test_run_deploy_blocks_when_shared_gateway_would_collide(monkeypatch, tmp_pa
     monkeypatch.setattr(
         fleet_deploy,
         "_check_shared_gateway_collision",
-        lambda fleet_port: {"blocked": True, "shared_port": 18789},
+        lambda target_gateway_port: {"blocked": True, "shared_port": 18789},
     )
 
     called = {"update": False}
