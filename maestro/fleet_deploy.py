@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -253,6 +254,88 @@ def _run_cmd(args: list[str], timeout: int = 12) -> tuple[bool, str]:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
     return result.returncode == 0, output
+
+
+def _run_cmd_raw(args: list[str], timeout: int = 12, *, clear_profile_env: bool = False) -> tuple[bool, str]:
+    env = os.environ.copy()
+    if clear_profile_env:
+        env.pop("MAESTRO_OPENCLAW_PROFILE", None)
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False, env=env)
+    except Exception as exc:
+        return False, str(exc)
+    output = (result.stdout or "").strip() or (result.stderr or "").strip()
+    return result.returncode == 0, output
+
+
+def _parse_json_from_output(text: str) -> dict[str, Any]:
+    raw = str(text or "")
+    idx = raw.find("{")
+    if idx < 0:
+        return {}
+    snippet = raw[idx:].strip()
+    try:
+        payload = json.loads(snippet)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _gateway_service_running(gateway_status: dict[str, Any]) -> bool:
+    service = gateway_status.get("service", {}) if isinstance(gateway_status.get("service"), dict) else {}
+    runtime = service.get("runtime", {}) if isinstance(service.get("runtime"), dict) else {}
+    status_text = str(runtime.get("status", "")).strip().lower()
+    return status_text in {"running", "started", "active"}
+
+
+def _gateway_port(gateway_status: dict[str, Any]) -> int:
+    service = gateway_status.get("service", {}) if isinstance(gateway_status.get("service"), dict) else {}
+    command = service.get("command", {}) if isinstance(service.get("command"), dict) else {}
+    env = command.get("environment", {}) if isinstance(command.get("environment"), dict) else {}
+    from_env = str(env.get("OPENCLAW_GATEWAY_PORT", "")).strip()
+    if from_env.isdigit():
+        return int(from_env)
+    argv = command.get("programArguments", []) if isinstance(command.get("programArguments"), list) else []
+    try:
+        for idx, token in enumerate(argv):
+            if str(token) == "--port" and idx + 1 < len(argv):
+                nxt = str(argv[idx + 1]).strip()
+                if nxt.isdigit():
+                    return int(nxt)
+    except Exception:
+        return 0
+    return 0
+
+
+def _check_shared_gateway_collision(*, fleet_port: int) -> dict[str, Any]:
+    shared_ok, shared_out = _run_cmd_raw(
+        ["openclaw", "gateway", "status", "--json"],
+        timeout=12,
+        clear_profile_env=True,
+    )
+    fleet_ok, fleet_out = _run_cmd(
+        ["openclaw", "gateway", "status", "--json"],
+        timeout=12,
+    )
+    shared_status = _parse_json_from_output(shared_out)
+    fleet_status = _parse_json_from_output(fleet_out)
+
+    shared_running = _gateway_service_running(shared_status)
+    fleet_running = _gateway_service_running(fleet_status)
+    shared_port = _gateway_port(shared_status) or 18789
+    effective_fleet_port = _gateway_port(fleet_status) or int(fleet_port)
+    port_collision = int(shared_port) == int(effective_fleet_port)
+
+    blocked = bool(shared_running and port_collision and not fleet_running)
+    return {
+        "blocked": blocked,
+        "shared_running": shared_running,
+        "fleet_running": fleet_running,
+        "shared_port": shared_port,
+        "fleet_port": effective_fleet_port,
+        "shared_status_ok": shared_ok,
+        "fleet_status_ok": fleet_ok,
+    }
 
 
 def _check_prereqs(*, require_tailscale: bool) -> PrereqResult:
@@ -893,6 +976,19 @@ def run_deploy(
 
     set_profile("fleet", fleet=True)
     _ensure_openclaw_config_exists()
+
+    collision = _check_shared_gateway_collision(fleet_port=int(port))
+    if collision.get("blocked"):
+        shared_port = int(collision.get("shared_port", 18789))
+        console.print(
+            "[red]Shared OpenClaw gateway is currently running and would collide with Fleet gateway startup.[/]\n"
+            f"[yellow]Detected shared gateway on port {shared_port}. Fleet deploy stopped to avoid impacting existing OpenClaw usage.[/]\n"
+            "[bold white]Resolve then re-run:[/]\n"
+            "  1) Stop shared gateway: openclaw gateway stop\n"
+            "  2) Run Fleet deploy again\n"
+            "  3) After Fleet work, restore shared gateway: openclaw gateway start"
+        )
+        return 1
 
     update_code = run_update(restart_gateway=False, dry_run=False)
     if update_code != 0:

@@ -158,6 +158,11 @@ def test_run_deploy_uses_shifted_port_when_requested_port_busy(monkeypatch, tmp_
     )
     monkeypatch.setattr(fleet_deploy, "set_profile", lambda *args, **kwargs: {"profile": "fleet"})
     monkeypatch.setattr(fleet_deploy, "_ensure_openclaw_config_exists", lambda *args, **kwargs: config_path)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_shared_gateway_collision",
+        lambda fleet_port: {"blocked": False},
+    )
     monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
     monkeypatch.setattr(
@@ -234,6 +239,11 @@ def test_run_deploy_reuses_existing_server_port_from_pid_state(monkeypatch, tmp_
     )
     monkeypatch.setattr(fleet_deploy, "set_profile", lambda *args, **kwargs: {"profile": "fleet"})
     monkeypatch.setattr(fleet_deploy, "_ensure_openclaw_config_exists", lambda *args, **kwargs: config_path)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_shared_gateway_collision",
+        lambda fleet_port: {"blocked": False},
+    )
     monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
     monkeypatch.setattr(
@@ -316,6 +326,11 @@ def test_run_deploy_prompts_for_new_key_when_existing_config_key_declined(monkey
     )
     monkeypatch.setattr(fleet_deploy, "set_profile", lambda *args, **kwargs: {"profile": "fleet"})
     monkeypatch.setattr(fleet_deploy, "_ensure_openclaw_config_exists", lambda *args, **kwargs: config_path)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_shared_gateway_collision",
+        lambda fleet_port: {"blocked": False},
+    )
     monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
 
@@ -385,6 +400,11 @@ def test_run_deploy_existing_key_prompt_defaults_to_no(monkeypatch, tmp_path: Pa
     )
     monkeypatch.setattr(fleet_deploy, "set_profile", lambda *args, **kwargs: {"profile": "fleet"})
     monkeypatch.setattr(fleet_deploy, "_ensure_openclaw_config_exists", lambda *args, **kwargs: config_path)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_shared_gateway_collision",
+        lambda fleet_port: {"blocked": False},
+    )
     monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
     monkeypatch.setattr(
@@ -538,3 +558,39 @@ def test_ensure_gateway_running_for_pairing_restarts_when_needed(monkeypatch):
     assert result["ok"] is True
     assert result["already_running"] is False
     assert result["restart_attempt_ok"] is True
+
+
+def test_run_deploy_blocks_when_shared_gateway_would_collide(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    config_path = home / ".openclaw" / "openclaw.json"
+    _write_json(config_path, {"env": {}, "agents": {"list": []}})
+
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_prereqs",
+        lambda require_tailscale: fleet_deploy.PrereqResult(ok=True, failures=[], warnings=[]),
+    )
+    monkeypatch.setattr(fleet_deploy, "set_profile", lambda *args, **kwargs: {"profile": "fleet"})
+    monkeypatch.setattr(fleet_deploy, "_ensure_openclaw_config_exists", lambda *args, **kwargs: config_path)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_shared_gateway_collision",
+        lambda fleet_port: {"blocked": True, "shared_port": 18789},
+    )
+
+    called = {"update": False}
+
+    def _no_update(**kwargs):
+        called["update"] = True
+        return 0
+
+    monkeypatch.setattr(fleet_deploy, "run_update", _no_update)
+
+    code = fleet_deploy.run_deploy(
+        company_name="TestCo",
+        non_interactive=True,
+        skip_remote_validation=True,
+        start_services=False,
+    )
+    assert code == 1
+    assert called["update"] is False
