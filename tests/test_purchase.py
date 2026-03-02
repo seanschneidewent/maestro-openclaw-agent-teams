@@ -64,6 +64,27 @@ def test_validate_api_key_accepts_vertex_access_token(monkeypatch):
     assert "Vertex token status=200" in detail
 
 
+def test_validate_api_key_accepts_vertex_api_key_via_aiplatform_probe(monkeypatch):
+    class _Response:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    monkeypatch.setattr(
+        purchase.httpx,
+        "get",
+        lambda *args, **kwargs: _Response(401),
+    )
+    monkeypatch.setattr(
+        purchase.httpx,
+        "post",
+        lambda *args, **kwargs: _Response(200),
+    )
+
+    ok, detail = purchase._validate_api_key("GEMINI_API_KEY", "AQ.Afakeyvertexstyletoken")
+    assert ok is True
+    assert "Vertex status=200" in detail
+
+
 def test_run_purchase_non_interactive_dry_run(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     workspace = home / ".openclaw" / "workspace-maestro"

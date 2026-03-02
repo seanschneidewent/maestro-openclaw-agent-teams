@@ -48,6 +48,27 @@ def test_validate_api_key_accepts_vertex_access_token(monkeypatch):
     assert "Vertex token status=200" in detail
 
 
+def test_validate_api_key_accepts_vertex_api_key_via_aiplatform_probe(monkeypatch):
+    class _Response:
+        def __init__(self, status_code: int):
+            self.status_code = status_code
+
+    monkeypatch.setattr(
+        fleet_deploy.httpx,
+        "get",
+        lambda *args, **kwargs: _Response(401),
+    )
+    monkeypatch.setattr(
+        fleet_deploy.httpx,
+        "post",
+        lambda *args, **kwargs: _Response(200),
+    )
+
+    ok, detail = fleet_deploy._validate_api_key("GEMINI_API_KEY", "AQ.Afakeyvertexstyletoken")
+    assert ok is True
+    assert "Vertex status=200" in detail
+
+
 def test_configure_company_openclaw_writes_schema_valid_telegram_account(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     workspace = home / ".openclaw" / "workspace-maestro"

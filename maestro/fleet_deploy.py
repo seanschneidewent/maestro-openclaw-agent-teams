@@ -175,6 +175,21 @@ def _validate_api_key(provider_env_key: str, key: str) -> tuple[bool, str]:
             )
             if response.status_code == 403 and _looks_like_vertex_api_key(token):
                 return True, "Vertex API key accepted (Developer API check returned 403)"
+            if response.status_code in {401, 403}:
+                vertex_response = httpx.post(
+                    (
+                        "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+                        f"gemini-2.5-flash-lite:generateContent?key={token}"
+                    ),
+                    json={
+                        "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
+                        "generationConfig": {"maxOutputTokens": 1},
+                    },
+                    timeout=10,
+                )
+                if vertex_response.status_code == 200:
+                    return True, f"Vertex status={vertex_response.status_code}"
+                return False, f"Gemini status={response.status_code}; Vertex status={vertex_response.status_code}"
             return response.status_code == 200, f"Gemini status={response.status_code}"
         if provider_env_key == "ANTHROPIC_API_KEY":
             response = httpx.get(
