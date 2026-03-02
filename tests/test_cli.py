@@ -137,6 +137,8 @@ def test_fleet_deploy_parser():
         "Tower A",
         "--assignee",
         "Sean",
+        "--commander-pairing-code",
+        "PAIR-1234",
         "--project-telegram-token",
         "123:abc",
         "--local",
@@ -147,6 +149,7 @@ def test_fleet_deploy_parser():
     assert args.company_name == "ACME"
     assert args.commander_model == "anthropic/claude-opus-4-6"
     assert args.project_model == "openai/gpt-5.2"
+    assert args.commander_pairing_code == "PAIR-1234"
     assert args.gemini_api_key.startswith("AIza")
     assert args.project_name == "Tower A"
     assert args.local_license_mode is True

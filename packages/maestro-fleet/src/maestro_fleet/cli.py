@@ -143,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--openai-api-key")
     deploy.add_argument("--anthropic-api-key")
     deploy.add_argument("--telegram-token")
+    deploy.add_argument("--commander-pairing-code")
     deploy.add_argument("--project-name")
     deploy.add_argument("--assignee")
     deploy.add_argument("--superintendent")
@@ -260,6 +261,7 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
                     "openai_api_key": "--openai-api-key",
                     "anthropic_api_key": "--anthropic-api-key",
                     "telegram_token": "--telegram-token",
+                    "commander_pairing_code": "--commander-pairing-code",
                     "project_name": "--project-name",
                     "assignee": "--assignee",
                     "superintendent": "--superintendent",

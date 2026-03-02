@@ -299,6 +299,7 @@ def _add_fleet_deploy_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--openai-api-key")
     parser.add_argument("--anthropic-api-key")
     parser.add_argument("--telegram-token")
+    parser.add_argument("--commander-pairing-code")
     parser.add_argument("--project-name")
     parser.add_argument("--assignee")
     parser.add_argument("--superintendent")
@@ -614,6 +615,7 @@ def _run_fleet(args: argparse.Namespace):
             openai_api_key=args.openai_api_key,
             anthropic_api_key=args.anthropic_api_key,
             telegram_token=args.telegram_token,
+            commander_pairing_code=args.commander_pairing_code,
             project_name=args.project_name,
             assignee=args.assignee,
             superintendent=args.superintendent,

@@ -5,6 +5,7 @@ INSTALL_ROOT_DEFAULT="$HOME/.maestro"
 FLEET_HOME_DEFAULT="$HOME/.maestro-fleet"
 VENV_DIR_DEFAULT="$INSTALL_ROOT_DEFAULT/venv-maestro-fleet"
 AUTO_APPROVE_DEFAULT="auto"
+AUTO_TUI_DEFAULT="auto"
 
 FLEET_HOME="${MAESTRO_FLEET_HOME:-$FLEET_HOME_DEFAULT}"
 VENV_DIR="${MAESTRO_VENV_DIR:-$VENV_DIR_DEFAULT}"
@@ -13,11 +14,13 @@ USE_LOCAL_REPO="${MAESTRO_USE_LOCAL_REPO:-0}"
 AUTO_APPROVE_RAW="${MAESTRO_INSTALL_AUTO:-$AUTO_APPROVE_DEFAULT}"
 REQUIRE_TAILSCALE_RAW="${MAESTRO_FLEET_REQUIRE_TAILSCALE:-0}"
 AUTO_DEPLOY_RAW="${MAESTRO_FLEET_DEPLOY:-1}"
+AUTO_TUI_RAW="${MAESTRO_FLEET_AUTO_TUI:-$AUTO_TUI_DEFAULT}"
 OPENCLAW_PROFILE_RAW="${MAESTRO_OPENCLAW_PROFILE:-maestro-fleet}"
 PYTHON_BIN=""
 AUTO_APPROVE="0"
 REQUIRE_TAILSCALE="0"
 AUTO_DEPLOY="1"
+AUTO_TUI="0"
 
 SCRIPT_SOURCE="${0:-}"
 if [[ -n "$SCRIPT_SOURCE" && "$SCRIPT_SOURCE" != "bash" && "$SCRIPT_SOURCE" != "-bash" && -f "$SCRIPT_SOURCE" ]]; then
@@ -160,6 +163,29 @@ resolve_flag() {
       ;;
     *)
       fatal "Invalid value '$raw' for $out_name"
+      ;;
+  esac
+}
+
+resolve_auto_tui() {
+  local clean
+  clean="$(printf '%s' "$AUTO_TUI_RAW" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$clean" in
+    1|true|yes|on)
+      AUTO_TUI="1"
+      ;;
+    0|false|no|off)
+      AUTO_TUI="0"
+      ;;
+    auto|"")
+      if [[ -t 0 && -t 1 ]]; then
+        AUTO_TUI="1"
+      else
+        AUTO_TUI="0"
+      fi
+      ;;
+    *)
+      fatal "Invalid MAESTRO_FLEET_AUTO_TUI='$AUTO_TUI_RAW' (expected auto, true/false, or 1/0)."
       ;;
   esac
 }
@@ -374,7 +400,14 @@ run_deploy_if_enabled() {
   fi
   cmd+=("$@")
   log "Starting Fleet deploy workflow."
-  exec "${cmd[@]}"
+  if ! "${cmd[@]}"; then
+    return 1
+  fi
+  if [[ "$AUTO_TUI" == "1" && "$arg_count" -eq 0 ]]; then
+    log "Starting Fleet runtime TUI."
+    exec "$VENV_DIR/bin/maestro-fleet" up --tui
+  fi
+  return 0
 }
 
 main() {
@@ -382,6 +415,7 @@ main() {
   resolve_flag "$AUTO_APPROVE_RAW" AUTO_APPROVE 0
   resolve_flag "$REQUIRE_TAILSCALE_RAW" REQUIRE_TAILSCALE 0
   resolve_flag "$AUTO_DEPLOY_RAW" AUTO_DEPLOY 1
+  resolve_auto_tui
 
   ensure_python
   ensure_node_npm

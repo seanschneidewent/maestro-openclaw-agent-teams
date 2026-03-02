@@ -357,6 +357,54 @@ def _validate_telegram_token(token: str) -> tuple[bool, str, str, str]:
     return True, username, display_name, "validated"
 
 
+def _approve_telegram_pairing_code(pairing_code: str) -> tuple[bool, str]:
+    code = str(pairing_code or "").strip()
+    if not code:
+        return False, "No pairing code supplied"
+    ok, out = _run_cmd(["openclaw", "pairing", "approve", "telegram", code], timeout=25)
+    if ok:
+        return True, out or "Pairing approved"
+    lowered = str(out or "").lower()
+    if "already" in lowered and "approve" in lowered:
+        return True, out
+    return False, out or "Failed to approve pairing code"
+
+
+def _complete_commander_pairing(
+    *,
+    commander_username: str,
+    pairing_code: str | None,
+    non_interactive: bool,
+) -> dict[str, Any]:
+    selected = str(pairing_code or "").strip()
+    if not selected and non_interactive:
+        return {"approved": False, "skipped": True, "reason": "no_pairing_code"}
+
+    if not selected:
+        bot_ref = f"@{commander_username}" if commander_username else "the Commander bot"
+        console.print(
+            Panel(
+                "Commander Telegram Pairing\n\n"
+                f"1) DM {bot_ref} and send any message\n"
+                "2) Copy the pairing code from the reply\n"
+                "3) Paste it below to approve access now",
+                title="Telegram Pairing",
+                border_style="cyan",
+            )
+        )
+        selected = Prompt.ask("Commander pairing code (press Enter to skip)", default="").strip()
+        if not selected:
+            return {"approved": False, "skipped": True, "reason": "user_skipped"}
+
+    ok, detail = _approve_telegram_pairing_code(selected)
+    if ok:
+        console.print("[green]Commander Telegram pairing approved.[/]")
+    else:
+        console.print(f"[yellow]Commander pairing not approved yet: {detail}[/]")
+        console.print(f"[bold white]Run when ready:[/] openclaw pairing approve telegram {selected}")
+    return {"approved": ok, "skipped": False, "pairing_code": selected, "detail": detail}
+
+
 def _resolve_company_token(config: dict[str, Any]) -> str:
     channels = config.get("channels", {}) if isinstance(config.get("channels"), dict) else {}
     telegram = channels.get("telegram") if isinstance(channels.get("telegram"), dict) else {}
@@ -584,7 +632,7 @@ def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[st
     }
 
 
-def _verify_command_center_http(port: int, timeout_seconds: int = 25) -> bool:
+def _verify_command_center_http(port: int, timeout_seconds: int = 60) -> bool:
     end = time.time() + float(timeout_seconds)
     while time.time() < end:
         try:
@@ -751,6 +799,7 @@ def run_deploy(
     openai_api_key: str | None = None,
     anthropic_api_key: str | None = None,
     telegram_token: str | None = None,
+    commander_pairing_code: str | None = None,
     project_name: str | None = None,
     assignee: str | None = None,
     superintendent: str | None = None,
@@ -962,6 +1011,12 @@ def run_deploy(
     if doctor_code != 0:
         return doctor_code
 
+    pairing_result = _complete_commander_pairing(
+        commander_username=tg_username,
+        pairing_code=commander_pairing_code,
+        non_interactive=bool(non_interactive),
+    )
+
     requested_port = int(port)
     effective_port = requested_port
     detached = {"ok": True, "already_running": False, "pid": 0, "pid_path": "", "log_path": ""}
@@ -987,10 +1042,9 @@ def run_deploy(
             )
         if not _verify_command_center_http(effective_port):
             console.print(
-                "[red]Fleet server process started but command-center health check did not pass in time.[/]\n"
+                "[yellow]Fleet server process started but command-center health check did not pass in time.[/]\n"
                 f"[yellow]Check logs: {detached.get('log_path', '')}[/]"
             )
-            return 1
 
     _step_header(8, total_steps, "Commander Commissioning", enabled=interactive_setup)
     commissioning = _commissioning_report(
@@ -1054,6 +1108,10 @@ def run_deploy(
         summary_lines.append(f"Server PID File: {detached.get('pid_path')}")
         summary_lines.append(f"Server Log: {detached.get('log_path')}")
     summary_lines.append(f"Text the Commander: @{company_username}" if company_username else "Text the Commander: configured")
+    summary_lines.append(
+        f"Commander Telegram Pairing: {'Approved' if pairing_result.get('approved') else 'Pending'}"
+        if isinstance(pairing_result, dict) else "Commander Telegram Pairing: Pending"
+    )
     if project_slug:
         if project_username:
             summary_lines.append(f"Text initial project Maestro: @{project_username}")
