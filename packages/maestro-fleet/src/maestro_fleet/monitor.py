@@ -25,6 +25,11 @@ from rich.panel import Panel
 
 from maestro.control_plane import resolve_network_urls
 from maestro.install_state import load_install_state
+from maestro.openclaw_profile import (
+    openclaw_config_path,
+    openclaw_state_root,
+    prepend_openclaw_profile_args,
+)
 
 
 CYAN = "cyan"
@@ -185,8 +190,9 @@ def _fleet_status_color(status: str) -> str:
 
 
 def _safe_run(args: list[str], timeout: int = 6) -> tuple[bool, str]:
+    profiled_args = prepend_openclaw_profile_args(args, default_profile="maestro-fleet")
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -194,7 +200,7 @@ def _safe_run(args: list[str], timeout: int = 6) -> tuple[bool, str]:
 
 
 def _load_openclaw_config() -> dict[str, Any]:
-    config_path = Path.home() / ".openclaw" / "openclaw.json"
+    config_path = openclaw_config_path(default_profile="maestro-fleet", enforce_profile=True)
     if not config_path.exists():
         return {}
     try:
@@ -232,7 +238,13 @@ def _resolve_commander_agent() -> tuple[str, str]:
 
 def _load_token_stats(agent_id: str) -> tuple[int, int]:
     clean_agent_id = str(agent_id or "").strip() or "maestro-company"
-    sessions_path = Path.home() / ".openclaw" / "agents" / clean_agent_id / "sessions" / "sessions.json"
+    sessions_path = (
+        openclaw_state_root(default_profile="maestro-fleet", enforce_profile=True)
+        / "agents"
+        / clean_agent_id
+        / "sessions"
+        / "sessions.json"
+    )
     if not sessions_path.exists():
         return 0, 0
     try:
@@ -368,7 +380,27 @@ def _update_command_center_state(state: MonitorState, activity_logs: LogBuffer):
         activity_logs.add(f"Commander action -> {state.current_action}")
 
 
-def _update_metrics(state: MonitorState, process: subprocess.Popen[str], activity_logs: LogBuffer):
+def _gateway_running() -> bool:
+    ok, out = _safe_run(["openclaw", "gateway", "status", "--json"], timeout=6)
+    if not ok:
+        return False
+    raw = str(out or "")
+    idx = raw.find("{")
+    if idx < 0:
+        return False
+    try:
+        payload = json.loads(raw[idx:])
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    service = payload.get("service", {}) if isinstance(payload.get("service"), dict) else {}
+    runtime = service.get("runtime", {}) if isinstance(service.get("runtime"), dict) else {}
+    status = str(runtime.get("status", "")).strip().lower()
+    return status in {"running", "started", "active"}
+
+
+def _update_metrics(state: MonitorState, process: subprocess.Popen[str] | None, activity_logs: LogBuffer):
     previous_gateway = state.gateway_running
     previous_tailnet = state.tailnet_url
 
@@ -380,7 +412,7 @@ def _update_metrics(state: MonitorState, process: subprocess.Popen[str], activit
         state.system_ram_mb = mem.used / (1024 * 1024)
         state.system_ram_total_mb = mem.total / (1024 * 1024)
 
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             proc = psutil.Process(process.pid)
             state.process_cpu_percent = proc.cpu_percent(interval=None)
             state.process_ram_mb = proc.memory_info().rss / (1024 * 1024)
@@ -393,8 +425,7 @@ def _update_metrics(state: MonitorState, process: subprocess.Popen[str], activit
 
     state.total_tokens, state.active_sessions = _load_token_stats(state.commander_agent_id)
 
-    ok, output = _safe_run(["openclaw", "status"], timeout=6)
-    state.gateway_running = ok and "running" in output.lower()
+    state.gateway_running = _gateway_running()
 
     network = resolve_network_urls(web_port=state.web_port, route_path="/command-center")
     state.primary_url = str(network.get("recommended_url") or state.primary_url)
@@ -525,7 +556,10 @@ def _stream_gateway_logs(
 
 
 def _start_gateway_log_stream(stop_event: threading.Event, gateway_logs: LogBuffer) -> subprocess.Popen[str] | None:
-    cmd = ["openclaw", "logs", "--follow", "--plain", "--local-time", "--limit", "40"]
+    cmd = prepend_openclaw_profile_args(
+        ["openclaw", "logs", "--follow", "--plain", "--local-time", "--limit", "40"],
+        default_profile="maestro-fleet",
+    )
     try:
         process: subprocess.Popen[str] = subprocess.Popen(
             cmd,
@@ -748,23 +782,30 @@ def run_up_tui(port: int, store: str, host: str):
         "--host",
         host,
     ]
-    process: subprocess.Popen[str] = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    logs.add(f"Starting server: {' '.join(cmd)}")
+    existing_state = _fetch_json(f"http://127.0.0.1:{int(port)}/api/command-center/state", timeout=0.8)
+    attach_only = existing_state is not None
+    process: subprocess.Popen[str] | None = None
+    if attach_only:
+        logs.add(f"Detected existing Fleet server on port {port}; attaching monitor.")
+    else:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        logs.add(f"Starting server: {' '.join(cmd)}")
     activity_logs.add(f"Fleet monitor attached for {company_name}.")
     activity_logs.add(f"Command Center URL: {state.primary_url}")
 
-    log_thread = threading.Thread(
-        target=_stream_logs,
-        args=(process, logs, stop_event),
-        daemon=True,
-    )
-    log_thread.start()
+    if process is not None:
+        log_thread = threading.Thread(
+            target=_stream_logs,
+            args=(process, logs, stop_event),
+            daemon=True,
+        )
+        log_thread.start()
     gateway_process = _start_gateway_log_stream(stop_event, gateway_logs)
     interrupted = False
 
@@ -776,12 +817,13 @@ def run_up_tui(port: int, store: str, host: str):
             screen=False,
         ) as live:
             while not stop_event.is_set():
-                exit_code = process.poll()
-                if exit_code is not None:
-                    state.server_running = False
-                    state.server_exit_code = exit_code
-                    logs.add(f"Server exited with code {exit_code}")
-                    break
+                if process is not None:
+                    exit_code = process.poll()
+                    if exit_code is not None:
+                        state.server_running = False
+                        state.server_exit_code = exit_code
+                        logs.add(f"Server exited with code {exit_code}")
+                        break
 
                 _update_metrics(state, process, activity_logs)
                 live.update(_build_layout(state, logs, activity_logs, gateway_logs))
@@ -793,7 +835,7 @@ def run_up_tui(port: int, store: str, host: str):
     finally:
         stop_event.set()
         _shutdown_process(process, timeout_sec=8.0)
-        if process.poll() is not None:
+        if process is not None and process.poll() is not None:
             state.server_running = False
             state.server_exit_code = process.returncode
         _shutdown_process(gateway_process, timeout_sec=5.0)
