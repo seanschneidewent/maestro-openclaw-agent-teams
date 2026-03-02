@@ -78,6 +78,12 @@ assert_version_synced() {
   grep -q "__version__ = \"$version\"" "$ROOT_DIR/packages/maestro-fleet/src/maestro_fleet/__init__.py" || {
     fail "maestro_fleet/__init__.py version is not $version"
   }
+  grep -q "version = \"$version\"" "$ROOT_DIR/packages/maestro-engine/pyproject.toml" || {
+    fail "maestro-engine pyproject version is not $version"
+  }
+  grep -q "__version__ = \"$version\"" "$ROOT_DIR/packages/maestro-engine/src/maestro_engine/__init__.py" || {
+    fail "maestro_engine/__init__.py version is not $version"
+  }
 }
 
 wheel_basename_for() {
@@ -107,26 +113,30 @@ main() {
   bash "$ROOT_DIR/scripts/build-maestro-fleet-package.sh" "$ROOT_DIR/dist/fleet-release"
 
   local wheel_dir="$ROOT_DIR/dist/fleet-release/wheels"
+  local engine_wheel_path="$wheel_dir/maestro_engine-${version}-py3-none-any.whl"
   local root_wheel_path="$wheel_dir/maestro_conagent_teams-${version}-py3-none-any.whl"
   local fleet_wheel_path="$wheel_dir/maestro_fleet-${version}-py3-none-any.whl"
 
+  assert_file_exists "$engine_wheel_path"
   assert_file_exists "$root_wheel_path"
   assert_file_exists "$fleet_wheel_path"
 
-  local root_wheel fleet_wheel
+  local engine_wheel root_wheel fleet_wheel
+  engine_wheel="$(wheel_basename_for "$engine_wheel_path")"
   root_wheel="$(wheel_basename_for "$root_wheel_path")"
   fleet_wheel="$(wheel_basename_for "$fleet_wheel_path")"
 
   echo "[fleet-release] Publishing GitHub release $tag"
   if gh release view "$tag" --repo "$REPO_SLUG" >/dev/null 2>&1; then
-    gh release upload "$tag" "$root_wheel_path" "$fleet_wheel_path" --clobber --repo "$REPO_SLUG"
+    gh release upload "$tag" "$engine_wheel_path" "$root_wheel_path" "$fleet_wheel_path" --clobber --repo "$REPO_SLUG"
   else
-    gh release create "$tag" "$root_wheel_path" "$fleet_wheel_path" --repo "$REPO_SLUG" --title "$tag" --notes "Automated Fleet release for $tag"
+    gh release create "$tag" "$engine_wheel_path" "$root_wheel_path" "$fleet_wheel_path" --repo "$REPO_SLUG" --title "$tag" --notes "Automated Fleet release for $tag"
   fi
 
+  local engine_wheel_url="https://github.com/$REPO_SLUG/releases/download/$tag/$engine_wheel"
   local root_wheel_url="https://github.com/$REPO_SLUG/releases/download/$tag/$root_wheel"
   local fleet_wheel_url="https://github.com/$REPO_SLUG/releases/download/$tag/$fleet_wheel"
-  local package_spec="$root_wheel_url $fleet_wheel_url"
+  local package_spec="$engine_wheel_url $root_wheel_url $fleet_wheel_url"
   local script_base_url="https://raw.githubusercontent.com/$REPO_SLUG/$script_commit/scripts"
   local installer_url_macos="$script_base_url/install-maestro-fleet-macos.sh"
   local installer_url_linux="$script_base_url/install-maestro-fleet-linux.sh"
@@ -151,6 +161,7 @@ main() {
   echo "[fleet-release] Running /fleet launcher smoke check"
   local fleet_script
   fleet_script="$(curl -fsSL "$BILLING_URL/fleet")"
+  assert_contains "$fleet_script" "$engine_wheel_url" "/fleet script"
   assert_contains "$fleet_script" "$root_wheel_url" "/fleet script"
   assert_contains "$fleet_script" "$fleet_wheel_url" "/fleet script"
   assert_contains "$fleet_script" "install-maestro-fleet.sh" "/fleet script"
@@ -158,6 +169,7 @@ main() {
   assert_contains "$fleet_script" "MAESTRO_FLEET_PACKAGE_SPEC='" "/fleet script"
 
   echo "[fleet-release] DONE"
+  echo "[fleet-release] Engine wheel: $engine_wheel_url"
   echo "[fleet-release] Root wheel:  $root_wheel_url"
   echo "[fleet-release] Fleet wheel: $fleet_wheel_url"
   echo

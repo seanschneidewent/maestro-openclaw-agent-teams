@@ -57,6 +57,7 @@ main() {
   build_frontends_if_needed
 
   python3 -m pip install --upgrade build
+  python3 -m build --wheel "$ROOT_DIR/packages/maestro-engine" --outdir "$WHEEL_DIR"
   python3 -m build --wheel "$ROOT_DIR" --outdir "$WHEEL_DIR"
   python3 -m build --wheel "$ROOT_DIR/packages/maestro-fleet" --outdir "$WHEEL_DIR"
 
