@@ -103,11 +103,15 @@ def test_fleet_license_generate_parser():
 
 
 def test_fleet_purchase_command_is_disabled(capsys):
+    import os
+
+    os.environ.pop("MAESTRO_OPENCLAW_PROFILE", None)
     parser = build_parser()
     args = parser.parse_args(["fleet", "purchase"])
     with pytest.raises(SystemExit) as exc:
         _run_fleet(args)
     assert int(exc.value.code) == 1
+    assert os.environ.get("MAESTRO_OPENCLAW_PROFILE") == "maestro-fleet"
     captured = capsys.readouterr()
     assert "disabled" in captured.out
 
