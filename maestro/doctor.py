@@ -548,7 +548,12 @@ def _sync_telegram_bindings(
     )
 
 
-def _sync_gateway_launchagent_token(fix: bool, token_check: DoctorCheck) -> DoctorCheck:
+def _sync_gateway_launchagent_token(
+    *,
+    fix: bool,
+    token_check: DoctorCheck,
+    profile: str,
+) -> DoctorCheck:
     if not token_check.fixed:
         return DoctorCheck(
             name="gateway_launchagent_sync",
@@ -561,6 +566,29 @@ def _sync_gateway_launchagent_token(fix: bool, token_check: DoctorCheck) -> Doct
             name="gateway_launchagent_sync",
             ok=False,
             detail="Gateway token changed but LaunchAgent sync skipped (fix mode off)",
+            warning=True,
+        )
+
+    # Fleet runs in an isolated OpenClaw profile, but launchd/systemd service
+    # installation is host-global in practice. Reinstalling here can stomp an
+    # existing non-fleet OpenClaw service on the same machine.
+    if profile == PROFILE_FLEET:
+        restart_ok, restart_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
+        if not restart_ok:
+            start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+            restart_ok = start_ok
+            restart_out = start_out
+        if restart_ok:
+            return DoctorCheck(
+                name="gateway_launchagent_sync",
+                ok=True,
+                detail="Fleet mode: skipped LaunchAgent reinstall; restarted gateway in-profile",
+                fixed=True,
+            )
+        return DoctorCheck(
+            name="gateway_launchagent_sync",
+            ok=False,
+            detail=f"Fleet mode: LaunchAgent reinstall skipped; gateway restart failed: {restart_out}",
             warning=True,
         )
 
@@ -801,7 +829,13 @@ def build_doctor_report(
     checks.append(_sync_telegram_bindings(config, config_path=config_path, fix=fix))
     gateway_token_check = _sync_gateway_auth_tokens(config, config_path=config_path, fix=fix)
     checks.append(gateway_token_check)
-    checks.append(_sync_gateway_launchagent_token(fix=fix, token_check=gateway_token_check))
+    checks.append(
+        _sync_gateway_launchagent_token(
+            fix=fix,
+            token_check=gateway_token_check,
+            profile=profile,
+        )
+    )
 
     if restart_gateway and fix:
         checks.append(_restart_gateway(home, fix=fix))

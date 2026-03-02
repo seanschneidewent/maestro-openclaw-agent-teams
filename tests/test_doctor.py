@@ -146,7 +146,7 @@ def test_doctor_fix_syncs_gateway_tokens(tmp_path: Path, monkeypatch):
     remote = gateway.get("remote", {})
     assert isinstance(auth.get("token"), str) and auth["token"]
     assert remote.get("token") == auth.get("token")
-    assert ["openclaw", "gateway", "install", "--force"] in commands
+    assert ["openclaw", "gateway", "restart"] in commands
 
 
 def test_doctor_fix_auto_approves_single_device_pairing_request(tmp_path: Path, monkeypatch):
