@@ -693,7 +693,15 @@ def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[st
 
     time.sleep(1.0)
     if proc.poll() is not None:
-        return {"ok": False, "detail": "maestro serve exited immediately", "log_path": str(log_path)}
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            tail = "\n".join(lines[-12:]).strip()
+        except Exception:
+            tail = ""
+        detail = f"maestro serve exited immediately (code={proc.returncode})"
+        if tail:
+            detail = f"{detail}\n{tail}"
+        return {"ok": False, "detail": detail, "log_path": str(log_path)}
 
     save_json(
         pid_path,
@@ -770,8 +778,17 @@ def _gateway_running_from_status(status_out: str) -> bool:
 
 def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
     status_ok, status_out = _run_cmd(["openclaw", "status"], timeout=12)
-    if status_ok and _gateway_running_from_status(status_out):
-        return {"ok": True, "already_running": True, "detail": status_out}
+    gw_ok, gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
+    gw_status = _parse_json_from_output(gw_out)
+    running_from_gw_status = _gateway_service_running(gw_status)
+    if running_from_gw_status or _gateway_running_from_status(status_out):
+        return {
+            "ok": True,
+            "already_running": True,
+            "detail": gw_out if gw_out else status_out,
+            "status_ok": status_ok,
+            "gateway_status_ok": gw_ok,
+        }
 
     restart_ok, restart_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
     if not restart_ok:
@@ -780,13 +797,17 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
         restart_out = start_out
 
     recheck_ok, recheck_out = _run_cmd(["openclaw", "status"], timeout=12)
-    running = recheck_ok and _gateway_running_from_status(recheck_out)
+    recheck_gw_ok, recheck_gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
+    recheck_gw_status = _parse_json_from_output(recheck_gw_out)
+    running = _gateway_service_running(recheck_gw_status) or _gateway_running_from_status(recheck_out)
     return {
         "ok": running,
         "already_running": False,
         "restart_attempt_ok": restart_ok,
         "restart_detail": restart_out,
-        "detail": recheck_out,
+        "detail": recheck_gw_out if recheck_gw_out else recheck_out,
+        "status_ok": recheck_ok,
+        "gateway_status_ok": recheck_gw_ok,
     }
 
 

@@ -546,8 +546,10 @@ def test_ensure_gateway_running_for_pairing_when_already_running(monkeypatch):
 def test_ensure_gateway_running_for_pairing_restarts_when_needed(monkeypatch):
     responses = iter([
         (False, "Gateway service: stopped"),
+        (False, '{"service":{"runtime":{"status":"stopped"}}}'),
         (True, "restart ok"),
         (True, "Gateway service: running"),
+        (True, '{"service":{"runtime":{"status":"running"}}}'),
     ])
 
     def _fake_run(args, timeout=12):
