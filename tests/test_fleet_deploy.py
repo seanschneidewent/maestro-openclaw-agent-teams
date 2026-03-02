@@ -465,3 +465,76 @@ def test_fleet_openclaw_profile_isolated_from_shared_config(monkeypatch, tmp_pat
     assert created == home / ".openclaw-maestro-fleet" / "openclaw.json"
     assert loaded_path == created
     assert config == {}
+
+
+def test_run_cmd_defaults_openclaw_profile_to_maestro_fleet(monkeypatch):
+    monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)
+    observed: dict[str, list[str]] = {}
+
+    def _fake_run(args, **kwargs):
+        observed["args"] = list(args)
+
+        class _Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(fleet_deploy.subprocess, "run", _fake_run)
+
+    ok, out = fleet_deploy._run_cmd(["openclaw", "status"])
+    assert ok is True
+    assert out == "ok"
+    assert observed["args"][:3] == ["openclaw", "--profile", "maestro-fleet"]
+    assert observed["args"][3:] == ["status"]
+
+
+def test_run_cmd_does_not_add_profile_to_non_openclaw(monkeypatch):
+    monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)
+    observed: dict[str, list[str]] = {}
+
+    def _fake_run(args, **kwargs):
+        observed["args"] = list(args)
+
+        class _Result:
+            returncode = 0
+            stdout = "ok"
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(fleet_deploy.subprocess, "run", _fake_run)
+
+    ok, out = fleet_deploy._run_cmd(["tailscale", "ip", "-4"])
+    assert ok is True
+    assert out == "ok"
+    assert observed["args"] == ["tailscale", "ip", "-4"]
+
+
+def test_ensure_gateway_running_for_pairing_when_already_running(monkeypatch):
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_run_cmd",
+        lambda args, timeout=12: (True, "Gateway service: running"),
+    )
+    result = fleet_deploy._ensure_gateway_running_for_pairing()
+    assert result["ok"] is True
+    assert result["already_running"] is True
+
+
+def test_ensure_gateway_running_for_pairing_restarts_when_needed(monkeypatch):
+    responses = iter([
+        (False, "Gateway service: stopped"),
+        (True, "restart ok"),
+        (True, "Gateway service: running"),
+    ])
+
+    def _fake_run(args, timeout=12):
+        return next(responses)
+
+    monkeypatch.setattr(fleet_deploy, "_run_cmd", _fake_run)
+    result = fleet_deploy._ensure_gateway_running_for_pairing()
+    assert result["ok"] is True
+    assert result["already_running"] is False
+    assert result["restart_attempt_ok"] is True

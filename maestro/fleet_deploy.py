@@ -244,7 +244,9 @@ def _is_maestro_managed_agent(agent_id: str) -> bool:
 
 
 def _run_cmd(args: list[str], timeout: int = 12) -> tuple[bool, str]:
-    profiled_args = prepend_openclaw_profile_args(args)
+    # Fleet deploy should never target the shared OpenClaw state by accident.
+    # If no MAESTRO_OPENCLAW_PROFILE is set, default all OpenClaw calls to maestro-fleet.
+    profiled_args = prepend_openclaw_profile_args(args, default_profile="maestro-fleet")
     try:
         result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout, check=False)
     except Exception as exc:
@@ -645,6 +647,66 @@ def _verify_command_center_http(port: int, timeout_seconds: int = 60) -> bool:
     return False
 
 
+def _repair_gateway_device_token_mismatch() -> dict[str, Any]:
+    ok_status, status_out = _run_cmd(["openclaw", "status"], timeout=12)
+    lowered = str(status_out or "").lower()
+    mismatch = "device token mismatch" in lowered
+    if not mismatch:
+        return {"ok": True, "mismatch_detected": False, "repaired": False, "detail": status_out if ok_status else ""}
+
+    actions: list[str] = []
+    rotate_ok, rotate_out = _run_cmd(["openclaw", "gateway", "token", "rotate"], timeout=20)
+    actions.append(f"token rotate: {'ok' if rotate_ok else 'failed'}")
+    if rotate_out:
+        actions.append(rotate_out)
+
+    restart_ok, restart_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
+    if not restart_ok:
+        start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+        restart_ok = start_ok
+        restart_out = start_out
+    actions.append(f"gateway restart: {'ok' if restart_ok else 'failed'}")
+    if restart_out:
+        actions.append(restart_out)
+
+    recheck_ok, recheck_out = _run_cmd(["openclaw", "status"], timeout=12)
+    repaired = recheck_ok and "device token mismatch" not in str(recheck_out or "").lower()
+    return {
+        "ok": repaired,
+        "mismatch_detected": True,
+        "repaired": repaired,
+        "detail": recheck_out,
+        "actions": actions,
+    }
+
+
+def _gateway_running_from_status(status_out: str) -> bool:
+    lowered = str(status_out or "").lower()
+    return "gateway service" in lowered and "running" in lowered
+
+
+def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
+    status_ok, status_out = _run_cmd(["openclaw", "status"], timeout=12)
+    if status_ok and _gateway_running_from_status(status_out):
+        return {"ok": True, "already_running": True, "detail": status_out}
+
+    restart_ok, restart_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
+    if not restart_ok:
+        start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+        restart_ok = start_ok
+        restart_out = start_out
+
+    recheck_ok, recheck_out = _run_cmd(["openclaw", "status"], timeout=12)
+    running = recheck_ok and _gateway_running_from_status(recheck_out)
+    return {
+        "ok": running,
+        "already_running": False,
+        "restart_attempt_ok": restart_ok,
+        "restart_detail": restart_out,
+        "detail": recheck_out,
+    }
+
+
 def _commissioning_report(
     *,
     store_root: Path,
@@ -1010,12 +1072,41 @@ def run_deploy(
     )
     if doctor_code != 0:
         return doctor_code
+    if interactive_setup:
+        console.print(
+            "[dim]Doctor URL is pre-runtime. Use the final Fleet Deployment Summary URL for access.[/]"
+        )
 
-    pairing_result = _complete_commander_pairing(
-        commander_username=tg_username,
-        pairing_code=commander_pairing_code,
-        non_interactive=bool(non_interactive),
-    )
+    gateway_repair = _repair_gateway_device_token_mismatch()
+    if gateway_repair.get("mismatch_detected"):
+        if gateway_repair.get("repaired"):
+            console.print("[green]Gateway device-token mismatch detected and repaired.[/]")
+        else:
+            console.print(
+                "[yellow]Gateway device-token mismatch detected and auto-repair did not fully resolve.[/]\n"
+                "[yellow]Run: openclaw --profile maestro-fleet gateway token rotate && openclaw --profile maestro-fleet gateway restart[/]"
+            )
+
+    gateway_for_pairing = _ensure_gateway_running_for_pairing()
+    if gateway_for_pairing.get("ok"):
+        if not gateway_for_pairing.get("already_running"):
+            console.print("[green]Gateway confirmed running for Telegram pairing.[/]")
+        pairing_result = _complete_commander_pairing(
+            commander_username=tg_username,
+            pairing_code=commander_pairing_code,
+            non_interactive=bool(non_interactive),
+        )
+    else:
+        console.print(
+            "[yellow]Gateway is not running after auto-retry; skipping Telegram pairing approval for now.[/]\n"
+            "[yellow]Run: openclaw --profile maestro-fleet gateway restart[/]"
+        )
+        pairing_result = {
+            "approved": False,
+            "skipped": True,
+            "reason": "gateway_not_running",
+            "detail": str(gateway_for_pairing.get("detail") or gateway_for_pairing.get("restart_detail") or "").strip(),
+        }
 
     requested_port = int(port)
     effective_port = requested_port
@@ -1111,6 +1202,14 @@ def run_deploy(
     summary_lines.append(
         f"Commander Telegram Pairing: {'Approved' if pairing_result.get('approved') else 'Pending'}"
         if isinstance(pairing_result, dict) else "Commander Telegram Pairing: Pending"
+    )
+    if gateway_repair.get("mismatch_detected"):
+        summary_lines.append(
+            "Gateway Auth Recovery: repaired"
+            if gateway_repair.get("repaired") else "Gateway Auth Recovery: manual follow-up required"
+        )
+    summary_lines.append(
+        "Gateway Ready for Pairing: yes" if gateway_for_pairing.get("ok") else "Gateway Ready for Pairing: no"
     )
     if project_slug:
         if project_username:
