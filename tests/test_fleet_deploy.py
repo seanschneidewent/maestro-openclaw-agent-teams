@@ -509,7 +509,6 @@ def test_run_cmd_defaults_openclaw_profile_to_maestro_fleet(monkeypatch):
     assert out == "ok"
     assert observed["args"][:3] == ["openclaw", "--profile", "maestro-fleet"]
     assert observed["args"][3:] == ["status"]
-    assert str(observed.get("env", {}).get("OPENCLAW_GATEWAY_PORT", "")).isdigit()
 
 
 def test_run_cmd_does_not_add_profile_to_non_openclaw(monkeypatch):

@@ -35,7 +35,7 @@ from .workspace_templates import (
 
 PROVIDER_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY")
 _ENV_TRUE = {"1", "true", "yes", "on"}
-DEFAULT_FLEET_GATEWAY_PORT = 18889
+DEFAULT_FLEET_GATEWAY_PORT = 18789
 
 
 @dataclass
@@ -63,11 +63,6 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 def _fleet_gateway_port() -> int:
-    raw = str(os.environ.get("MAESTRO_FLEET_GATEWAY_PORT", "")).strip()
-    if raw.isdigit():
-        value = int(raw)
-        if 1 <= value <= 65535:
-            return value
     return DEFAULT_FLEET_GATEWAY_PORT
 
 
@@ -455,19 +450,8 @@ def _rotate_stale_sessions(
 
 def _run_cmd(args: list[str], timeout: int = 25) -> tuple[bool, str]:
     profiled_args = prepend_openclaw_profile_args(args)
-    env = os.environ.copy()
-    if profiled_args and profiled_args[0] == "openclaw":
-        profile = ""
-        for idx, token in enumerate(profiled_args):
-            if token == "--profile" and idx + 1 < len(profiled_args):
-                profile = str(profiled_args[idx + 1]).strip().lower()
-                break
-        if not profile:
-            profile = str(env.get("MAESTRO_OPENCLAW_PROFILE", "")).strip().lower()
-        if profile == PROFILE_FLEET:
-            env.setdefault("OPENCLAW_GATEWAY_PORT", str(_fleet_gateway_port()))
     try:
-        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout, env=env)
+        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()

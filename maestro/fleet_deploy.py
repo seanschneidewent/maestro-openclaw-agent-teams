@@ -56,7 +56,7 @@ KEY_LABELS = {
     "OPENAI_API_KEY": "OpenAI API key",
     "ANTHROPIC_API_KEY": "Anthropic API key",
 }
-DEFAULT_FLEET_GATEWAY_PORT = 18889
+DEFAULT_FLEET_GATEWAY_PORT = 18789
 
 
 def _looks_like_vertex_api_key(value: str) -> bool:
@@ -76,11 +76,6 @@ def _mask_secret(value: str) -> str:
 
 
 def _fleet_gateway_port() -> int:
-    raw = str(os.environ.get("MAESTRO_FLEET_GATEWAY_PORT", "")).strip()
-    if raw.isdigit():
-        value = int(raw)
-        if 1 <= value <= 65535:
-            return value
     return DEFAULT_FLEET_GATEWAY_PORT
 
 
@@ -258,9 +253,6 @@ def _run_cmd(args: list[str], timeout: int = 12) -> tuple[bool, str]:
     # Fleet deploy should never target the shared OpenClaw state by accident.
     # If no MAESTRO_OPENCLAW_PROFILE is set, default all OpenClaw calls to maestro-fleet.
     profiled_args = prepend_openclaw_profile_args(args, default_profile="maestro-fleet")
-    env = os.environ.copy()
-    if profiled_args and profiled_args[0] == "openclaw":
-        env.setdefault("OPENCLAW_GATEWAY_PORT", str(_fleet_gateway_port()))
     try:
         result = subprocess.run(
             profiled_args,
@@ -268,7 +260,6 @@ def _run_cmd(args: list[str], timeout: int = 12) -> tuple[bool, str]:
             text=True,
             timeout=timeout,
             check=False,
-            env=env,
         )
     except Exception as exc:
         return False, str(exc)
@@ -280,7 +271,6 @@ def _run_cmd_raw(args: list[str], timeout: int = 12, *, clear_profile_env: bool 
     env = os.environ.copy()
     if clear_profile_env:
         env.pop("MAESTRO_OPENCLAW_PROFILE", None)
-        env.pop("OPENCLAW_GATEWAY_PORT", None)
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False, env=env)
     except Exception as exc:
@@ -309,51 +299,25 @@ def _gateway_service_running(gateway_status: dict[str, Any]) -> bool:
     return status_text in {"running", "started", "active"}
 
 
-def _gateway_port(gateway_status: dict[str, Any]) -> int:
-    service = gateway_status.get("service", {}) if isinstance(gateway_status.get("service"), dict) else {}
-    command = service.get("command", {}) if isinstance(service.get("command"), dict) else {}
-    env = command.get("environment", {}) if isinstance(command.get("environment"), dict) else {}
-    from_env = str(env.get("OPENCLAW_GATEWAY_PORT", "")).strip()
-    if from_env.isdigit():
-        return int(from_env)
-    argv = command.get("programArguments", []) if isinstance(command.get("programArguments"), list) else []
-    try:
-        for idx, token in enumerate(argv):
-            if str(token) == "--port" and idx + 1 < len(argv):
-                nxt = str(argv[idx + 1]).strip()
-                if nxt.isdigit():
-                    return int(nxt)
-    except Exception:
-        return 0
-    return 0
-
-
 def _check_shared_gateway_collision(*, target_gateway_port: int) -> dict[str, Any]:
     shared_ok, shared_out = _run_cmd_raw(
         ["openclaw", "gateway", "status", "--json"],
         timeout=12,
         clear_profile_env=True,
     )
-    fleet_ok, fleet_out = _run_cmd(
-        ["openclaw", "gateway", "status", "--json"],
-        timeout=12,
-    )
     shared_status = _parse_json_from_output(shared_out)
-    fleet_status = _parse_json_from_output(fleet_out)
 
     shared_running = _gateway_service_running(shared_status)
-    fleet_running = _gateway_service_running(fleet_status)
-    shared_port = _gateway_port(shared_status) or 18789
-    effective_fleet_port = _gateway_port(fleet_status) or int(target_gateway_port)
+    shared_port = int(target_gateway_port)
     blocked = bool(shared_running)
     return {
         "blocked": blocked,
         "shared_running": shared_running,
-        "fleet_running": fleet_running,
+        "fleet_running": False,
         "shared_port": shared_port,
-        "fleet_port": effective_fleet_port,
+        "fleet_port": int(target_gateway_port),
         "shared_status_ok": shared_ok,
-        "fleet_status_ok": fleet_ok,
+        "fleet_status_ok": True,
     }
 
 
@@ -506,8 +470,7 @@ def _complete_commander_pairing(
     else:
         console.print(f"[yellow]Commander pairing not approved yet: {detail}[/]")
         console.print(
-            f"[bold white]Run when ready:[/] OPENCLAW_GATEWAY_PORT={_fleet_gateway_port()} "
-            f"openclaw --profile maestro-fleet pairing approve telegram {selected}"
+            f"[bold white]Run when ready:[/] openclaw --profile maestro-fleet pairing approve telegram {selected}"
         )
     return {"approved": ok, "skipped": False, "pairing_code": selected, "detail": detail}
 
@@ -1259,9 +1222,7 @@ def run_deploy(
         else:
             console.print(
                 "[yellow]Gateway device-token mismatch detected and auto-repair did not fully resolve.[/]\n"
-                f"[yellow]Run: OPENCLAW_GATEWAY_PORT={_fleet_gateway_port()} "
-                "openclaw --profile maestro-fleet gateway token rotate && "
-                f"OPENCLAW_GATEWAY_PORT={_fleet_gateway_port()} "
+                "[yellow]Run: openclaw --profile maestro-fleet gateway token rotate && "
                 "openclaw --profile maestro-fleet gateway restart[/]"
             )
 
@@ -1279,8 +1240,7 @@ def run_deploy(
         action_text = "\n".join(f"- {line}" for line in action_lines if isinstance(line, str) and line.strip())
         console.print(
             "[yellow]Gateway is not running after auto-retry; skipping Telegram pairing approval for now.[/]\n"
-            f"[yellow]Run: OPENCLAW_GATEWAY_PORT={_fleet_gateway_port()} "
-            "openclaw --profile maestro-fleet gateway restart[/]"
+            "[yellow]Run: openclaw --profile maestro-fleet gateway restart[/]"
         )
         if action_text:
             console.print(f"[dim]Gateway recovery attempts:\n{action_text}[/]")

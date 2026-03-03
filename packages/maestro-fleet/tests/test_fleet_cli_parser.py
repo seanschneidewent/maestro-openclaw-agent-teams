@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from maestro_fleet import cli
 
 
@@ -130,3 +132,19 @@ def test_main_non_tui_up_still_delegates_to_legacy(monkeypatch):
     code = cli.main(["up", "--skip-doctor"])
     assert code == 0
     assert observed.get("argv") == ["up", "--port", "3000", "--host", "0.0.0.0", "--skip-doctor"]
+
+
+def test_main_sets_default_fleet_profile_env(monkeypatch):
+    observed: dict[str, object] = {}
+    monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)
+
+    def _fake_legacy(argv):
+        observed["argv"] = argv
+        return None
+
+    monkeypatch.setattr(cli, "_import_legacy_main", lambda: _fake_legacy)
+
+    code = cli.main(["status"])
+    assert code == 0
+    assert observed.get("argv") == ["fleet", "status"]
+    assert os.environ.get("MAESTRO_OPENCLAW_PROFILE") == "maestro-fleet"

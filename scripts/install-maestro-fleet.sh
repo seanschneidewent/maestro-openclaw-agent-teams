@@ -17,6 +17,7 @@ AUTO_DEPLOY_RAW="${MAESTRO_FLEET_DEPLOY:-1}"
 AUTO_TUI_RAW="${MAESTRO_FLEET_AUTO_TUI:-$AUTO_TUI_DEFAULT}"
 OPENCLAW_PROFILE_RAW="${MAESTRO_OPENCLAW_PROFILE:-maestro-fleet}"
 PYTHON_BIN=""
+PYTHON_HOST_BIN=""
 AUTO_APPROVE="0"
 REQUIRE_TAILSCALE="0"
 AUTO_DEPLOY="1"
@@ -107,6 +108,7 @@ install_npm_global_user() {
   mkdir -p "$HOME/.npm-global/bin"
   npm config set prefix "$HOME/.npm-global"
   export PATH="$HOME/.npm-global/bin:$PATH"
+  persist_path_entry "$HOME/.npm-global/bin"
 }
 
 prompt_yes_no() {
@@ -190,21 +192,86 @@ resolve_auto_tui() {
   esac
 }
 
-python_version_ok() {
-  if ! command -v python3 >/dev/null 2>&1; then
-    return 1
+persist_path_entry() {
+  local bin_dir="${1:-}"
+  if [[ -z "$bin_dir" ]]; then
+    return 0
+  fi
+  local line="export PATH=\"$bin_dir:\$PATH\""
+  local rc_file=""
+  local -a rc_files=("$HOME/.zprofile" "$HOME/.zshrc" "$HOME/.bash_profile" "$HOME/.profile")
+  for rc_file in "${rc_files[@]}"; do
+    mkdir -p "$(dirname "$rc_file")"
+    touch "$rc_file"
+    if ! grep -Fqs "$line" "$rc_file"; then
+      printf '\n%s\n' "$line" >>"$rc_file"
+    fi
+  done
+}
+
+ensure_git_github_https() {
+  command -v git >/dev/null 2>&1 || return 0
+  local values
+  values="$(git config --global --get-all url.\"https://github.com/\".insteadOf 2>/dev/null || true)"
+  if ! grep -Fq "git@github.com:" <<<"$values"; then
+    git config --global --add url."https://github.com/".insteadOf "git@github.com:" || true
+  fi
+  if ! grep -Fq "ssh://git@github.com/" <<<"$values"; then
+    git config --global --add url."https://github.com/".insteadOf "ssh://git@github.com/" || true
+  fi
+}
+
+python_bin_version_ok() {
+  local candidate="${1:-}"
+  [[ -n "$candidate" ]] || return 1
+  if [[ "$candidate" == */* ]]; then
+    [[ -x "$candidate" ]] || return 1
+  else
+    command -v "$candidate" >/dev/null 2>&1 || return 1
   fi
   local status
-  status="$(python3 - <<'PY'
+  status="$("$candidate" - <<'PY'
 import sys
 print("ok" if sys.version_info >= (3, 11) else "bad")
 PY
-)"
+)" || return 1
   [[ "$status" == "ok" ]]
 }
 
+select_python_bin() {
+  local env_candidate="${MAESTRO_PYTHON_BIN:-}"
+  local candidate=""
+  local -a candidates=(
+    "$env_candidate"
+    "python3"
+    "/usr/local/bin/python3"
+    "/opt/homebrew/bin/python3"
+    "python3.12"
+    "python3.11"
+    "/usr/local/bin/python3.12"
+    "/usr/local/bin/python3.11"
+    "/opt/homebrew/bin/python3.12"
+    "/opt/homebrew/bin/python3.11"
+  )
+  for candidate in "${candidates[@]}"; do
+    [[ -n "$candidate" ]] || continue
+    if python_bin_version_ok "$candidate"; then
+      if [[ "$candidate" == */* ]]; then
+        printf '%s' "$candidate"
+      else
+        command -v "$candidate"
+      fi
+      return 0
+    fi
+  done
+  return 1
+}
+
 ensure_python() {
-  if ! python_version_ok; then
+  refresh_path_for_brew
+  local selected
+  selected="$(select_python_bin || true)"
+  if [[ -z "$selected" ]]; then
     warn "Python 3.11+ is required."
     if ! prompt_yes_no "Install/upgrade Python now?" "y"; then
       fatal "Python 3.11+ is required."
@@ -219,13 +286,55 @@ ensure_python() {
     else
       fatal "Unsupported platform for automatic Python install: $(uname -s)"
     fi
+    refresh_path_for_brew
+    selected="$(select_python_bin || true)"
   fi
 
-  python_version_ok || fatal "Python 3.11+ is still unavailable after install attempt."
-  log "Python: $(python3 --version 2>&1)"
+  [[ -n "$selected" ]] || fatal "Python 3.11+ is still unavailable after install attempt."
+  PYTHON_HOST_BIN="$selected"
+  log "Python: $("$PYTHON_HOST_BIN" --version 2>&1)"
+}
+
+install_node_tarball_macos() {
+  local node_version="${MAESTRO_NODE_VERSION:-v24.12.0}"
+  local arch_raw
+  arch_raw="$(uname -m)"
+  local arch=""
+  case "$arch_raw" in
+    arm64|aarch64) arch="arm64" ;;
+    x86_64) arch="x64" ;;
+    *) return 1 ;;
+  esac
+
+  local tool_root="$HOME/.maestro/toolchain"
+  local node_dir="$tool_root/node-${node_version}-darwin-${arch}"
+  local node_bin="$node_dir/bin"
+  if [[ ! -x "$node_bin/node" || ! -x "$node_bin/npm" ]]; then
+    local tgz="node-${node_version}-darwin-${arch}.tar.gz"
+    local url="https://nodejs.org/dist/${node_version}/${tgz}"
+    local tmp_tgz
+    tmp_tgz="$(mktemp "${TMPDIR:-/tmp}/node-dist.XXXXXX.tgz")" || return 1
+    if ! curl -fsSL "$url" -o "$tmp_tgz"; then
+      rm -f "$tmp_tgz"
+      return 1
+    fi
+    mkdir -p "$tool_root"
+    rm -rf "$node_dir"
+    if ! tar -xzf "$tmp_tgz" -C "$tool_root"; then
+      rm -f "$tmp_tgz"
+      return 1
+    fi
+    rm -f "$tmp_tgz"
+  fi
+  [[ -x "$node_bin/node" && -x "$node_bin/npm" ]] || return 1
+  export PATH="$node_bin:$PATH"
+  persist_path_entry "$node_bin"
+  log "Node toolchain: $node_dir"
+  return 0
 }
 
 ensure_node_npm() {
+  refresh_path_for_brew
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
     warn "Node.js/npm are required."
     if ! prompt_yes_no "Install Node.js and npm now?" "y"; then
@@ -233,8 +342,11 @@ ensure_node_npm() {
     fi
 
     if is_macos; then
-      ensure_homebrew
-      brew install node
+      if ! install_node_tarball_macos; then
+        warn "Node tarball install failed; falling back to Homebrew."
+        ensure_homebrew
+        brew install node
+      fi
     elif is_linux; then
       ensure_apt
       run_privileged apt-get install -y nodejs npm
@@ -249,17 +361,43 @@ ensure_node_npm() {
   log "npm: $(npm --version 2>&1)"
 }
 
+tailscale_ipv4() {
+  local python_cmd="${PYTHON_HOST_BIN:-python3}"
+  if [[ "$python_cmd" != */* ]] && ! command -v "$python_cmd" >/dev/null 2>&1; then
+    python_cmd="python3"
+  fi
+  "$python_cmd" - <<'PY' 2>/dev/null
+import subprocess
+
+try:
+    result = subprocess.run(
+        ["tailscale", "ip", "-4"],
+        capture_output=True,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+except Exception:
+    raise SystemExit(0)
+
+lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+if lines:
+    print(lines[0])
+PY
+}
+
 ensure_openclaw() {
   if ! command -v openclaw >/dev/null 2>&1; then
     warn "OpenClaw CLI is required."
     if ! prompt_yes_no "Install OpenClaw now (npm install -g openclaw)?" "y"; then
       fatal "OpenClaw CLI is required."
     fi
+    ensure_git_github_https
+    install_npm_global_user
     if ! npm install -g openclaw; then
-      warn "Global npm install failed; retrying with user npm prefix (~/.npm-global)."
-      install_npm_global_user
-      npm install -g openclaw || fatal "OpenClaw install failed."
+      fatal "OpenClaw install failed."
     fi
+    hash -r
   fi
   command -v openclaw >/dev/null 2>&1 || fatal "OpenClaw CLI not found on PATH after install."
   log "OpenClaw: $(openclaw --version 2>&1 || echo 'available')"
@@ -272,7 +410,7 @@ wait_for_tailscale_ip() {
   local ip=""
 
   while [[ "$elapsed" -lt "$timeout_seconds" ]]; do
-    ip="$(tailscale ip -4 2>/dev/null | head -n 1 || true)"
+    ip="$(tailscale_ipv4 || true)"
     if [[ -n "$ip" ]]; then
       printf '%s' "$ip"
       return 0
@@ -308,7 +446,7 @@ ensure_tailscale_if_required() {
   command -v tailscale >/dev/null 2>&1 || fatal "Tailscale install failed."
 
   local ip
-  ip="$(tailscale ip -4 2>/dev/null | head -n 1 || true)"
+  ip="$(tailscale_ipv4 || true)"
   if [[ -n "$ip" ]]; then
     log "Tailscale IPv4: $ip"
     return 0
@@ -339,12 +477,12 @@ ensure_virtualenv() {
   mkdir -p "$(dirname "$VENV_DIR")" "$FLEET_HOME"
   if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     log "Creating virtualenv: $VENV_DIR"
-    if ! python3 -m venv "$VENV_DIR"; then
+    if ! "$PYTHON_HOST_BIN" -m venv "$VENV_DIR"; then
       if is_linux; then
         warn "python3-venv appears missing; attempting install."
         ensure_apt
         run_privileged apt-get install -y python3-venv
-        python3 -m venv "$VENV_DIR" || fatal "Failed to create virtualenv after installing python3-venv."
+        "$PYTHON_HOST_BIN" -m venv "$VENV_DIR" || fatal "Failed to create virtualenv after installing python3-venv."
       else
         fatal "Failed to create virtualenv at $VENV_DIR"
       fi

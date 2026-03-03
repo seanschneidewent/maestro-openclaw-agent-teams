@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Callable
@@ -381,6 +382,9 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if not str(os.environ.get("MAESTRO_OPENCLAW_PROFILE", "")).strip():
+        os.environ["MAESTRO_OPENCLAW_PROFILE"] = "maestro-fleet"
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
