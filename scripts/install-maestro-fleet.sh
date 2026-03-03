@@ -418,8 +418,16 @@ ensure_openclaw() {
     fi
     ensure_git_github_https
     install_npm_global_user
-    if ! npm install -g openclaw; then
-      fatal "OpenClaw install failed."
+    log "Installing OpenClaw (this can take several minutes on fresh machines)..."
+    if ! npm install -g openclaw --no-audit --no-fund; then
+      warn "OpenClaw install failed on first attempt; retrying with IPv4-first DNS."
+      local retry_node_options="--dns-result-order=ipv4first"
+      if [[ -n "${NODE_OPTIONS:-}" ]]; then
+        retry_node_options="$retry_node_options ${NODE_OPTIONS}"
+      fi
+      if ! NODE_OPTIONS="$retry_node_options" npm install -g openclaw --no-audit --no-fund; then
+        fatal "OpenClaw install failed."
+      fi
     fi
     hash -r
   fi
