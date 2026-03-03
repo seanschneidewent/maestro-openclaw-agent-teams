@@ -690,35 +690,29 @@ def _sync_gateway_launchagent_token(
 
 
 def _repair_cli_device_pairing(fix: bool) -> DoctorCheck:
-    status_ok, status_out = _run_cmd(["openclaw", "status"], timeout=12)
-    lowered = status_out.lower()
-    if "pairing required" not in lowered:
-        if status_ok:
+    pending_ok, pending_out = _run_cmd(["openclaw", "devices", "list", "--json"], timeout=20)
+    if not pending_ok:
+        lowered = str(pending_out or "").lower()
+        if "pairing required" in lowered:
+            if not fix:
+                return DoctorCheck(
+                    name="cli_device_pairing",
+                    ok=False,
+                    detail="CLI requires gateway device pairing approval (run maestro doctor --fix)",
+                )
             return DoctorCheck(
                 name="cli_device_pairing",
-                ok=True,
-                detail="CLI device pairing access healthy",
+                ok=False,
+                detail=(
+                    "Gateway requires pairing but pending requests could not be listed. "
+                    "Run openclaw devices list."
+                ),
+                warning=True,
             )
         return DoctorCheck(
             name="cli_device_pairing",
             ok=False,
-            detail=f"Could not verify device pairing: {status_out}",
-            warning=True,
-        )
-
-    if not fix:
-        return DoctorCheck(
-            name="cli_device_pairing",
-            ok=False,
-            detail="CLI requires gateway device pairing approval (run maestro doctor --fix)",
-        )
-
-    pending_ok, pending_out = _run_cmd(["openclaw", "devices", "list", "--json"], timeout=20)
-    if not pending_ok:
-        return DoctorCheck(
-            name="cli_device_pairing",
-            ok=False,
-            detail=f"Could not list pending device requests: {pending_out}",
+            detail=f"Could not verify device pairing: {pending_out}",
             warning=True,
         )
 
@@ -737,12 +731,15 @@ def _repair_cli_device_pairing(fix: bool) -> DoctorCheck:
     if not pending_list:
         return DoctorCheck(
             name="cli_device_pairing",
+            ok=True,
+            detail="CLI device pairing access healthy",
+        )
+
+    if not fix:
+        return DoctorCheck(
+            name="cli_device_pairing",
             ok=False,
-            detail=(
-                "Gateway requires pairing but no pending device request was found. "
-                "Run openclaw devices list."
-            ),
-            warning=True,
+            detail="CLI requires gateway device pairing approval (run maestro doctor --fix)",
         )
 
     if len(pending_list) > 1:

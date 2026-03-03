@@ -875,13 +875,14 @@ def _commissioning_report(
         "fix": "maestro-fleet deploy",
     })
 
-    openclaw_ok, openclaw_out = _run_cmd(["openclaw", "status"], timeout=8)
-    openclaw_running = openclaw_ok and "running" in str(openclaw_out).lower()
+    gw_ok, gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
+    gw_status = _parse_json_from_output(gw_out)
+    openclaw_running = _gateway_service_running(gw_status)
     checks.append({
         "name": "openclaw_gateway",
         "ok": openclaw_running,
         "level": "warning",
-        "detail": openclaw_out or "openclaw status unavailable",
+        "detail": gw_out or "openclaw gateway status unavailable",
         "fix": "openclaw gateway restart",
     })
 
