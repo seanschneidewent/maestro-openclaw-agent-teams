@@ -111,6 +111,30 @@ install_npm_global_user() {
   persist_path_entry "$HOME/.npm-global/bin"
 }
 
+hydrate_existing_toolchain_paths() {
+  local candidate=""
+
+  if ! command -v node >/dev/null 2>&1; then
+    for candidate in "$HOME/.maestro/toolchain"/node-v*/bin/node; do
+      [[ -x "$candidate" ]] || continue
+      export PATH="$(dirname "$candidate"):$PATH"
+      break
+    done
+  fi
+
+  if ! command -v openclaw >/dev/null 2>&1 && [[ -x "$HOME/.npm-global/bin/openclaw" ]]; then
+    export PATH="$HOME/.npm-global/bin:$PATH"
+  fi
+
+  if ! command -v tailscale >/dev/null 2>&1; then
+    if [[ -x "/usr/local/bin/tailscale" ]]; then
+      export PATH="/usr/local/bin:$PATH"
+    elif [[ -x "/opt/homebrew/bin/tailscale" ]]; then
+      export PATH="/opt/homebrew/bin:$PATH"
+    fi
+  fi
+}
+
 prompt_yes_no() {
   local prompt="$1"
   local default="${2:-y}"
@@ -554,6 +578,7 @@ main() {
   resolve_flag "$REQUIRE_TAILSCALE_RAW" REQUIRE_TAILSCALE 0
   resolve_flag "$AUTO_DEPLOY_RAW" AUTO_DEPLOY 1
   resolve_auto_tui
+  hydrate_existing_toolchain_paths
 
   ensure_python
   ensure_node_npm
