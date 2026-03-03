@@ -291,9 +291,6 @@ def _run_doctor_for_deploy(
         "--fix",
         "--store",
         str(store_root),
-        "--restart-gateway",
-        "--profile",
-        "fleet",
     ]
     env = os.environ.copy()
     env.setdefault("MAESTRO_OPENCLAW_PROFILE", "maestro-fleet")
