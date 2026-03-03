@@ -7,6 +7,7 @@ import re
 import socket
 import shutil
 import subprocess
+import signal
 import sys
 import time
 import json
@@ -294,25 +295,43 @@ def _run_doctor_for_deploy(
     ]
     env = os.environ.copy()
     env.setdefault("MAESTRO_OPENCLAW_PROFILE", "maestro-fleet")
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=int(timeout_seconds),
-            check=False,
-            env=env,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = str(exc.stdout or "").strip()
-        stderr = str(exc.stderr or "").strip()
-        output = "\n".join(part for part in [stdout, stderr] if part).strip()
-        return {"code": 124, "timed_out": True, "output": output}
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        start_new_session=True,
+    )
+    deadline = time.time() + float(timeout_seconds)
+    while proc.poll() is None and time.time() < deadline:
+        time.sleep(0.2)
 
-    stdout = str(result.stdout or "").strip()
-    stderr = str(result.stderr or "").strip()
+    timed_out = proc.poll() is None
+    if timed_out:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except Exception:
+            pass
+        try:
+            proc.wait(timeout=3)
+        except Exception:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+    try:
+        stdout, stderr = proc.communicate(timeout=3)
+    except Exception:
+        stdout, stderr = "", ""
+
+    stdout = str(stdout or "").strip()
+    stderr = str(stderr or "").strip()
     output = "\n".join(part for part in [stdout, stderr] if part).strip()
-    return {"code": int(result.returncode), "timed_out": False, "output": output}
+    if timed_out:
+        return {"code": 124, "timed_out": True, "output": output}
+    return {"code": int(proc.returncode or 0), "timed_out": False, "output": output}
 
 
 def _parse_json_from_output(text: str) -> dict[str, Any]:
