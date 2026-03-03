@@ -12,6 +12,8 @@ Use this checklist to deploy a customer Fleet instance in one remote session and
   - OpenClaw gateway healthy
   - Detached Fleet web process running
 
+See topology policy: `docs/fleet/supported-topologies.md`.
+
 ## Preconditions
 
 Run these checks first on the customer machine:
@@ -31,6 +33,12 @@ Required:
 
 Recommended:
 - Tailscale connected (for tailnet URL handoff)
+
+Critical topology rule:
+- Same-user dual OpenClaw + Fleet is unsupported.
+- If an existing shared OpenClaw gateway is active, stop and move to:
+  - a fresh machine, or
+  - a separate OS user account dedicated to Fleet.
 
 ## Remote Machine Bootstrap (First-Time Install)
 
@@ -160,7 +168,7 @@ tail -n 80 ~/.maestro/fleet/serve.log
 5. Gateway status:
 
 ```bash
-openclaw status
+openclaw --profile maestro-fleet gateway status --json
 ```
 
 ## Customer Handoff Notes

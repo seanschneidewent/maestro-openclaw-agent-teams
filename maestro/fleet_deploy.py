@@ -345,9 +345,7 @@ def _check_shared_gateway_collision(*, target_gateway_port: int) -> dict[str, An
     fleet_running = _gateway_service_running(fleet_status)
     shared_port = _gateway_port(shared_status) or 18789
     effective_fleet_port = _gateway_port(fleet_status) or int(target_gateway_port)
-    port_collision = int(shared_port) == int(effective_fleet_port)
-
-    blocked = bool(shared_running and port_collision and not fleet_running)
+    blocked = bool(shared_running)
     return {
         "blocked": blocked,
         "shared_running": shared_running,
@@ -1058,12 +1056,16 @@ def run_deploy(
     if collision.get("blocked"):
         shared_port = int(collision.get("shared_port", 18789))
         console.print(
-            "[red]Shared OpenClaw gateway is currently running and would collide with Fleet gateway startup.[/]\n"
-            f"[yellow]Detected shared gateway on port {shared_port}. Fleet deploy stopped to avoid impacting existing OpenClaw usage.[/]\n"
-            "[bold white]Resolve then re-run:[/]\n"
-            "  1) Stop shared gateway: openclaw gateway stop\n"
-            "  2) Run Fleet deploy again\n"
-            "  3) After Fleet work, restore shared gateway: openclaw gateway start"
+            "[red]Unsupported topology: same-user OpenClaw + Fleet on one machine.[/]\n"
+            f"[yellow]Detected an active shared OpenClaw gateway on port {shared_port}.[/]\n"
+            "[yellow]Fleet deploy is intentionally blocked to prevent cross-routing and token bleed.[/]\n"
+            "[bold white]Supported options:[/]\n"
+            "  1) Use a fresh machine for Fleet, or\n"
+            "  2) Use a separate OS user account dedicated to Fleet\n"
+            "[bold white]Temporary local test workaround (same user, unsupported):[/]\n"
+            "  - Stop shared gateway: openclaw gateway stop\n"
+            "  - Run Fleet deploy\n"
+            "  - Re-enable shared gateway only after Fleet work: openclaw gateway start"
         )
         return 1
 
