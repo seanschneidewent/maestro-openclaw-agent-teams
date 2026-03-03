@@ -22,7 +22,6 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls, sync_fleet_registry
-from .doctor import run_doctor
 from .install_state import resolve_fleet_store_root, save_install_state
 from .openclaw_guard import ensure_openclaw_override_allowed
 from .openclaw_profile import (
@@ -277,6 +276,46 @@ def _run_cmd_raw(args: list[str], timeout: int = 12, *, clear_profile_env: bool 
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
     return result.returncode == 0, output
+
+
+def _run_doctor_for_deploy(
+    *,
+    store_root: Path,
+    timeout_seconds: int = 240,
+) -> dict[str, Any]:
+    cmd = [
+        sys.executable,
+        "-m",
+        "maestro.cli",
+        "doctor",
+        "--fix",
+        "--store",
+        str(store_root),
+        "--restart-gateway",
+        "--profile",
+        "fleet",
+    ]
+    env = os.environ.copy()
+    env.setdefault("MAESTRO_OPENCLAW_PROFILE", "maestro-fleet")
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=int(timeout_seconds),
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = str(exc.stdout or "").strip()
+        stderr = str(exc.stderr or "").strip()
+        output = "\n".join(part for part in [stdout, stderr] if part).strip()
+        return {"code": 124, "timed_out": True, "output": output}
+
+    stdout = str(result.stdout or "").strip()
+    stderr = str(result.stderr or "").strip()
+    output = "\n".join(part for part in [stdout, stderr] if part).strip()
+    return {"code": int(result.returncode), "timed_out": False, "output": output}
 
 
 def _parse_json_from_output(text: str) -> dict[str, Any]:
@@ -1203,13 +1242,16 @@ def run_deploy(
         project_slug = ""
 
     _step_header(7, total_steps, "Doctor + Runtime Health", enabled=interactive_setup)
-    doctor_code = run_doctor(
-        fix=True,
-        store_override=str(store_root),
-        restart_gateway=True,
-        json_output=False,
-    )
-    if doctor_code != 0:
+    doctor_result = _run_doctor_for_deploy(store_root=store_root)
+    doctor_output = str(doctor_result.get("output") or "").strip()
+    if doctor_output:
+        console.print(doctor_output)
+    doctor_code = int(doctor_result.get("code", 1))
+    if bool(doctor_result.get("timed_out")):
+        console.print(
+            "[yellow]Doctor timed out during deploy; continuing with gateway/runtime checks.[/]"
+        )
+    elif doctor_code != 0:
         return doctor_code
     if interactive_setup:
         console.print(

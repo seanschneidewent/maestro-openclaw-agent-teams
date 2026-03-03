@@ -177,7 +177,7 @@ def test_run_deploy_uses_shifted_port_when_requested_port_busy(monkeypatch, tmp_
     )
     monkeypatch.setattr(fleet_deploy, "resolve_fleet_store_root", lambda _store: store_root)
     monkeypatch.setattr(fleet_deploy, "save_install_state", lambda payload: None)
-    monkeypatch.setattr(fleet_deploy, "run_doctor", lambda **kwargs: 0)
+    monkeypatch.setattr(fleet_deploy, "_run_doctor_for_deploy", lambda **kwargs: {"code": 0, "timed_out": False, "output": ""})
     monkeypatch.setattr(fleet_deploy, "_resolve_deploy_port", lambda preferred_port, max_attempts=20: (3011, True))
     def _fake_start_detached_server(*, port: int, store_root: Path, host: str) -> dict:
         captured["port"] = int(port)
@@ -258,7 +258,7 @@ def test_run_deploy_reuses_existing_server_port_from_pid_state(monkeypatch, tmp_
     )
     monkeypatch.setattr(fleet_deploy, "resolve_fleet_store_root", lambda _store: store_root)
     monkeypatch.setattr(fleet_deploy, "save_install_state", lambda payload: None)
-    monkeypatch.setattr(fleet_deploy, "run_doctor", lambda **kwargs: 0)
+    monkeypatch.setattr(fleet_deploy, "_run_doctor_for_deploy", lambda **kwargs: {"code": 0, "timed_out": False, "output": ""})
     monkeypatch.setattr(fleet_deploy, "_resolve_deploy_port", lambda preferred_port, max_attempts=20: (3011, True))
     monkeypatch.setattr(
         fleet_deploy,
@@ -346,7 +346,7 @@ def test_run_deploy_prompts_for_new_key_when_existing_config_key_declined(monkey
     monkeypatch.setattr(fleet_deploy, "_configure_company_openclaw", _fake_configure_company_openclaw)
     monkeypatch.setattr(fleet_deploy, "resolve_fleet_store_root", lambda _store: store_root)
     monkeypatch.setattr(fleet_deploy, "save_install_state", lambda payload: None)
-    monkeypatch.setattr(fleet_deploy, "run_doctor", lambda **kwargs: 0)
+    monkeypatch.setattr(fleet_deploy, "_run_doctor_for_deploy", lambda **kwargs: {"code": 0, "timed_out": False, "output": ""})
     monkeypatch.setattr(
         fleet_deploy,
         "resolve_network_urls",
@@ -419,7 +419,7 @@ def test_run_deploy_existing_key_prompt_defaults_to_no(monkeypatch, tmp_path: Pa
     )
     monkeypatch.setattr(fleet_deploy, "resolve_fleet_store_root", lambda _store: (tmp_path / "store"))
     monkeypatch.setattr(fleet_deploy, "save_install_state", lambda payload: None)
-    monkeypatch.setattr(fleet_deploy, "run_doctor", lambda **kwargs: 0)
+    monkeypatch.setattr(fleet_deploy, "_run_doctor_for_deploy", lambda **kwargs: {"code": 0, "timed_out": False, "output": ""})
     monkeypatch.setattr(
         fleet_deploy,
         "resolve_network_urls",
