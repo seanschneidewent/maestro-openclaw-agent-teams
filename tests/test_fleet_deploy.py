@@ -539,7 +539,7 @@ def test_ensure_gateway_running_for_pairing_when_already_running(monkeypatch):
     monkeypatch.setattr(
         fleet_deploy,
         "_run_cmd",
-        lambda args, timeout=12: (True, "Gateway service: running"),
+        lambda args, timeout=12: (True, '{"service":{"runtime":{"status":"running"}}}'),
     )
     result = fleet_deploy._ensure_gateway_running_for_pairing()
     assert result["ok"] is True
@@ -548,10 +548,8 @@ def test_ensure_gateway_running_for_pairing_when_already_running(monkeypatch):
 
 def test_ensure_gateway_running_for_pairing_restarts_when_needed(monkeypatch):
     responses = iter([
-        (False, "Gateway service: stopped"),
-        (False, '{"service":{"runtime":{"status":"stopped"}}}'),
+        (True, '{"service":{"runtime":{"status":"stopped"}}}'),
         (True, "restart ok"),
-        (True, "Gateway service: running"),
         (True, '{"service":{"runtime":{"status":"running"}}}'),
     ])
 

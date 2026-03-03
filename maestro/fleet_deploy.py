@@ -763,12 +763,20 @@ def _verify_command_center_http(port: int, timeout_seconds: int = 60) -> bool:
     return False
 
 
+def _gateway_status_snapshot(timeout: int = 12) -> tuple[bool, dict[str, Any], str]:
+    ok, out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=timeout)
+    payload = _parse_json_from_output(out)
+    return ok, payload, out
+
+
 def _repair_gateway_device_token_mismatch() -> dict[str, Any]:
-    ok_status, status_out = _run_cmd(["openclaw", "status"], timeout=12)
-    lowered = str(status_out or "").lower()
-    mismatch = "device token mismatch" in lowered
+    gw_ok, gw_status, gw_out = _gateway_status_snapshot(timeout=12)
+    rpc = gw_status.get("rpc", {}) if isinstance(gw_status.get("rpc"), dict) else {}
+    rpc_error = str(rpc.get("error", "")).strip()
+    lowered = f"{str(gw_out or '').lower()} {rpc_error.lower()}".strip()
+    mismatch = "token mismatch" in lowered
     if not mismatch:
-        return {"ok": True, "mismatch_detected": False, "repaired": False, "detail": status_out if ok_status else ""}
+        return {"ok": True, "mismatch_detected": False, "repaired": False, "detail": gw_out if gw_ok else ""}
 
     actions: list[str] = []
     rotate_ok, rotate_out = _run_cmd(["openclaw", "gateway", "token", "rotate"], timeout=20)
@@ -785,8 +793,10 @@ def _repair_gateway_device_token_mismatch() -> dict[str, Any]:
     if restart_out:
         actions.append(restart_out)
 
-    recheck_ok, recheck_out = _run_cmd(["openclaw", "status"], timeout=12)
-    repaired = recheck_ok and "device token mismatch" not in str(recheck_out or "").lower()
+    recheck_ok, recheck_status, recheck_out = _gateway_status_snapshot(timeout=12)
+    recheck_rpc = recheck_status.get("rpc", {}) if isinstance(recheck_status.get("rpc"), dict) else {}
+    recheck_error = str(recheck_rpc.get("error", "")).strip().lower()
+    repaired = recheck_ok and "token mismatch" not in f"{str(recheck_out or '').lower()} {recheck_error}".strip()
     return {
         "ok": repaired,
         "mismatch_detected": True,
@@ -804,16 +814,13 @@ def _gateway_running_from_status(status_out: str) -> bool:
 def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
     actions: list[str] = []
 
-    status_ok, status_out = _run_cmd(["openclaw", "status"], timeout=12)
-    gw_ok, gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
-    gw_status = _parse_json_from_output(gw_out)
-    running_from_gw_status = _gateway_service_running(gw_status)
-    if running_from_gw_status or _gateway_running_from_status(status_out):
+    gw_ok, gw_status, gw_out = _gateway_status_snapshot(timeout=12)
+    if _gateway_service_running(gw_status):
         return {
             "ok": True,
             "already_running": True,
-            "detail": gw_out if gw_out else status_out,
-            "status_ok": status_ok,
+            "detail": gw_out,
+            "status_ok": gw_ok,
             "gateway_status_ok": gw_ok,
             "actions": actions,
         }
@@ -830,10 +837,8 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
         if start_out:
             actions.append(start_out)
 
-    recheck_ok, recheck_out = _run_cmd(["openclaw", "status"], timeout=12)
-    recheck_gw_ok, recheck_gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
-    recheck_gw_status = _parse_json_from_output(recheck_gw_out)
-    running = _gateway_service_running(recheck_gw_status) or _gateway_running_from_status(recheck_out)
+    recheck_gw_ok, recheck_gw_status, recheck_gw_out = _gateway_status_snapshot(timeout=12)
+    running = _gateway_service_running(recheck_gw_status)
     if not running:
         install_ok, install_out = _run_cmd(
             ["openclaw", "gateway", "install", "--force", "--port", str(_fleet_gateway_port())],
@@ -846,19 +851,16 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
         actions.append(f"gateway start (post-install): {'ok' if start2_ok else 'failed'}")
         if start2_out:
             actions.append(start2_out)
-        recheck2_ok, recheck2_out = _run_cmd(["openclaw", "status"], timeout=12)
-        recheck2_gw_ok, recheck2_gw_out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=12)
-        recheck2_gw_status = _parse_json_from_output(recheck2_gw_out)
-        running = _gateway_service_running(recheck2_gw_status) or _gateway_running_from_status(recheck2_out)
-        recheck_ok, recheck_out = recheck2_ok, recheck2_out
+        recheck2_gw_ok, recheck2_gw_status, recheck2_gw_out = _gateway_status_snapshot(timeout=12)
+        running = _gateway_service_running(recheck2_gw_status)
         recheck_gw_ok, recheck_gw_out = recheck2_gw_ok, recheck2_gw_out
     return {
         "ok": running,
         "already_running": False,
         "restart_attempt_ok": restart_ok,
         "restart_detail": restart_out,
-        "detail": recheck_gw_out if recheck_gw_out else recheck_out,
-        "status_ok": recheck_ok,
+        "detail": recheck_gw_out,
+        "status_ok": recheck_gw_ok,
         "gateway_status_ok": recheck_gw_ok,
         "actions": actions,
     }
