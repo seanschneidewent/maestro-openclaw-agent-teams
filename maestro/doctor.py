@@ -477,6 +477,7 @@ def _run_cmd(args: list[str], timeout: int = 25) -> tuple[bool, str]:
 def _sync_gateway_auth_tokens(
     config: dict[str, Any],
     config_path: Path,
+    profile: str,
     fix: bool,
 ) -> DoctorCheck:
     gateway = config.get("gateway")
@@ -498,16 +499,22 @@ def _sync_gateway_auth_tokens(
     auth_token = str(raw_auth).strip() if isinstance(raw_auth, str) else ""
     raw_remote = remote.get("token")
     remote_token = str(raw_remote).strip() if isinstance(raw_remote, str) else ""
+    expected_remote_url = f"ws://127.0.0.1:{_fleet_gateway_port()}" if profile == PROFILE_FLEET else ""
+    current_remote_url = str(remote.get("url", "")).strip() if isinstance(remote.get("url"), str) else ""
+    bad_remote_url = bool(expected_remote_url and current_remote_url != expected_remote_url)
 
     bad_auth = (not auth_token) or _is_placeholder(auth_token)
     bad_remote = (not remote_token) or _is_placeholder(remote_token)
     mismatch = bool(auth_token and remote_token and auth_token != remote_token)
 
-    if not (bad_auth or bad_remote or mismatch):
+    if not (bad_auth or bad_remote or mismatch or bad_remote_url):
         return DoctorCheck(
             name="gateway_auth_tokens",
             ok=True,
-            detail="gateway.auth.token and gateway.remote.token are aligned",
+            detail=(
+                "gateway.auth.token and gateway.remote.token are aligned"
+                if not expected_remote_url else "gateway tokens aligned; fleet remote URL configured"
+            ),
         )
 
     if not fix:
@@ -515,7 +522,7 @@ def _sync_gateway_auth_tokens(
             name="gateway_auth_tokens",
             ok=False,
             detail=(
-                "Gateway auth token missing/invalid or mismatched. "
+                "Gateway auth token missing/invalid, mismatched, or remote URL not configured. "
                 "Run maestro doctor --fix."
             ),
         )
@@ -530,6 +537,8 @@ def _sync_gateway_auth_tokens(
 
     auth["token"] = token
     remote["token"] = token
+    if profile == PROFILE_FLEET:
+        remote["url"] = expected_remote_url
     save_json(config_path, config)
     return DoctorCheck(
         name="gateway_auth_tokens",
@@ -567,6 +576,68 @@ def _sync_telegram_bindings(
         name="telegram_bindings",
         ok=True,
         detail=f"Added {len(changes)} Telegram account routing binding(s)",
+        fixed=True,
+    )
+
+
+def _enforce_commander_telegram_policy(
+    config: dict[str, Any],
+    config_path: Path,
+    *,
+    profile: str,
+    fix: bool,
+) -> DoctorCheck:
+    if profile != PROFILE_FLEET:
+        return DoctorCheck(
+            name="commander_telegram_policy",
+            ok=True,
+            detail="Not applicable outside Fleet profile",
+        )
+    channels = config.get("channels")
+    if not isinstance(channels, dict):
+        channels = {}
+        config["channels"] = channels
+    telegram = channels.get("telegram")
+    if not isinstance(telegram, dict):
+        telegram = {}
+        channels["telegram"] = telegram
+    accounts = telegram.get("accounts")
+    if not isinstance(accounts, dict):
+        accounts = {}
+        telegram["accounts"] = accounts
+    commander = accounts.get("maestro-company")
+    if not isinstance(commander, dict):
+        return DoctorCheck(
+            name="commander_telegram_policy",
+            ok=False,
+            detail="Commander Telegram account missing",
+            warning=True,
+        )
+    dm_policy = str(commander.get("dmPolicy", "")).strip().lower()
+    group_policy = str(commander.get("groupPolicy", "")).strip().lower()
+    stream_mode = str(commander.get("streamMode", "")).strip().lower()
+    ok = dm_policy == "pairing" and group_policy == "allowlist" and stream_mode == "partial"
+    if ok:
+        return DoctorCheck(
+            name="commander_telegram_policy",
+            ok=True,
+            detail="Commander Telegram policy locked (dm=pairing, groups=allowlist)",
+        )
+    if not fix:
+        return DoctorCheck(
+            name="commander_telegram_policy",
+            ok=False,
+            detail="Commander Telegram policy not strict; run maestro doctor --fix",
+            warning=True,
+        )
+    commander["dmPolicy"] = "pairing"
+    commander["groupPolicy"] = "allowlist"
+    commander["streamMode"] = "partial"
+    save_json(config_path, config)
+    return DoctorCheck(
+        name="commander_telegram_policy",
+        ok=True,
+        detail="Enforced strict Commander Telegram policy (dm=pairing, groups=allowlist)",
         fixed=True,
     )
 
@@ -896,7 +967,20 @@ def build_doctor_report(
     checks.append(_sync_launchagent_env(home, config_env=config_env, profile=profile, fix=fix))
     checks.append(_rotate_stale_sessions(home, fix=fix))
     checks.append(_sync_telegram_bindings(config, config_path=config_path, fix=fix))
-    gateway_token_check = _sync_gateway_auth_tokens(config, config_path=config_path, fix=fix)
+    checks.append(
+        _enforce_commander_telegram_policy(
+            config,
+            config_path=config_path,
+            profile=profile,
+            fix=fix,
+        )
+    )
+    gateway_token_check = _sync_gateway_auth_tokens(
+        config,
+        config_path=config_path,
+        profile=profile,
+        fix=fix,
+    )
     checks.append(gateway_token_check)
     checks.append(
         _sync_gateway_launchagent_token(

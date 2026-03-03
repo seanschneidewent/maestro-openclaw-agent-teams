@@ -543,7 +543,11 @@ def _configure_company_openclaw(
 
     if not isinstance(config.get("gateway"), dict):
         config["gateway"] = {}
+    gateway = config["gateway"]
     config["gateway"]["mode"] = "local"
+    remote = gateway.get("remote") if isinstance(gateway.get("remote"), dict) else {}
+    remote["url"] = f"ws://127.0.0.1:{_fleet_gateway_port()}"
+    gateway["remote"] = remote
 
     if not isinstance(config.get("env"), dict):
         config["env"] = {}
