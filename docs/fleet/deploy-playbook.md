@@ -2,6 +2,11 @@
 
 Use this checklist to deploy a customer Fleet instance in one remote session and leave it running after disconnect.
 
+Related docs:
+- `docs/fleet/INDEX.md`
+- `docs/fleet/operator-flow.md`
+- `docs/fleet/code-map.md`
+
 ## Scope
 
 - Product command: `maestro-fleet deploy`

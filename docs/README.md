@@ -28,7 +28,10 @@ This is the canonical documentation entrypoint for the repository.
 
 ## Fleet Docs
 
+- [Fleet Index](fleet/INDEX.md)
 - [Enable Fleet](fleet/enable.md)
+- [Fleet Operator Flow](fleet/operator-flow.md)
+- [Fleet Code Map](fleet/code-map.md)
 - [Fleet Command Center](fleet/command-center.md)
 - [Fleet Purchase Workflow](fleet/purchase.md)
 - [Fleet Deploy Playbook](fleet/deploy-playbook.md)

@@ -23,6 +23,15 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls, sync_fleet_registry
+from .fleet_constants import (
+    DEPLOY_STEP_TITLES,
+    FLEET_GATEWAY_PORT,
+    FLEET_PROFILE,
+    KEY_LABELS,
+    KEY_ORDER,
+    MODEL_CHOICES,
+    MODEL_LABELS,
+)
 from .install_state import resolve_fleet_store_root, save_install_state
 from .openclaw_guard import ensure_openclaw_override_allowed
 from .openclaw_profile import (
@@ -40,23 +49,6 @@ from .workspace_templates import provider_env_key_for_model
 console = Console()
 
 VERTEX_API_KEY_RE = re.compile(r"^AIza[0-9A-Za-z_-]{24,}$")
-KEY_ORDER = ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
-MODEL_CHOICES = {
-    "1": "anthropic/claude-opus-4-6",
-    "2": "openai/gpt-5.2",
-    "3": "google/gemini-3-pro-preview",
-}
-MODEL_LABELS = {
-    "anthropic/claude-opus-4-6": "Anthropic Claude Opus 4.6",
-    "openai/gpt-5.2": "OpenAI GPT-5.2",
-    "google/gemini-3-pro-preview": "Google Gemini 3 Pro",
-}
-KEY_LABELS = {
-    "GEMINI_API_KEY": "Gemini key (Vertex/Gemini)",
-    "OPENAI_API_KEY": "OpenAI API key",
-    "ANTHROPIC_API_KEY": "Anthropic API key",
-}
-DEFAULT_FLEET_GATEWAY_PORT = 18789
 
 
 def _looks_like_vertex_api_key(value: str) -> bool:
@@ -76,7 +68,14 @@ def _mask_secret(value: str) -> str:
 
 
 def _fleet_gateway_port() -> int:
-    return DEFAULT_FLEET_GATEWAY_PORT
+    return FLEET_GATEWAY_PORT
+
+
+def _deploy_step_title(step_number: int) -> str:
+    index = max(1, int(step_number)) - 1
+    if 0 <= index < len(DEPLOY_STEP_TITLES):
+        return DEPLOY_STEP_TITLES[index]
+    return f"Step {step_number}"
 
 
 def _step_header(step: int, total_steps: int, title: str, *, enabled: bool):
@@ -252,7 +251,7 @@ def _is_maestro_managed_agent(agent_id: str) -> bool:
 def _run_cmd(args: list[str], timeout: int = 12) -> tuple[bool, str]:
     # Fleet deploy should never target the shared OpenClaw state by accident.
     # If no MAESTRO_OPENCLAW_PROFILE is set, default all OpenClaw calls to maestro-fleet.
-    profiled_args = prepend_openclaw_profile_args(args, default_profile="maestro-fleet")
+    profiled_args = prepend_openclaw_profile_args(args, default_profile=FLEET_PROFILE)
     try:
         result = subprocess.run(
             profiled_args,
@@ -294,7 +293,7 @@ def _run_doctor_for_deploy(
         str(store_root),
     ]
     env = os.environ.copy()
-    env.setdefault("MAESTRO_OPENCLAW_PROFILE", "maestro-fleet")
+    env.setdefault("MAESTRO_OPENCLAW_PROFILE", FLEET_PROFILE)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -510,7 +509,8 @@ def _complete_commander_pairing(
                 "Commander Telegram Pairing\n\n"
                 f"1) DM {bot_ref} and send any message\n"
                 "2) Copy the pairing code from the reply\n"
-                "3) Paste it below to approve access now",
+                "3) Paste it below to approve access now\n\n"
+                "Tip: keep this terminal open during pairing.",
                 title="Telegram Pairing",
                 border_style="cyan",
             )
@@ -1057,10 +1057,12 @@ def run_deploy(
 ) -> int:
     console.print("[bold cyan]Maestro Fleet Deploy[/]")
     console.print("One-session deployment for remote customer handoff.")
+    console.print("[dim]Goal: leave this machine fully operational before disconnecting.[/]")
     interactive_setup = not bool(non_interactive)
-    total_steps = 8
+    total_steps = len(DEPLOY_STEP_TITLES)
 
-    _step_header(1, total_steps, "Prerequisites", enabled=interactive_setup)
+    # FLEET_STEP_1_PREREQS
+    _step_header(1, total_steps, _deploy_step_title(1), enabled=interactive_setup)
     prereq = _check_prereqs(require_tailscale=require_tailscale)
     if prereq.warnings:
         for warning in prereq.warnings:
@@ -1094,7 +1096,8 @@ def run_deploy(
     if update_code != 0:
         return update_code
 
-    _step_header(2, total_steps, "Commander + Project Models", enabled=interactive_setup)
+    # FLEET_STEP_2_MODELS
+    _step_header(2, total_steps, _deploy_step_title(2), enabled=interactive_setup)
     config, _ = _load_openclaw_config()
     current_company = _resolve_company_agent(config)
     default_model = str(current_company.get("model", "anthropic/claude-opus-4-6")).strip() or "anthropic/claude-opus-4-6"
@@ -1117,7 +1120,8 @@ def run_deploy(
         console.print(f"[red]Unsupported commander model: {selected_model}[/]")
         return 1
 
-    _step_header(3, total_steps, "Company Profile", enabled=interactive_setup)
+    # FLEET_STEP_3_COMPANY_PROFILE
+    _step_header(3, total_steps, _deploy_step_title(3), enabled=interactive_setup)
     env = config.get("env", {}) if isinstance(config.get("env"), dict) else {}
     chosen_company_name = str(company_name or "").strip()
     if not chosen_company_name:
@@ -1126,7 +1130,8 @@ def run_deploy(
         else:
             chosen_company_name = Prompt.ask("Company name", default="Company").strip() or "Company"
 
-    _step_header(4, total_steps, "Provider Keys", enabled=interactive_setup)
+    # FLEET_STEP_4_PROVIDER_KEYS
+    _step_header(4, total_steps, _deploy_step_title(4), enabled=interactive_setup)
     provider_inputs = {
         "GEMINI_API_KEY": str(gemini_api_key or "").strip(),
         "OPENAI_API_KEY": str(openai_api_key or "").strip(),
@@ -1157,7 +1162,8 @@ def run_deploy(
         console.print(f"[red]Missing key for commander model provider: {provider_env_key}[/]")
         return 1
 
-    _step_header(5, total_steps, "Commander Telegram", enabled=interactive_setup)
+    # FLEET_STEP_5_COMMANDER_TELEGRAM
+    _step_header(5, total_steps, _deploy_step_title(5), enabled=interactive_setup)
     selected_company_telegram = str(telegram_token or "").strip() or _resolve_company_token(config)
     if not selected_company_telegram and non_interactive:
         console.print("[red]Missing --telegram-token for Company Maestro[/]")
@@ -1205,7 +1211,8 @@ def run_deploy(
         }
     )
 
-    _step_header(6, total_steps, "Initial Project Maestro", enabled=interactive_setup)
+    # FLEET_STEP_6_INITIAL_PROJECT
+    _step_header(6, total_steps, _deploy_step_title(6), enabled=interactive_setup)
     create_project = bool(project_name or assignee or project_telegram_token)
     if not create_project and not non_interactive:
         create_project = Confirm.ask("Provision an initial project Maestro now?", default=True)
@@ -1259,7 +1266,8 @@ def run_deploy(
     else:
         project_slug = ""
 
-    _step_header(7, total_steps, "Doctor + Runtime Health", enabled=interactive_setup)
+    # FLEET_STEP_7_DOCTOR_RUNTIME
+    _step_header(7, total_steps, _deploy_step_title(7), enabled=interactive_setup)
     doctor_result = _run_doctor_for_deploy(store_root=store_root)
     doctor_output = str(doctor_result.get("output") or "").strip()
     if doctor_output:
@@ -1341,7 +1349,8 @@ def run_deploy(
                 f"[yellow]Check logs: {detached.get('log_path', '')}[/]"
             )
 
-    _step_header(8, total_steps, "Commander Commissioning", enabled=interactive_setup)
+    # FLEET_STEP_8_COMMISSIONING
+    _step_header(8, total_steps, _deploy_step_title(8), enabled=interactive_setup)
     commissioning = _commissioning_report(
         store_root=store_root,
         web_port=effective_port,
@@ -1402,11 +1411,20 @@ def run_deploy(
             summary_lines.append(f"Server Process: started (pid {detached.get('pid')})")
         summary_lines.append(f"Server PID File: {detached.get('pid_path')}")
         summary_lines.append(f"Server Log: {detached.get('log_path')}")
+    summary_lines.append("Runtime TUI: maestro-fleet up --tui")
     summary_lines.append(f"Text the Commander: @{company_username}" if company_username else "Text the Commander: configured")
     summary_lines.append(
         f"Commander Telegram Pairing: {'Approved' if pairing_result.get('approved') else 'Pending'}"
         if isinstance(pairing_result, dict) else "Commander Telegram Pairing: Pending"
     )
+    if isinstance(pairing_result, dict) and not pairing_result.get("approved"):
+        code_hint = str(pairing_result.get("pairing_code", "")).strip()
+        if code_hint:
+            summary_lines.append(
+                f"Approve pairing now: openclaw --profile maestro-fleet pairing approve telegram {code_hint}"
+            )
+        else:
+            summary_lines.append("Approve pairing now: openclaw --profile maestro-fleet pairing approve telegram <CODE>")
     if gateway_repair.get("mismatch_detected"):
         summary_lines.append(
             "Gateway Auth Recovery: repaired"
@@ -1415,6 +1433,7 @@ def run_deploy(
     summary_lines.append(
         "Gateway Ready for Pairing: yes" if gateway_for_pairing.get("ok") else "Gateway Ready for Pairing: no"
     )
+    summary_lines.append("Gateway Status: openclaw --profile maestro-fleet gateway status --json")
     if project_slug:
         if project_username:
             summary_lines.append(f"Text initial project Maestro: @{project_username}")
