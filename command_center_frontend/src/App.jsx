@@ -1,10 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
-import AddNodeTile from './components/AddNodeTile'
 import DoctorPanel from './components/DoctorPanel'
 import NodeIntelligenceModal from './components/NodeIntelligenceModal'
 import ProjectNode from './components/ProjectNode'
-import ProjectCreateModal from './components/PurchaseCommandModal'
-import SystemDirectivesPanel from './components/SystemDirectivesPanel'
 import { api } from './lib/api'
 import { useCommandCenterWebSocket } from './hooks/useCommandCenterWebSocket'
 import useCommandCenterState from './hooks/useCommandCenterState'
@@ -39,11 +36,9 @@ export default function App() {
     loadState,
     awareness,
     setAwareness,
-    loadAwareness,
   } = useCommandCenterState()
   const {
     selectedProject,
-    selectedDetail,
     selectedControl,
     loadingDetail,
     selectProject,
@@ -51,7 +46,6 @@ export default function App() {
     clearSelection,
     syncSelectedProjectFromState,
   } = useProjectModalData()
-  const [showProjectCreateModal, setShowProjectCreateModal] = useState(false)
   const [doctorRunning, setDoctorRunning] = useState(false)
   const [doctorReport, setDoctorReport] = useState(null)
   const [doctorError, setDoctorError] = useState('')
@@ -76,8 +70,6 @@ export default function App() {
     },
   })
 
-  const nextNodeBadge = awareness?.onboarding?.next_node_badge || awareness?.purchase?.next_node_badge || '+'
-
   const commanderNode = useMemo(
     () => ({
       slug: 'commander',
@@ -95,6 +87,9 @@ export default function App() {
       current_task: state.orchestrator?.currentAction || 'Monitoring fleet telemetry',
       comms: awareness?.posture ? `System ${String(awareness.posture).toUpperCase()}` : 'Control plane online',
       last_updated: awareness?.generated_at || '',
+      last_seen: awareness?.generated_at || '',
+      online: Boolean(state?.commander?.online),
+      online_state: String(state?.commander?.online_state || 'offline'),
       heartbeat: {
         available: true,
         is_fresh: true,
@@ -103,7 +98,16 @@ export default function App() {
         last_assistant_text: '',
       },
     }),
-    [awareness?.commander?.agent_id, awareness?.commander?.display_name, awareness?.generated_at, awareness?.posture, state.orchestrator?.currentAction, state.orchestrator?.name],
+    [
+      awareness?.commander?.agent_id,
+      awareness?.commander?.display_name,
+      awareness?.generated_at,
+      awareness?.posture,
+      state?.commander?.online,
+      state?.commander?.online_state,
+      state.orchestrator?.currentAction,
+      state.orchestrator?.name,
+    ],
   )
 
   const runDoctorFix = useCallback(async () => {
@@ -148,8 +152,16 @@ export default function App() {
           </div>
           <div className="h-8 w-px bg-white/10" />
           <div className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 bg-[#00e676] rounded-full shadow-[0_0_5px_#00e676]" />
-            <span className="text-[10px] font-mono text-[#00e676] uppercase tracking-widest">Online</span>
+            <span className={`w-1.5 h-1.5 rounded-full shadow-[0_0_5px] ${
+              commanderNode.online ? 'bg-[#00e676] shadow-[#00e676]' : 'bg-rose-500 shadow-rose-500'
+            }`}
+            />
+            <span className={`text-[10px] font-mono uppercase tracking-widest ${
+              commanderNode.online ? 'text-[#00e676]' : 'text-rose-400'
+            }`}
+            >
+              {commanderNode.online ? 'Online' : 'Offline'}
+            </span>
           </div>
         </div>
       </header>
@@ -196,10 +208,9 @@ export default function App() {
             {(state.projects || []).map((project) => (
               <ProjectNode key={project.slug} project={project} onSelect={selectProject} />
             ))}
-            <AddNodeTile badge={nextNodeBadge} onClick={() => setShowProjectCreateModal(true)} />
             {(!state.projects || state.projects.length === 0) && (
               <div className="col-span-3 border border-white/10 bg-black/40 p-3 text-center text-slate-500 text-xs">
-                No active project nodes yet. Use the add tile to provision the first project maestro.
+                No fleet agents detected yet.
               </div>
             )}
           </div>
@@ -213,21 +224,12 @@ export default function App() {
             report={doctorReport}
             error={doctorError}
           />
-
-          <SystemDirectivesPanel
-            availableActions={awareness?.available_actions || []}
-            fallbackDirectives={state.directives || []}
-            onChanged={async () => {
-              await Promise.all([loadState(), loadAwareness()])
-            }}
-          />
         </div>
       </div>
 
       {selectedProject && (
         <NodeIntelligenceModal
           project={selectedProject}
-          detail={selectedDetail}
           awareness={awareness}
           control={selectedControl}
           onClose={() => {
@@ -240,13 +242,6 @@ export default function App() {
         <div className="fixed bottom-4 right-4 border border-[#00e5ff]/40 bg-black/70 px-3 py-2 text-xs font-mono text-[#00e5ff] z-50">
           Loading node intelligence...
         </div>
-      )}
-
-      {showProjectCreateModal && (
-        <ProjectCreateModal
-          awareness={awareness}
-          onClose={() => setShowProjectCreateModal(false)}
-        />
       )}
     </div>
   )

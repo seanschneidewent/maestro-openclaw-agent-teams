@@ -1,11 +1,10 @@
 import React, { useEffect, useRef } from 'react'
 import useNodeModalData from '../hooks/useNodeModalData'
-import ControlPlaneSection from './node_modal/ControlPlaneSection'
 import ConversationSection from './node_modal/ConversationSection'
 import ScheduleSection from './node_modal/ScheduleSection'
 import WorkspaceAccessSection from './node_modal/WorkspaceAccessSection'
 
-export default function NodeIntelligenceModal({ project, detail, awareness, control, onClose }) {
+export default function NodeIntelligenceModal({ project, awareness, control, onClose }) {
   const panelRef = useRef(null)
   const {
     agentWorkspaces,
@@ -14,10 +13,10 @@ export default function NodeIntelligenceModal({ project, detail, awareness, cont
     conversation,
     conversationLoading,
     conversationError,
-    statusPayload,
     draft,
     sending,
     isCommander,
+    hasProjectStore,
     workspaceBase,
     canSend,
     setDraft,
@@ -73,12 +72,12 @@ export default function NodeIntelligenceModal({ project, detail, awareness, cont
       >
         <div className="flex justify-between items-start mb-5 gap-4">
           <div>
-            <p className="text-[10px] uppercase tracking-widest font-mono text-slate-500">Node Intelligence Drawer</p>
+            <p className="text-[10px] uppercase tracking-widest font-mono text-slate-500">Node Conversation</p>
             <h2 className="text-xl md:text-2xl text-white uppercase tracking-widest mt-1">{project.node_display_name || project.name}</h2>
             <p className="text-xs text-slate-400 mt-1">
-              Project <span className="text-[#00e5ff] font-mono">{project.project_name || project.name || 'Control Plane'}</span>
+              Node <span className="text-[#00e5ff] font-mono">{project.project_name || project.name || 'Control Plane'}</span>
               {' · '}
-              Last Updated <span className="text-slate-300 font-mono">{project.last_updated || '—'}</span>
+              Last Seen <span className="text-slate-300 font-mono">{project.last_seen || project.last_updated || '—'}</span>
             </p>
           </div>
           <button
@@ -91,12 +90,6 @@ export default function NodeIntelligenceModal({ project, detail, awareness, cont
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <ControlPlaneSection
-            awareness={awareness}
-            statusPayload={statusPayload}
-            isCommander={isCommander}
-          />
-
           <WorkspaceAccessSection
             isCommander={isCommander}
             workspaceBase={workspaceBase}
@@ -118,8 +111,8 @@ export default function NodeIntelligenceModal({ project, detail, awareness, cont
 
           <ScheduleSection
             isCommander={isCommander}
-            detail={detail}
-            statusPayload={statusPayload}
+            hasProjectStore={hasProjectStore}
+            projectSlug={project?.slug || ''}
           />
         </div>
       </div>

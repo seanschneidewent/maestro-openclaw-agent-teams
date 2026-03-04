@@ -155,6 +155,13 @@ def _make_project_store(root: Path, name: str, strong_risk: bool = True):
     )
 
 
+def _project_slug_from_state(state_payload: dict, project_store_root: Path) -> str:
+    expected = build_project_snapshot(project_store_root)["slug"]
+    projects = state_payload.get("projects", []) if isinstance(state_payload, dict) else []
+    assert any(isinstance(item, dict) and item.get("slug") == expected for item in projects)
+    return expected
+
+
 @pytest.fixture
 def single_project_store(tmp_path: Path):
     _make_project_store(tmp_path, "Chick-fil-A Love Field FSU 03904 -CPS", strong_risk=True)
@@ -282,7 +289,7 @@ class TestCommandCenterAPI:
 
         payload = asyncio.run(server.api_command_center_state())
         assert "projects" in payload
-        assert len(payload["projects"]) == 1
+        assert any(project.get("slug") == build_project_snapshot(single_project_store)["slug"] for project in payload["projects"])
 
     def test_project_detail_endpoint_function(self, single_project_store: Path):
         server.store_path = single_project_store
@@ -305,12 +312,13 @@ class TestCommandCenterAPI:
         server._refresh_command_center_state()
         server._refresh_control_plane_state()
         state = asyncio.run(server.api_command_center_state())
-        slug = state["projects"][0]["slug"]
+        slug = _project_slug_from_state(state, single_project_store)
 
         payload = asyncio.run(server.api_command_center_node_status(slug))
         assert payload["ok"] is True
         assert payload["project_slug"] == slug
         assert "status_report" in payload
+        assert "online_state" in payload
 
     def test_commander_node_status_endpoint(self, single_project_store: Path):
         server.store_path = single_project_store
@@ -322,6 +330,7 @@ class TestCommandCenterAPI:
         assert payload["ok"] is True
         assert payload["project_slug"] == "commander"
         assert payload["agent_id"] == "maestro-company"
+        assert payload["online_state"] in {"online", "offline"}
 
     def test_node_conversation_endpoint_function(self, single_project_store: Path, monkeypatch):
         server.store_path = single_project_store
@@ -329,7 +338,7 @@ class TestCommandCenterAPI:
         server._refresh_command_center_state()
         server._refresh_control_plane_state()
         state = asyncio.run(server.api_command_center_state())
-        slug = state["projects"][0]["slug"]
+        slug = _project_slug_from_state(state, single_project_store)
 
         monkeypatch.setattr(
             server,
@@ -380,20 +389,30 @@ class TestCommandCenterAPI:
         server.load_all_projects()
         server._refresh_command_center_state()
         server._refresh_control_plane_state()
-        state = asyncio.run(server.api_command_center_state())
-        slug = state["projects"][0]["slug"]
-
-        response = asyncio.run(server.api_command_center_node_send(slug, {"message": "test", "source": "api"}))
+        response = asyncio.run(server.api_command_center_node_send("commander", {"message": "test", "source": "api"}))
         assert isinstance(response, JSONResponse)
         assert response.status_code == 400
+
+    def test_node_send_endpoint_rejects_non_commander_nodes(self, single_project_store: Path):
+        server.store_path = single_project_store
+        server.load_all_projects()
+        server._refresh_command_center_state()
+        server._refresh_control_plane_state()
+        state = asyncio.run(server.api_command_center_state())
+        slug = _project_slug_from_state(state, single_project_store)
+
+        response = asyncio.run(server.api_command_center_node_send(
+            slug,
+            {"message": "status report", "source": "command_center_ui"},
+        ))
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 403
 
     def test_node_send_endpoint_function(self, single_project_store: Path, monkeypatch):
         server.store_path = single_project_store
         server.load_all_projects()
         server._refresh_command_center_state()
         server._refresh_control_plane_state()
-        state = asyncio.run(server.api_command_center_state())
-        slug = state["projects"][0]["slug"]
 
         monkeypatch.setattr(
             server,
@@ -421,11 +440,12 @@ class TestCommandCenterAPI:
         )
 
         payload = asyncio.run(server.api_command_center_node_send(
-            slug,
+            "commander",
             {"message": "status report", "source": "command_center_ui"},
         ))
         assert payload["ok"] is True
-        assert payload["project_slug"] == slug
+        assert payload["project_slug"] == "commander"
+        assert payload["agent_id"] == "maestro-company"
 
     def test_registry_identity_overlays_assignee_in_state_and_detail(self, single_project_store: Path):
         slug = build_project_snapshot(single_project_store)["slug"]
@@ -479,7 +499,11 @@ class TestCommandCenterAPI:
             with client.websocket_connect("/ws/command-center") as ws:
                 payload = ws.receive_json()
                 assert payload["type"] == "command_center_init"
-                assert len(payload["state"]["projects"]) == 1
+                assert any(
+                    project.get("slug") == build_project_snapshot(single_project_store)["slug"]
+                    for project in payload["state"]["projects"]
+                    if isinstance(project, dict)
+                )
 
     def test_agent_scoped_workspace_api_routes(self, single_project_store: Path):
         server.store_path = single_project_store
@@ -488,7 +512,7 @@ class TestCommandCenterAPI:
         server._refresh_control_plane_state()
 
         state = asyncio.run(server.api_command_center_state())
-        slug = state["projects"][0]["slug"]
+        slug = _project_slug_from_state(state, single_project_store)
         agent_id = f"maestro-project-{slug}"
 
         agents = asyncio.run(server.api_agent_workspace_index())
@@ -515,7 +539,7 @@ class TestCommandCenterAPI:
         server._refresh_command_center_state()
         server._refresh_control_plane_state()
         state = asyncio.run(server.api_command_center_state())
-        slug = state["projects"][0]["slug"]
+        slug = _project_slug_from_state(state, single_project_store)
         agent_id = f"maestro-project-{slug}"
 
         schedule_status = asyncio.run(server.api_schedule_status(slug))
@@ -543,7 +567,7 @@ class TestCommandCenterAPI:
         server._refresh_command_center_state()
         server._refresh_control_plane_state()
         state = asyncio.run(server.api_command_center_state())
-        slug = state["projects"][0]["slug"]
+        slug = _project_slug_from_state(state, single_project_store)
         agent_id = f"maestro-project-{slug}"
 
         created = asyncio.run(server.api_schedule_upsert_item(
@@ -589,3 +613,75 @@ class TestCommandCenterAPI:
         ))
         assert closed["status"] == "closed"
         assert closed["item"]["status"] == "done"
+
+    def test_state_includes_non_project_agents_from_openclaw_config(self, single_project_store: Path, monkeypatch):
+        server.store_path = single_project_store
+        server.load_all_projects()
+        monkeypatch.setattr(
+            server,
+            "_load_openclaw_config_for_command_center",
+            lambda: {
+                "agents": {
+                    "list": [
+                        {"id": "maestro-company", "name": "The Commander", "default": True},
+                        {"id": "specialist-weather", "name": "Weather Specialist", "default": False},
+                    ]
+                }
+            },
+        )
+        server._refresh_command_center_state()
+        server._refresh_control_plane_state()
+
+        payload = asyncio.run(server.api_command_center_state())
+        specialist = next(
+            (item for item in payload["projects"] if isinstance(item, dict) and item.get("agent_id") == "specialist-weather"),
+            None,
+        )
+        assert isinstance(specialist, dict)
+        assert specialist["node_type"] == "specialist"
+
+    def test_specialist_node_conversation_uses_agent_id(self, single_project_store: Path, monkeypatch):
+        server.store_path = single_project_store
+        server.load_all_projects()
+        monkeypatch.setattr(
+            server,
+            "_load_openclaw_config_for_command_center",
+            lambda: {
+                "agents": {
+                    "list": [
+                        {"id": "maestro-company", "name": "The Commander", "default": True},
+                        {"id": "specialist-weather", "name": "Weather Specialist", "default": False},
+                    ]
+                }
+            },
+        )
+        seen: dict[str, str] = {}
+
+        def _fake_read(agent_id, **kwargs):
+            seen["agent_id"] = str(agent_id)
+            seen["project_slug"] = str(kwargs.get("project_slug", ""))
+            return {
+                "ok": True,
+                "agent_id": agent_id,
+                "project_slug": kwargs.get("project_slug", ""),
+                "messages": [],
+                "has_more": False,
+            }
+
+        monkeypatch.setattr(server, "read_agent_conversation", _fake_read)
+        server._refresh_command_center_state()
+        server._refresh_control_plane_state()
+
+        payload = asyncio.run(server.api_command_center_state())
+        specialist = next(
+            (item for item in payload["projects"] if isinstance(item, dict) and item.get("agent_id") == "specialist-weather"),
+            None,
+        )
+        assert isinstance(specialist, dict)
+        slug = str(specialist.get("slug", ""))
+        assert slug
+
+        convo = asyncio.run(server.api_command_center_node_conversation(slug, limit=10))
+        assert convo["ok"] is True
+        assert seen["agent_id"] == "specialist-weather"
+        assert seen["project_slug"] == ""

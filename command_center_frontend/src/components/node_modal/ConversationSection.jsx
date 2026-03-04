@@ -35,38 +35,39 @@ export default function ConversationSection({
           ))
         )}
       </div>
-      <form
-        className="mt-3"
-        onSubmit={(event) => {
-          event.preventDefault()
-          const text = String(draft || '').trim()
-          if (!text || !sendEnabled || sending) return
-          onSend(text)
-        }}
-      >
-        <textarea
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          rows={3}
-          disabled={!sendEnabled || sending}
-          placeholder={sendEnabled ? 'Send a manual message to this project maestro...' : 'Conversation is read-only for this node.'}
-          className="w-full bg-black/40 border border-white/15 px-2 py-2 text-xs text-slate-200 disabled:opacity-60"
-        />
-        <div className="mt-2 flex justify-between items-center">
-          {!sendEnabled && (
-            <span className="text-[10px] uppercase tracking-widest text-amber-400">
-              Send disabled for this node
-            </span>
-          )}
-          <button
-            type="submit"
-            disabled={!sendEnabled || sending || !String(draft || '').trim()}
-            className="ml-auto border border-white/20 text-slate-300 px-2 py-1 text-[10px] uppercase tracking-widest font-mono hover:border-[#00e5ff] hover:text-[#00e5ff] disabled:opacity-50"
-          >
-            {sending ? 'Sending...' : 'Send'}
-          </button>
+      {!sendEnabled ? (
+        <div className="mt-3 text-[10px] uppercase tracking-widest text-amber-400">
+          Read-only conversation view for this node.
         </div>
-      </form>
+      ) : (
+        <form
+          className="mt-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const text = String(draft || '').trim()
+            if (!text || sending) return
+            onSend(text)
+          }}
+        >
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            rows={3}
+            disabled={sending}
+            placeholder="Send a message to Commander..."
+            className="w-full bg-black/40 border border-white/15 px-2 py-2 text-xs text-slate-200 disabled:opacity-60"
+          />
+          <div className="mt-2 flex justify-end items-center">
+            <button
+              type="submit"
+              disabled={sending || !String(draft || '').trim()}
+              className="ml-auto border border-white/20 text-slate-300 px-2 py-1 text-[10px] uppercase tracking-widest font-mono hover:border-[#00e5ff] hover:text-[#00e5ff] disabled:opacity-50"
+            >
+              {sending ? 'Sending...' : 'Send'}
+            </button>
+          </div>
+        </form>
+      )}
     </DrawerCard>
   )
 }

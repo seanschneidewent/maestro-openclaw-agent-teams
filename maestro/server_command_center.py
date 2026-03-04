@@ -78,6 +78,8 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
     async def api_command_center_node_status(slug: str):
         if not ctx.fleet_enabled_fn():
             return JSONResponse(_fleet_disabled_payload(), status_code=404)
+        ctx.ensure_command_center_state()
+        ctx.ensure_awareness_state()
         try:
             return ctx.load_project_status(slug)
         except KeyError:
@@ -89,6 +91,7 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
     async def api_command_center_node_conversation(slug: str, limit: int = 100, before: str | None = None):
         if not ctx.fleet_enabled_fn():
             return JSONResponse(_fleet_disabled_payload(), status_code=404)
+        ctx.ensure_command_center_state()
         try:
             return ctx.read_node_conversation(slug, int(limit), before)
         except KeyError:
@@ -100,6 +103,8 @@ def create_command_center_router(ctx: CommandCenterRouterContext) -> APIRouter:
     async def api_command_center_node_send(slug: str, payload: dict[str, Any]):
         if not ctx.fleet_enabled_fn():
             return JSONResponse(_fleet_disabled_payload(), status_code=404)
+        ctx.ensure_command_center_state()
+        ctx.ensure_awareness_state()
         message = str(payload.get("message", "")).strip()
         source = str(payload.get("source", "")).strip() or "unknown"
         try:

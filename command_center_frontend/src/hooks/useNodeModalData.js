@@ -14,19 +14,22 @@ export default function useNodeModalData(project, control, awareness) {
   const [sending, setSending] = useState(false)
 
   const isCommander = Boolean(project?.is_commander || project?.slug === 'commander')
+  const hasProjectStore = Boolean(project?.has_project_store)
   const preflightChecks = Array.isArray(control?.preflight?.checks) ? control.preflight.checks : []
   const workspaceBase =
-    control?.workspace?.agent_workspace_url
+    project?.agent_workspace_url
+    || project?.project_workspace_url
+    || control?.workspace?.agent_workspace_url
     || control?.workspace?.project_workspace_url
-    || (project?.slug && !isCommander ? `/${encodeURIComponent(project.slug)}/` : '')
-  const canSend = !isCommander && Array.isArray(awareness?.available_actions)
+    || (project?.slug && !isCommander && hasProjectStore ? `/${encodeURIComponent(project.slug)}/` : '')
+  const canSend = isCommander && Array.isArray(awareness?.available_actions)
     && awareness.available_actions.includes('conversation_send')
 
   useEffect(() => {
     let cancelled = false
     const agentId = control?.workspace?.agent_id
     const projectSlug = project?.slug
-    if (isCommander || (!agentId && !projectSlug)) {
+    if (isCommander || !hasProjectStore || (!agentId && !projectSlug)) {
       setAgentWorkspaces([])
       setWorkspacesError('')
       setWorkspacesLoading(false)
@@ -42,7 +45,7 @@ export default function useNodeModalData(project, control, awareness) {
           if (!agentId) throw new Error('missing_agent_route')
           payload = await api.getAgentWorkspaces(agentId)
         } catch (_agentRouteError) {
-          if (!projectSlug) throw _agentRouteError
+          if (!projectSlug || !hasProjectStore) throw _agentRouteError
           payload = await api.getProjectWorkspaces(projectSlug)
         }
         if (cancelled) return
@@ -64,7 +67,7 @@ export default function useNodeModalData(project, control, awareness) {
     return () => {
       cancelled = true
     }
-  }, [control?.workspace?.agent_id, isCommander, project?.slug])
+  }, [control?.workspace?.agent_id, hasProjectStore, isCommander, project?.slug])
 
   useEffect(() => {
     let cancelled = false
@@ -164,6 +167,7 @@ export default function useNodeModalData(project, control, awareness) {
       draft,
       sending,
       isCommander,
+      hasProjectStore,
       preflightChecks,
       workspaceBase,
       canSend,
@@ -183,6 +187,7 @@ export default function useNodeModalData(project, control, awareness) {
       draft,
       sending,
       isCommander,
+      hasProjectStore,
       preflightChecks,
       workspaceBase,
       canSend,

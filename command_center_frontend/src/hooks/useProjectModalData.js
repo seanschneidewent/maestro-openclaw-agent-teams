@@ -1,10 +1,12 @@
 import { useCallback, useState } from 'react'
 import { api } from '../lib/api'
 
-async function fetchProjectPayloads(slug) {
-  if (slug === 'commander') {
+async function fetchProjectPayloads(project) {
+  const slug = project?.slug
+  const hasProjectStore = Boolean(project?.has_project_store)
+  if (slug === 'commander' || !hasProjectStore) {
     return {
-      detailResult: { status: 'fulfilled', value: { snapshot: { slug: 'commander' }, drawers: {} } },
+      detailResult: { status: 'fulfilled', value: { snapshot: { slug, ...(project || {}) }, drawers: {} } },
       controlResult: { status: 'fulfilled', value: null },
     }
   }
@@ -32,13 +34,14 @@ export default function useProjectModalData() {
     setSelectedProject(project)
     setSelectedDetail(null)
     setSelectedControl(null)
-    if (project.slug === 'commander') {
+    if (project.slug === 'commander' || !project.has_project_store) {
+      setSelectedDetail({ snapshot: project, drawers: {} })
       setLoadingDetail(false)
       return
     }
     setLoadingDetail(true)
 
-    const { detailResult, controlResult } = await fetchProjectPayloads(project.slug)
+    const { detailResult, controlResult } = await fetchProjectPayloads(project)
 
     if (detailResult.status === 'fulfilled') {
       setSelectedDetail(detailResult.value)
@@ -60,9 +63,9 @@ export default function useProjectModalData() {
   const refreshSelectedProject = useCallback(async (projectSlug = null) => {
     const slug = projectSlug || selectedProject?.slug
     if (!slug) return
-    if (slug === 'commander') return
+    if (slug === 'commander' || !selectedProject?.has_project_store) return
 
-    const { detailResult, controlResult } = await fetchProjectPayloads(slug)
+    const { detailResult, controlResult } = await fetchProjectPayloads(selectedProject)
     if (detailResult.status === 'fulfilled') {
       setSelectedDetail(detailResult.value)
     }

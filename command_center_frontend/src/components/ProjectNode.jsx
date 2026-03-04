@@ -4,19 +4,17 @@ import MarkdownText from './MarkdownText'
 export default function ProjectNode({ project, onSelect }) {
   const nodeName = project.node_display_name || project.name
   const projectName = project.project_name || project.name
-  const heartbeat = project.heartbeat || {}
-  const convoPreview = project.conversation_preview || {}
-  const statusReport = project.status_report || {}
-  const loopState = String(statusReport.loop_state || heartbeat.loop_state || project.agent_status || 'idle').toLowerCase()
-  const isFresh = !heartbeat.available || heartbeat.is_fresh
-  const summary = statusReport.summary || convoPreview.last_assistant_text || project.current_task || 'Monitoring project telemetry'
+  const nodeType = String(project.node_type || 'project').toLowerCase()
+  const state = String(project.online_state || (project.online ? 'online' : 'offline')).toLowerCase()
   const assignee = project.assignee || project.superintendent || 'Unassigned'
+  const lastSeen = project.last_seen || project.last_updated || '—'
+  const summary = project.online_reason || project.current_task || 'Awaiting activity'
 
   let chipClass = 'border-white/20 text-slate-300 bg-white/5'
-  if (loopState === 'computing') chipClass = 'border-[#c084fc]/40 text-[#c084fc] bg-[#c084fc]/10'
-  if (loopState === 'blocked') chipClass = 'border-amber-500/40 text-amber-400 bg-amber-500/10'
-  if (!isFresh) chipClass = 'border-amber-500/40 text-amber-400 bg-amber-500/10'
-  const chipLabel = !isFresh ? 'STALE' : loopState.toUpperCase()
+  if (state === 'online') chipClass = 'border-[#00e676]/40 text-[#00e676] bg-[#00e676]/10'
+  if (state === 'offline') chipClass = 'border-rose-500/40 text-rose-300 bg-rose-500/10'
+  if (state === 'unbound') chipClass = 'border-amber-500/40 text-amber-300 bg-amber-500/10'
+  const chipLabel = state.toUpperCase()
 
   return (
     <button
@@ -40,8 +38,8 @@ export default function ProjectNode({ project, onSelect }) {
                 <span className="text-[#00e5ff] text-xs font-mono">{projectName}</span>
               </div>
               <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-slate-600 text-[10px] uppercase tracking-widest">ASSIGNEE:</span>
-                <span className="text-[#00e5ff] text-xs font-mono">{assignee}</span>
+                <span className="text-slate-600 text-[10px] uppercase tracking-widest">TYPE:</span>
+                <span className="text-[#00e5ff] text-xs font-mono">{nodeType}</span>
               </div>
             </div>
             <div className={`px-2 py-1 border font-mono text-[10px] uppercase tracking-widest ${chipClass}`}>
@@ -51,7 +49,7 @@ export default function ProjectNode({ project, onSelect }) {
 
           <div className="flex-grow">
             <div className="text-[9px] text-slate-500 font-mono uppercase tracking-widest mb-1.5">
-              Latest Update
+              Status
             </div>
             <div className="text-xs text-slate-400 bg-black/40 p-2.5 border border-white/5 font-mono leading-relaxed min-h-14 flex items-center">
               <span className="text-[#00e5ff] mr-2">›</span>
@@ -62,8 +60,8 @@ export default function ProjectNode({ project, onSelect }) {
           </div>
 
           <div className="mt-4 pt-3 border-t border-white/10 flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
-            <span className="text-slate-500">{isFresh ? 'Heartbeat Fresh' : 'Heartbeat Stale'}</span>
-            <span className="text-slate-400">{convoPreview.last_message_at || project.last_updated || '—'}</span>
+            <span className="text-slate-500">{assignee}</span>
+            <span className="text-slate-400">{lastSeen}</span>
           </div>
         </div>
       </div>

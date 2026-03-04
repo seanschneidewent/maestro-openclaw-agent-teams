@@ -35,6 +35,12 @@ export const api = {
   getAwareness: () => getJson('/api/system/awareness'),
   getAgentWorkspaces: (agentId) => getJson(`/agents/${encodeURIComponent(agentId)}/workspace/api/workspaces`),
   getProjectWorkspaces: (projectSlug) => getJson(`/${encodeURIComponent(projectSlug)}/api/workspaces`),
+  getProjectScheduleTimeline: (projectSlug, { month = '', includeEmptyDays = true } = {}) => {
+    const params = new URLSearchParams()
+    if (month) params.set('month', String(month))
+    params.set('include_empty_days', includeEmptyDays ? 'true' : 'false')
+    return getJson(`/${encodeURIComponent(projectSlug)}/api/schedule/timeline?${params.toString()}`)
+  },
   runAction: (action, payload = {}) => postJson('/api/command-center/actions', { action, ...payload }),
   listSystemDirectives: (includeArchived = false) =>
     postJson('/api/command-center/actions', {

@@ -66,6 +66,7 @@ from .control_plane import (
     save_fleet_registry,
     sync_fleet_registry,
 )
+from .openclaw_profile import DEFAULT_FLEET_OPENCLAW_PROFILE, openclaw_config_path
 from .install_state import load_install_state
 from .profile import fleet_enabled as profile_fleet_enabled
 from .doctor import build_doctor_report
@@ -90,7 +91,7 @@ from .server_workspace_data import (
     workspaces_dir as _workspaces_dir,
 )
 from . import server_command_center_state as command_center_state_ops
-from .utils import slugify, slugify_underscore
+from .utils import load_json, slugify, slugify_underscore
 
 # ── Config ──────────────────────────────────────────────────────
 
@@ -131,6 +132,7 @@ command_center_ws_clients: set[WebSocket] = set()
 fleet_registry: dict[str, Any] = {}
 awareness_state: dict[str, Any] = {}
 agent_project_slug_index: dict[str, str] = {}
+command_center_node_index: dict[str, dict[str, Any]] = {}
 COMMANDER_NODE_SLUG = "commander"
 
 
@@ -202,6 +204,281 @@ def _apply_registry_identity_to_command_center_state(state: dict[str, Any], regi
     )
 
 
+def _load_openclaw_config_for_command_center() -> dict[str, Any]:
+    config_path = openclaw_config_path(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
+    payload = load_json(config_path)
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def _openclaw_agents(config: dict[str, Any]) -> list[dict[str, Any]]:
+    agents = config.get("agents") if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list") if isinstance(agents.get("list"), list) else []
+    normalized: list[dict[str, Any]] = []
+    for item in agent_list:
+        if not isinstance(item, dict):
+            continue
+        agent_id = str(item.get("id", "")).strip()
+        if not agent_id:
+            continue
+        name = str(item.get("name", "")).strip()
+        model = str(item.get("model", "")).strip()
+        workspace = str(item.get("workspace", "")).strip()
+        normalized.append({
+            "id": agent_id,
+            "name": name,
+            "model": model,
+            "workspace": workspace,
+            "default": bool(item.get("default")),
+        })
+    return normalized
+
+
+def _agent_node_slug(agent_id: str, used_slugs: set[str]) -> str:
+    clean_id = str(agent_id or "").strip()
+    if clean_id.startswith("maestro-project-"):
+        suffix = clean_id[len("maestro-project-"):].strip()
+        candidate = slugify(suffix or clean_id)
+    else:
+        candidate = f"agent-{slugify(clean_id)}"
+    if candidate not in used_slugs:
+        return candidate
+    idx = 2
+    while True:
+        fallback = f"{candidate}-{idx}"
+        if fallback not in used_slugs:
+            return fallback
+        idx += 1
+
+
+def _merge_agent_nodes_into_command_center_state(state: dict[str, Any], openclaw_config: dict[str, Any]):
+    projects_payload = state.get("projects") if isinstance(state, dict) else None
+    if not isinstance(projects_payload, list):
+        return
+
+    for project in projects_payload:
+        if not isinstance(project, dict):
+            continue
+        project.setdefault("node_type", "project")
+        project.setdefault("has_project_store", True)
+
+    agents = _openclaw_agents(openclaw_config)
+    if not agents:
+        return
+
+    existing_by_agent: dict[str, dict[str, Any]] = {}
+    used_slugs: set[str] = set()
+    for project in projects_payload:
+        if not isinstance(project, dict):
+            continue
+        slug = str(project.get("slug", "")).strip()
+        if slug:
+            used_slugs.add(slug)
+        agent_id = str(project.get("agent_id", "")).strip()
+        if agent_id:
+            existing_by_agent[agent_id] = project
+
+    commander = state.get("commander") if isinstance(state.get("commander"), dict) else {}
+    orchestrator = state.get("orchestrator") if isinstance(state.get("orchestrator"), dict) else {}
+
+    for agent in agents:
+        agent_id = str(agent.get("id", "")).strip()
+        if not agent_id:
+            continue
+
+        if agent_id == "maestro-company":
+            display = str(agent.get("name") or "").strip() or str(commander.get("name", "The Commander")).strip() or "The Commander"
+            commander["name"] = display
+            commander["agent_id"] = "maestro-company"
+            if str(agent.get("model", "")).strip():
+                commander["model"] = str(agent.get("model", "")).strip()
+            if str(agent.get("workspace", "")).strip():
+                commander["workspace"] = str(agent.get("workspace", "")).strip()
+            orchestrator["name"] = display
+            state["commander"] = commander
+            state["orchestrator"] = orchestrator
+            continue
+
+        existing = existing_by_agent.get(agent_id)
+        if isinstance(existing, dict):
+            if str(agent.get("model", "")).strip():
+                existing["model"] = str(agent.get("model", "")).strip()
+            if str(agent.get("workspace", "")).strip():
+                existing["workspace"] = str(agent.get("workspace", "")).strip()
+            existing["is_default_agent"] = bool(agent.get("default"))
+            existing["node_type"] = existing.get("node_type") or (
+                "project" if agent_id.startswith("maestro-project-") else "specialist"
+            )
+            continue
+
+        display_name = str(agent.get("name", "")).strip() or agent_id
+        node_slug = _agent_node_slug(agent_id, used_slugs)
+        used_slugs.add(node_slug)
+        node_type = "project" if agent_id.startswith("maestro-project-") else "specialist"
+        projects_payload.append({
+            "slug": node_slug,
+            "project_name": display_name,
+            "name": display_name,
+            "agent_id": agent_id,
+            "node_display_name": display_name,
+            "node_handle": "",
+            "node_identity_source": "openclaw_agent",
+            "status": "unbound" if node_type == "project" else "active",
+            "last_updated": "",
+            "superintendent": "Unknown",
+            "page_count": 0,
+            "pointer_count": 0,
+            "health": {"percent_complete": 0, "schedule_performance_index": 1.0, "variance_days": 0, "weather_delays": 0},
+            "critical_path": {"critical_activity_count": 0, "upcoming_critical_count": 0, "blocker_count": 0, "top_blockers": []},
+            "rfis": {"open": 0, "blocking_open": 0, "aging_over_14_days": 0},
+            "submittals": {"pending_review": 0, "rejected": 0, "overdue_submissions": 0},
+            "decisions": {"pending_change_orders": 0, "total_exposure_usd": 0, "high_risk_decisions": 0},
+            "scope_risk": {"gaps": 0, "overlaps": 0},
+            "agent_status": "idle",
+            "current_task": "Awaiting Commander instructions.",
+            "comms": "No project telemetry bound yet.",
+            "attention_score": 0,
+            "heartbeat": {"available": False, "is_fresh": False, "generated_at": "", "summary": "", "loop_state": "idle"},
+            "status_report": {
+                "source": "openclaw_config",
+                "stale": True,
+                "summary": "No project store bound yet." if node_type == "project" else "Registered specialist agent.",
+                "loop_state": "idle",
+                "confidence": 0.5,
+                "pending_questions": 0,
+                "top_risks": [],
+                "next_actions": [],
+                "metrics": {"attention_score": 0},
+            },
+            "conversation_preview": {
+                "last_message_at": "",
+                "last_user_at": "",
+                "last_assistant_at": "",
+                "last_user_text": "",
+                "last_assistant_text": "",
+                "message_count": 0,
+            },
+            "model": str(agent.get("model", "")).strip(),
+            "workspace": str(agent.get("workspace", "")).strip(),
+            "is_default_agent": bool(agent.get("default")),
+            "node_type": node_type,
+            "has_project_store": False,
+        })
+
+
+def _gateway_ready_for_node_actions(awareness: dict[str, Any]) -> tuple[bool, str]:
+    services = awareness.get("services") if isinstance(awareness.get("services"), dict) else {}
+    openclaw = services.get("openclaw") if isinstance(services.get("openclaw"), dict) else {}
+    if not bool(openclaw.get("running")):
+        return False, "OpenClaw gateway is not running."
+    gateway_auth = openclaw.get("gateway_auth") if isinstance(openclaw.get("gateway_auth"), dict) else {}
+    if not bool(gateway_auth.get("tokens_aligned")):
+        return False, "Gateway auth tokens are not aligned."
+    pairing = openclaw.get("device_pairing") if isinstance(openclaw.get("device_pairing"), dict) else {}
+    if bool(pairing.get("required")):
+        return False, "CLI device pairing approval is required."
+    return True, "Gateway reachable and node registered."
+
+
+def _apply_runtime_node_state(state: dict[str, Any], awareness: dict[str, Any]):
+    commander = state.get("commander") if isinstance(state.get("commander"), dict) else {}
+    projects_payload = state.get("projects") if isinstance(state.get("projects"), list) else []
+    if not isinstance(projects_payload, list):
+        projects_payload = []
+
+    gateway_ready, gateway_reason = _gateway_ready_for_node_actions(awareness)
+    commander["online"] = bool(gateway_ready)
+    commander["online_state"] = "online" if gateway_ready else "offline"
+    commander["online_reason"] = gateway_reason
+    commander["lastSeen"] = "Online" if gateway_ready else "Offline"
+    state["commander"] = commander
+
+    for node in projects_payload:
+        if not isinstance(node, dict):
+            continue
+        node_type = str(node.get("node_type", "project")).strip().lower() or "project"
+        has_store = bool(node.get("has_project_store", True))
+        last_seen = (
+            str(((node.get("conversation_preview") or {}).get("last_message_at", ""))).strip()
+            or str(((node.get("heartbeat") or {}).get("generated_at", ""))).strip()
+            or str(node.get("last_updated", "")).strip()
+            or "—"
+        )
+        node["last_seen"] = last_seen
+
+        if not gateway_ready:
+            node["online"] = False
+            node["online_state"] = "offline"
+            node["online_reason"] = gateway_reason
+            continue
+
+        if node_type == "project" and not has_store:
+            node["online"] = False
+            node["online_state"] = "unbound"
+            node["online_reason"] = "Agent exists, but no project store is bound yet."
+            continue
+
+        node["online"] = True
+        node["online_state"] = "online"
+        node["online_reason"] = "Reachable through Commander routing."
+
+
+def _refresh_command_center_node_index():
+    global command_center_node_index
+    index: dict[str, dict[str, Any]] = {
+        COMMANDER_NODE_SLUG: {
+            "agent_id": "maestro-company",
+            "node_type": "commander",
+            "has_project_store": False,
+            "project_slug": COMMANDER_NODE_SLUG,
+        }
+    }
+    projects_payload = command_center_state.get("projects") if isinstance(command_center_state, dict) else []
+    if isinstance(projects_payload, list):
+        for node in projects_payload:
+            if not isinstance(node, dict):
+                continue
+            slug = str(node.get("slug", "")).strip()
+            if not slug:
+                continue
+            agent_id = str(node.get("agent_id", "")).strip() or f"maestro-project-{slug}"
+            has_store = bool(node.get("has_project_store", True))
+            index[slug] = {
+                "agent_id": agent_id,
+                "node_type": str(node.get("node_type", "project")).strip() or "project",
+                "has_project_store": has_store,
+                "project_slug": slug if has_store else "",
+            }
+    command_center_node_index = index
+
+
+def _node_exists(slug: str) -> bool:
+    return str(slug).strip() in command_center_node_index
+
+
+def _project_slug_for_node(slug: str) -> str:
+    info = command_center_node_index.get(str(slug).strip())
+    if not isinstance(info, dict):
+        return ""
+    return str(info.get("project_slug", "")).strip()
+
+
+def _snapshot_for_node(slug: str) -> dict[str, Any] | None:
+    slug_clean = str(slug).strip()
+    if not slug_clean:
+        return None
+    projects_payload = command_center_state.get("projects") if isinstance(command_center_state, dict) else []
+    if not isinstance(projects_payload, list):
+        return None
+    for node in projects_payload:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("slug", "")).strip() == slug_clean:
+            return node
+    return None
+
+
 def _refresh_command_center_state():
     """Recompute in-memory command-center state from the current store path."""
     global command_center_state
@@ -209,6 +486,12 @@ def _refresh_command_center_state():
         command_center_state = build_command_center_state(store_path)
         if fleet_registry:
             _apply_registry_identity_to_command_center_state(command_center_state, fleet_registry)
+        _merge_agent_nodes_into_command_center_state(
+            command_center_state,
+            _load_openclaw_config_for_command_center(),
+        )
+        if awareness_state:
+            _apply_runtime_node_state(command_center_state, awareness_state)
     except Exception as exc:
         print(f"Command center state refresh failed: {exc}", file=sys.stderr)
         command_center_state = {
@@ -224,6 +507,7 @@ def _refresh_command_center_state():
             "directives": [],
             "projects": [],
         }
+    _refresh_command_center_node_index()
 
 
 def _refresh_control_plane_state():
@@ -263,6 +547,10 @@ def _refresh_control_plane_state():
             "degraded_reasons": [f"awareness refresh failed: {exc}"],
             "paths": {"store_root": str(store_path)},
         }
+
+    if command_center_state:
+        _apply_runtime_node_state(command_center_state, awareness_state)
+        _refresh_command_center_node_index()
 
 
 def _refresh_all_state():
@@ -465,6 +753,11 @@ def _registry_entry_for_slug(slug: str) -> dict[str, Any] | None:
 
 
 def _node_agent_id_for_slug(slug: str) -> str:
+    index_entry = command_center_node_index.get(str(slug).strip())
+    if isinstance(index_entry, dict):
+        agent_id = str(index_entry.get("agent_id", "")).strip()
+        if agent_id:
+            return agent_id
     return command_center_state_ops.node_agent_id_for_slug(
         slug,
         entry=_registry_entry_for_slug(slug),
@@ -480,6 +773,7 @@ def _load_command_center_node_status(slug: str) -> dict[str, Any]:
         ensure_awareness_state=_ensure_awareness_state,
         load_project_detail_fn=_load_command_center_project_detail,
         node_agent_id_for_slug_fn=_node_agent_id_for_slug,
+        lookup_node_snapshot_fn=_snapshot_for_node,
     )
 
 
@@ -490,6 +784,8 @@ def _load_node_conversation(slug: str, limit: int = 100, before: str | None = No
         projects=projects,
         node_agent_id_for_slug_fn=_node_agent_id_for_slug,
         read_agent_conversation_fn=read_agent_conversation,
+        known_node_slugs=set(command_center_node_index.keys()),
+        project_slug_for_node_fn=_project_slug_for_node,
         limit=limit,
         before=before,
     )
@@ -508,6 +804,8 @@ def _send_node_message(slug: str, message: str, source: str) -> dict[str, Any]:
         send_agent_message_fn=send_agent_message,
         save_fleet_registry_fn=save_fleet_registry,
         max_message_chars=MAX_MESSAGE_CHARS,
+        node_exists_fn=_node_exists,
+        node_agent_id_for_slug_fn=_node_agent_id_for_slug,
     )
 
     _refresh_command_center_state()

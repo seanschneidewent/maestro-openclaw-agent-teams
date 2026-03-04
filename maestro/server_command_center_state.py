@@ -27,6 +27,9 @@ RegistryEntryGetterFn = Callable[[str], dict[str, Any] | None]
 SaveFleetRegistryFn = Callable[[Path, dict[str, Any]], None]
 ProjectDetailLoaderFn = Callable[[str], dict[str, Any]]
 NodeAgentIdForSlugFn = Callable[[str], str]
+NodeExistsFn = Callable[[str], bool]
+ProjectSlugForNodeFn = Callable[[str], str]
+NodeSnapshotLookupFn = Callable[[str], dict[str, Any] | None]
 
 
 def _now_iso() -> str:
@@ -67,7 +70,11 @@ def apply_registry_identity(
         return
 
     slug = str(snapshot.get("slug", "")).strip()
-    snapshot.update(workspace_route_payload(slug, entry))
+    existing_agent_id = str(snapshot.get("agent_id", "")).strip()
+    route_entry: dict[str, Any] | None = entry
+    if not isinstance(route_entry, dict) and existing_agent_id:
+        route_entry = {"maestro_agent_id": existing_agent_id}
+    snapshot.update(workspace_route_payload(slug, route_entry))
     snapshot["project_name"] = str(snapshot.get("project_name") or snapshot.get("name") or slug)
 
     if not isinstance(entry, dict):
@@ -196,6 +203,7 @@ def load_command_center_node_status(
     ensure_awareness_state: EnsureFn,
     load_project_detail_fn: ProjectDetailLoaderFn,
     node_agent_id_for_slug_fn: NodeAgentIdForSlugFn,
+    lookup_node_snapshot_fn: NodeSnapshotLookupFn | None = None,
 ) -> dict[str, Any]:
     if slug == commander_node_slug:
         ensure_awareness_state()
@@ -233,6 +241,9 @@ def load_command_center_node_status(
             "agent_id": str(commander.get("agent_id", "maestro-company")).strip() or "maestro-company",
             "project_name": "Command Center Control Plane",
             "node_display_name": display_name,
+            "online": bool(commander.get("online", True)),
+            "online_state": str(commander.get("online_state", "online")).strip() or "online",
+            "online_reason": str(commander.get("online_reason", "Commander routing available")).strip(),
             "status_report": status_report,
             "heartbeat": {
                 "available": True,
@@ -252,8 +263,17 @@ def load_command_center_node_status(
             },
         }
 
-    detail = load_project_detail_fn(slug)
-    snapshot = detail.get("snapshot") if isinstance(detail.get("snapshot"), dict) else {}
+    snapshot: dict[str, Any] = {}
+    if lookup_node_snapshot_fn is not None:
+        found = lookup_node_snapshot_fn(slug)
+        if isinstance(found, dict):
+            snapshot = found
+    if not snapshot:
+        detail = load_project_detail_fn(slug)
+        snapshot = detail.get("snapshot") if isinstance(detail.get("snapshot"), dict) else {}
+    if not snapshot:
+        raise KeyError(slug)
+
     heartbeat = snapshot.get("heartbeat") if isinstance(snapshot.get("heartbeat"), dict) else {}
     status_report = snapshot.get("status_report") if isinstance(snapshot.get("status_report"), dict) else {}
     return {
@@ -262,6 +282,9 @@ def load_command_center_node_status(
         "agent_id": str(snapshot.get("agent_id", node_agent_id_for_slug_fn(slug))),
         "project_name": str(snapshot.get("project_name", snapshot.get("name", slug))),
         "node_display_name": str(snapshot.get("node_display_name", "")),
+        "online": bool(snapshot.get("online", False)),
+        "online_state": str(snapshot.get("online_state", "offline")).strip() or "offline",
+        "online_reason": str(snapshot.get("online_reason", "")).strip(),
         "status_report": status_report,
         "heartbeat": heartbeat,
         "snapshot": snapshot,
@@ -275,6 +298,8 @@ def load_node_conversation(
     projects: dict[str, dict[str, Any]],
     node_agent_id_for_slug_fn: NodeAgentIdForSlugFn,
     read_agent_conversation_fn: ReadConversationFn,
+    known_node_slugs: set[str] | None = None,
+    project_slug_for_node_fn: ProjectSlugForNodeFn | None = None,
     limit: int = 100,
     before: str | None = None,
 ) -> dict[str, Any]:
@@ -290,14 +315,23 @@ def load_node_conversation(
         payload["agent_id"] = "maestro-company"
         return payload
 
-    if slug not in projects:
+    known = set(projects.keys())
+    if isinstance(known_node_slugs, set):
+        known.update(str(item).strip() for item in known_node_slugs if str(item).strip())
+
+    if slug not in known:
         raise KeyError(slug)
     agent_id = node_agent_id_for_slug_fn(slug)
+    project_slug = ""
+    if project_slug_for_node_fn is not None:
+        project_slug = str(project_slug_for_node_fn(slug)).strip()
+    if not project_slug and slug in projects:
+        project_slug = slug
     payload = read_agent_conversation_fn(
         agent_id,
         limit=clamped_limit,
         before=before,
-        project_slug=slug,
+        project_slug=project_slug,
     )
     payload["project_slug"] = slug
     payload["agent_id"] = agent_id
@@ -317,12 +351,16 @@ def send_node_message(
     send_agent_message_fn: SendMessageFn,
     save_fleet_registry_fn: SaveFleetRegistryFn,
     max_message_chars: int,
+    node_exists_fn: NodeExistsFn | None = None,
+    node_agent_id_for_slug_fn: NodeAgentIdForSlugFn | None = None,
 ) -> dict[str, Any]:
-    if slug == commander_node_slug:
-        raise ActionError(403, {"error": "Conversation send is restricted to project agents"})
+    if slug != commander_node_slug:
+        if node_exists_fn is not None and not node_exists_fn(slug):
+            raise KeyError(slug)
+        if node_exists_fn is None and slug not in projects:
+            raise KeyError(slug)
+        raise ActionError(403, {"error": "Conversation send is restricted to the Commander node"})
 
-    if slug not in projects:
-        raise KeyError(slug)
     clean_message = str(message or "").strip()
     if not clean_message:
         raise ActionError(400, {"error": "Message is required"})
@@ -333,44 +371,27 @@ def send_node_message(
     if clean_source != "command_center_ui":
         raise ActionError(400, {"error": "Manual send requires source=command_center_ui"})
 
-    entry = registry_entry_for_slug_fn(slug)
-    if not isinstance(entry, dict):
-        raise KeyError(slug)
-    if str(entry.get("status", "active")).strip().lower() == "archived":
-        raise ActionError(404, {"error": f"Node '{slug}' is archived"})
-
-    agent_id = str(entry.get("maestro_agent_id", "")).strip() or f"maestro-project-{slug}"
-    if not agent_id.startswith("maestro-project-"):
-        raise ActionError(403, {"error": "Conversation send is restricted to project agents"})
+    agent_id = "maestro-company"
+    if node_agent_id_for_slug_fn is not None:
+        resolved_agent_id = str(node_agent_id_for_slug_fn(slug)).strip()
+        if resolved_agent_id:
+            agent_id = resolved_agent_id
 
     result = send_agent_message_fn(
         agent_id=agent_id,
         message=clean_message,
-        project_slug=slug,
+        project_slug=commander_node_slug,
         session_id=f"agent:{agent_id}:main",
     )
     if not bool(result.get("ok")):
         status_code = int(result.get("status_code", 503))
         raise ActionError(status_code, {"error": str(result.get("error", "Agent send failed"))})
 
-    convo = result.get("conversation")
-    if isinstance(convo, dict):
-        messages = convo.get("messages")
-        if isinstance(messages, list) and messages:
-            last_msg = messages[-1] if isinstance(messages[-1], dict) else {}
-            ts = str(last_msg.get("timestamp", "")).strip()
-            if ts:
-                entry["last_conversation_at"] = ts
-                save_fleet_registry_fn(store_path, {
-                    "version": int(fleet_registry.get("version", 1)),
-                    "updated_at": _now_iso(),
-                    "store_root": str(store_path.resolve()),
-                    "projects": fleet_registry.get("projects", []),
-                })
+    _ = (projects, store_path, fleet_registry, registry_entry_for_slug_fn, save_fleet_registry_fn)
 
     return {
         "ok": True,
-        "project_slug": slug,
+        "project_slug": commander_node_slug,
         "agent_id": agent_id,
         "source": "openclaw_agent_invoke",
         "conversation": result.get("conversation", {}),

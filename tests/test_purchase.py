@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import maestro.purchase as purchase
 
 
@@ -29,6 +31,11 @@ def _base_config(workspace: Path) -> dict:
         },
         "channels": {"telegram": {"enabled": True, "accounts": {}}},
     }
+
+
+@pytest.fixture(autouse=True)
+def _clear_openclaw_profile_env(monkeypatch):
+    monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)
 
 
 def test_validate_api_key_accepts_vertex_api_key_on_gemini_403(monkeypatch):

@@ -3,6 +3,13 @@ import { useEffect, useRef, useState } from 'react'
 export function useCommandCenterWebSocket({ onInit, onUpdated }) {
   const [connected, setConnected] = useState(false)
   const wsRef = useRef(null)
+  const onInitRef = useRef(onInit)
+  const onUpdatedRef = useRef(onUpdated)
+
+  useEffect(() => {
+    onInitRef.current = onInit
+    onUpdatedRef.current = onUpdated
+  }, [onInit, onUpdated])
 
   useEffect(() => {
     let active = true
@@ -22,11 +29,11 @@ export function useCommandCenterWebSocket({ onInit, onUpdated }) {
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data)
-          if (payload.type === 'command_center_init' && onInit) {
-            onInit(payload)
+          if (payload.type === 'command_center_init' && onInitRef.current) {
+            onInitRef.current(payload)
           }
-          if (payload.type === 'command_center_updated' && onUpdated) {
-            onUpdated(payload)
+          if (payload.type === 'command_center_updated' && onUpdatedRef.current) {
+            onUpdatedRef.current(payload)
           }
         } catch (error) {
           console.error('Command center WS parse error', error)
@@ -54,7 +61,7 @@ export function useCommandCenterWebSocket({ onInit, onUpdated }) {
         wsRef.current.close()
       }
     }
-  }, [onInit, onUpdated])
+  }, [])
 
   return { connected }
 }
