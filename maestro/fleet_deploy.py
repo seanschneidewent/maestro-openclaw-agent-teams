@@ -1271,7 +1271,9 @@ def run_deploy(
     doctor_result = _run_doctor_for_deploy(store_root=store_root)
     doctor_output = str(doctor_result.get("output") or "").strip()
     if doctor_output:
-        console.print(doctor_output)
+        # Doctor output can include bracketed filesystem paths (e.g. [/Users/...]),
+        # which Rich may interpret as markup tags. Render as plain text.
+        console.print(doctor_output, markup=False)
     doctor_code = int(doctor_result.get("code", 1))
     if bool(doctor_result.get("timed_out")):
         console.print(
