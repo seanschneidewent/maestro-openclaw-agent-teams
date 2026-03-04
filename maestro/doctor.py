@@ -17,6 +17,7 @@ from typing import Any
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls
 from .openclaw_profile import (
+    DEFAULT_FLEET_OPENCLAW_PROFILE,
     openclaw_config_path,
     openclaw_state_root,
     prepend_openclaw_profile_args,
@@ -66,8 +67,15 @@ def _fleet_gateway_port() -> int:
     return DEFAULT_FLEET_GATEWAY_PORT
 
 
-def _load_openclaw_config(home_dir: Path) -> tuple[dict[str, Any], Path]:
-    config_path = openclaw_config_path(home_dir=home_dir)
+def _default_openclaw_profile_for_runtime(home_dir: Path) -> str:
+    profile = resolve_profile(home_dir=home_dir)
+    return DEFAULT_FLEET_OPENCLAW_PROFILE if profile == PROFILE_FLEET else ""
+
+
+def _load_openclaw_config(home_dir: Path, *, profile: str | None = None) -> tuple[dict[str, Any], Path]:
+    resolved_profile = profile if isinstance(profile, str) and profile else resolve_profile(home_dir=home_dir)
+    default_profile = DEFAULT_FLEET_OPENCLAW_PROFILE if resolved_profile == PROFILE_FLEET else ""
+    config_path = openclaw_config_path(home_dir=home_dir, default_profile=default_profile)
     payload = load_json(config_path)
     if not isinstance(payload, dict):
         payload = {}
@@ -381,8 +389,11 @@ def _tail_text(path: Path, max_bytes: int = 180_000) -> str:
 def _rotate_stale_sessions(
     home_dir: Path,
     fix: bool,
+    *,
+    profile: str,
 ) -> DoctorCheck:
-    sessions_dir = openclaw_state_root(home_dir=home_dir) / "agents" / "maestro-company" / "sessions"
+    default_profile = DEFAULT_FLEET_OPENCLAW_PROFILE if profile == PROFILE_FLEET else ""
+    sessions_dir = openclaw_state_root(home_dir=home_dir, default_profile=default_profile) / "agents" / "maestro-company" / "sessions"
     sessions_path = sessions_dir / "sessions.json"
     if not sessions_path.exists():
         return DoctorCheck(
@@ -449,7 +460,8 @@ def _rotate_stale_sessions(
 
 
 def _run_cmd(args: list[str], timeout: int = 25) -> tuple[bool, str]:
-    profiled_args = prepend_openclaw_profile_args(args)
+    default_profile = _default_openclaw_profile_for_runtime(Path.home().resolve())
+    profiled_args = prepend_openclaw_profile_args(args, default_profile=default_profile)
     try:
         result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
@@ -870,10 +882,10 @@ def build_doctor_report(
     home_dir: Path | None = None,
 ) -> dict[str, Any]:
     home = (home_dir or Path.home()).resolve()
-    config, config_path = _load_openclaw_config(home)
+    profile = resolve_profile(home_dir=home)
+    config, config_path = _load_openclaw_config(home, profile=profile)
     checks: list[DoctorCheck] = []
     store_root = _infer_store_root(store_override, None)
-    profile = resolve_profile(home_dir=home)
     route_path = "/command-center" if profile == PROFILE_FLEET else "/workspace"
     network = resolve_network_urls(web_port=3000, route_path=route_path)
     require_field_access = (
@@ -946,7 +958,7 @@ def build_doctor_report(
     checks.append(_sync_workspace_agents_md(workspace, profile=profile, fix=fix))
     checks.append(_sync_workspace_env_role(workspace, expected_role=expected_role, fix=fix))
     checks.append(_sync_launchagent_env(home, config_env=config_env, profile=profile, fix=fix))
-    checks.append(_rotate_stale_sessions(home, fix=fix))
+    checks.append(_rotate_stale_sessions(home, fix=fix, profile=profile))
     checks.append(_sync_telegram_bindings(config, config_path=config_path, fix=fix))
     checks.append(
         _enforce_commander_telegram_policy(

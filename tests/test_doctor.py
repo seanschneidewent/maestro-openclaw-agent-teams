@@ -7,6 +7,7 @@ from pathlib import Path
 
 import maestro.doctor as doctor
 from maestro.doctor import run_doctor
+from maestro.install_state import save_install_state
 
 
 def _write_json(path: Path, data: dict):
@@ -382,3 +383,69 @@ def test_doctor_allows_openclaw_oauth_without_provider_key(tmp_path: Path, monke
         home_dir=home,
     )
     assert code == 0
+
+
+def test_doctor_prefers_fleet_profiled_openclaw_config(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    store = tmp_path / "knowledge_store"
+    store.mkdir(parents=True, exist_ok=True)
+
+    fleet_workspace = home / ".openclaw-maestro-fleet" / "workspace-maestro"
+    fleet_workspace.mkdir(parents=True, exist_ok=True)
+    (fleet_workspace / ".env").write_text(f"MAESTRO_STORE={store}\n", encoding="utf-8")
+
+    # Shared config exists but should not be selected when Fleet profile is active.
+    _write_json(
+        home / ".openclaw" / "openclaw.json",
+        {
+            "env": {"OPENAI_API_KEY": "<PASTE_OPENAI_API_KEY_HERE>"},
+            "agents": {"list": []},
+        },
+    )
+    _write_json(
+        home / ".openclaw-maestro-fleet" / "openclaw.json",
+        {
+            "env": {"OPENAI_API_KEY": "sk-test-1234567890"},
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-company",
+                        "name": "Maestro (FleetCo)",
+                        "default": True,
+                        "model": "openai/gpt-5.2",
+                        "workspace": str(fleet_workspace),
+                    }
+                ]
+            },
+        },
+    )
+    save_install_state(
+        {
+            "profile": "fleet",
+            "fleet_enabled": True,
+            "store_root": str(store),
+        },
+        home_dir=home,
+    )
+
+    def _fake_run_cmd(args: list[str], timeout: int = 25):
+        if args[:2] == ["openclaw", "status"]:
+            return True, "gateway service running"
+        if args[:3] == ["openclaw", "devices", "list"]:
+            return True, '{"pending":[],"paired":[]}'
+        if args[:3] == ["openclaw", "gateway", "status"]:
+            return True, '{"service":{"runtime":{"status":"running"}}}'
+        return True, ""
+
+    monkeypatch.setattr(doctor, "_run_cmd", _fake_run_cmd)
+
+    report = doctor.build_doctor_report(
+        fix=False,
+        store_override=str(store),
+        restart_gateway=False,
+        home_dir=home,
+    )
+    checks = report.get("checks", [])
+    config_check = next((c for c in checks if isinstance(c, dict) and c.get("name") == "openclaw_config"), {})
+    assert config_check.get("ok") is True
+    assert ".openclaw-maestro-fleet/openclaw.json" in str(config_check.get("detail", ""))

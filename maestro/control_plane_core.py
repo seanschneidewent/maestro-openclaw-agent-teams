@@ -16,10 +16,12 @@ from typing import Any, Callable
 
 from .command_center import build_project_snapshot, discover_project_dirs
 from .openclaw_profile import (
+    DEFAULT_FLEET_OPENCLAW_PROFILE,
     openclaw_config_path,
     openclaw_workspace_root,
     prepend_openclaw_profile_args,
 )
+from .profile import PROFILE_FLEET, resolve_profile
 from .system_directives import summarize_system_directives
 from .utils import load_json, save_json, slugify
 
@@ -38,7 +40,8 @@ def _now_iso() -> str:
 
 
 def _default_runner(args: list[str], timeout: int = 6) -> tuple[bool, str]:
-    profiled_args = prepend_openclaw_profile_args(args)
+    default_profile = DEFAULT_FLEET_OPENCLAW_PROFILE if resolve_profile() == PROFILE_FLEET else ""
+    profiled_args = prepend_openclaw_profile_args(args, default_profile=default_profile)
     try:
         result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
     except Exception as exc:
@@ -89,7 +92,9 @@ def _project_index_timestamp(project_dir: Path) -> str:
 
 
 def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any], Path]:
-    path = openclaw_config_path(home_dir=home_dir)
+    profile = resolve_profile(home_dir=home_dir)
+    default_profile = DEFAULT_FLEET_OPENCLAW_PROFILE if profile == PROFILE_FLEET else ""
+    path = openclaw_config_path(home_dir=home_dir, default_profile=default_profile)
     payload = load_json(path)
     if not isinstance(payload, dict):
         payload = {}
@@ -1161,7 +1166,10 @@ def register_project_agent(
     workspace_root = (
         Path(company_workspace).expanduser().resolve()
         if company_workspace
-        else openclaw_workspace_root(home_dir=home_dir).resolve()
+        else openclaw_workspace_root(
+            home_dir=home_dir,
+            default_profile=(DEFAULT_FLEET_OPENCLAW_PROFILE if resolve_profile(home_dir=home_dir) == PROFILE_FLEET else ""),
+        ).resolve()
     )
     project_workspace = workspace_root / "projects" / project_slug
     project_agent_id = f"maestro-project-{project_slug}"

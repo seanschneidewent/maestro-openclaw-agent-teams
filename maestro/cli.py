@@ -27,7 +27,8 @@ from .install_state import (
     resolve_fleet_store_root,
     update_install_state,
 )
-from .profile import PROFILE_SOLO, fleet_enabled, get_profile_state, resolve_profile, set_profile
+from .openclaw_profile import DEFAULT_FLEET_OPENCLAW_PROFILE, ensure_openclaw_profile_env
+from .profile import PROFILE_FLEET, PROFILE_SOLO, fleet_enabled, get_profile_state, resolve_profile, set_profile
 from .utils import slugify
 
 
@@ -983,6 +984,12 @@ def main(argv: list[str] | None = None):
     include_legacy = bool(parsed_argv and parsed_argv[0] in legacy_modes)
     parser = build_parser(include_legacy=include_legacy)
     args = parser.parse_args(parsed_argv)
+
+    # Keep root `maestro` commands pinned to Fleet OpenClaw profile whenever
+    # install-state resolves Fleet mode (even if shell env is missing).
+    profile = resolve_profile()
+    if profile == PROFILE_FLEET:
+        ensure_openclaw_profile_env(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
 
     handlers = {
         "setup": _handle_setup,

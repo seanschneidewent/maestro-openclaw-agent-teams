@@ -18,6 +18,7 @@ from maestro.control_plane import (
     register_project_agent,
     sync_fleet_registry,
 )
+from maestro.install_state import save_install_state
 
 
 def _write_json(path: Path, data: dict):
@@ -191,6 +192,80 @@ def test_register_project_agent_adds_telegram_binding(tmp_path: Path):
         "agentId": agent_id,
         "match": {"channel": "telegram", "accountId": agent_id},
     } in saved.get("bindings", [])
+
+
+def test_register_project_agent_prefers_fleet_profiled_config(tmp_path: Path):
+    home = tmp_path / "home"
+    fleet_workspace = home / ".openclaw-maestro-fleet" / "workspace-maestro"
+    project_slug = "alpha-project"
+    agent_id = f"maestro-project-{project_slug}"
+
+    # Shared config exists but should not be selected in Fleet mode.
+    _write_json(
+        home / ".openclaw" / "openclaw.json",
+        {
+            "agents": {"list": []},
+            "channels": {"telegram": {"enabled": True, "accounts": {}}},
+        },
+    )
+    _write_json(
+        home / ".openclaw-maestro-fleet" / "openclaw.json",
+        {
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-company",
+                        "name": "Maestro (FleetCo)",
+                        "default": True,
+                        "model": "openai/gpt-5.2",
+                        "workspace": str(fleet_workspace),
+                    }
+                ]
+            },
+            "channels": {
+                "telegram": {
+                    "enabled": True,
+                    "accounts": {
+                        agent_id: {
+                            "botToken": "123456:ABCDEF",
+                            "dmPolicy": "pairing",
+                            "groupPolicy": "allowlist",
+                            "streamMode": "partial",
+                        }
+                    },
+                }
+            },
+        },
+    )
+    save_install_state(
+        {
+            "profile": "fleet",
+            "fleet_enabled": True,
+        },
+        home_dir=home,
+    )
+
+    result = register_project_agent(
+        store_root=tmp_path,
+        project_slug=project_slug,
+        project_name="Alpha Project",
+        project_store_path=str(tmp_path / "alpha-project"),
+        home_dir=home,
+        dry_run=False,
+    )
+    assert result["ok"] is True
+
+    fleet_saved = json.loads((home / ".openclaw-maestro-fleet" / "openclaw.json").read_text(encoding="utf-8"))
+    shared_saved = json.loads((home / ".openclaw" / "openclaw.json").read_text(encoding="utf-8"))
+
+    assert any(
+        isinstance(item, dict) and item.get("id") == agent_id
+        for item in (fleet_saved.get("agents", {}).get("list", []) or [])
+    )
+    assert not any(
+        isinstance(item, dict) and item.get("id") == agent_id
+        for item in (shared_saved.get("agents", {}).get("list", []) or [])
+    )
 
 
 def test_server_control_plane_endpoints(tmp_path: Path, monkeypatch):
