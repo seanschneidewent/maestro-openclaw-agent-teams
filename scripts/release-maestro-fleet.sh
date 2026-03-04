@@ -110,7 +110,8 @@ main() {
   assert_version_synced "$version"
 
   echo "[fleet-release] Building fleet wheels for $tag"
-  bash "$ROOT_DIR/scripts/build-maestro-fleet-package.sh" "$ROOT_DIR/dist/fleet-release"
+  MAESTRO_FLEET_BUILD_FRONTENDS=always \
+    bash "$ROOT_DIR/scripts/build-maestro-fleet-package.sh" "$ROOT_DIR/dist/fleet-release"
 
   local wheel_dir="$ROOT_DIR/dist/fleet-release/wheels"
   local engine_wheel_path="$wheel_dir/maestro_engine-${version}-py3-none-any.whl"
