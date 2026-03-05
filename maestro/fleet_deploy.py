@@ -1215,7 +1215,7 @@ def run_deploy(
     _step_header(6, total_steps, _deploy_step_title(6), enabled=interactive_setup)
     create_project = bool(project_name or assignee or project_telegram_token)
     if not create_project and not non_interactive:
-        create_project = Confirm.ask("Provision an initial project Maestro now?", default=True)
+        create_project = Confirm.ask("Provision an initial project Maestro now? (optional)", default=False)
     if create_project:
         chosen_project_name = str(project_name or "").strip()
         chosen_assignee = str(assignee or "").strip()
@@ -1265,6 +1265,11 @@ def run_deploy(
         project_slug = slugify(chosen_project_name)
     else:
         project_slug = ""
+        if interactive_setup:
+            console.print(
+                "[dim]Skipping initial project provisioning. "
+                "Create project maestros later with `maestro-fleet project create`.[/]"
+            )
 
     # FLEET_STEP_7_DOCTOR_RUNTIME
     _step_header(7, total_steps, _deploy_step_title(7), enabled=interactive_setup)
@@ -1441,6 +1446,9 @@ def run_deploy(
             summary_lines.append(f"Text initial project Maestro: @{project_username}")
         else:
             summary_lines.append(f"Initial project Maestro slug: {project_slug}")
+    else:
+        summary_lines.append("Initial project Maestro: not provisioned")
+        summary_lines.append("Create one later: maestro-fleet project create --project-name \"...\" --assignee \"...\"")
     summary_lines.append(
         "Commander Commissioning: READY"
         if commissioning_ready else "Commander Commissioning: ACTION REQUIRED"

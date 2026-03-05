@@ -332,6 +332,64 @@ class TestCommandCenterAPI:
         assert payload["agent_id"] == "maestro-company"
         assert payload["online_state"] in {"online", "offline"}
 
+    def test_commander_node_status_prefers_runtime_commander_state(self, single_project_store: Path):
+        server.store_path = single_project_store
+        server.load_all_projects()
+        server._refresh_command_center_state()
+        server.awareness_state = {
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "commander": {
+                "display_name": "The Commander",
+                "agent_id": "maestro-company",
+            },
+            "posture": "degraded",
+        }
+        server.command_center_state["commander"] = {
+            "name": "The Commander",
+            "agent_id": "maestro-company",
+            "online": False,
+            "online_state": "offline",
+            "online_reason": "OpenClaw gateway is not running.",
+        }
+
+        payload = asyncio.run(server.api_command_center_node_status("commander"))
+        assert payload["ok"] is True
+        assert payload["online"] is False
+        assert payload["online_state"] == "offline"
+        assert payload["online_reason"] == "OpenClaw gateway is not running."
+
+    def test_ensure_awareness_state_refreshes_stale_payload(self, monkeypatch):
+        server.awareness_state = {"generated_at": "2000-01-01T00:00:00Z"}
+        refreshed = {"count": 0}
+
+        def _fake_refresh():
+            refreshed["count"] += 1
+            server.awareness_state = {
+                "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            }
+
+        monkeypatch.setattr(server, "_refresh_control_plane_state", _fake_refresh)
+        monkeypatch.setattr(server, "_STATE_REFRESH_TTL_SECONDS", 15)
+
+        server._ensure_awareness_state()
+        assert refreshed["count"] == 1
+
+    def test_ensure_command_center_state_refreshes_stale_payload(self, monkeypatch):
+        server.command_center_state = {"updated_at": "2000-01-01T00:00:00Z"}
+        refreshed = {"count": 0}
+
+        def _fake_refresh():
+            refreshed["count"] += 1
+            server.command_center_state = {
+                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            }
+
+        monkeypatch.setattr(server, "_refresh_command_center_state", _fake_refresh)
+        monkeypatch.setattr(server, "_STATE_REFRESH_TTL_SECONDS", 15)
+
+        server._ensure_command_center_state()
+        assert refreshed["count"] == 1
+
     def test_node_conversation_endpoint_function(self, single_project_store: Path, monkeypatch):
         server.store_path = single_project_store
         server.load_all_projects()

@@ -14,6 +14,7 @@ import asyncio
 import json
 import sys
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -134,6 +135,34 @@ awareness_state: dict[str, Any] = {}
 agent_project_slug_index: dict[str, str] = {}
 command_center_node_index: dict[str, dict[str, Any]] = {}
 COMMANDER_NODE_SLUG = "commander"
+_STATE_REFRESH_TTL_SECONDS = 15
+
+
+def _parse_state_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    for candidate in (raw, raw.replace("Z", "+00:00")):
+        try:
+            dt = datetime.fromisoformat(candidate)
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt
+    return None
+
+
+def _state_is_stale(state: dict[str, Any], *, timestamp_key: str, max_age_seconds: int) -> bool:
+    if not isinstance(state, dict) or not state:
+        return True
+    timestamp = _parse_state_timestamp(state.get(timestamp_key))
+    if timestamp is None:
+        return True
+    age_seconds = (datetime.now(timezone.utc) - timestamp).total_seconds()
+    return age_seconds > float(max_age_seconds)
 
 
 def _fleet_mode_enabled() -> bool:
@@ -717,12 +746,20 @@ async def _broadcast_command_center_update():
 # Schedule data helpers moved to `maestro.server_schedule`.
 
 def _ensure_command_center_state():
-    if not command_center_state:
+    if _state_is_stale(
+        command_center_state,
+        timestamp_key="updated_at",
+        max_age_seconds=_STATE_REFRESH_TTL_SECONDS,
+    ):
         _refresh_command_center_state()
 
 
 def _ensure_awareness_state():
-    if not awareness_state:
+    if _state_is_stale(
+        awareness_state,
+        timestamp_key="generated_at",
+        max_age_seconds=_STATE_REFRESH_TTL_SECONDS,
+    ):
         _refresh_control_plane_state()
 
 

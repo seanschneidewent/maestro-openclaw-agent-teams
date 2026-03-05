@@ -207,14 +207,34 @@ def load_command_center_node_status(
 ) -> dict[str, Any]:
     if slug == commander_node_slug:
         ensure_awareness_state()
-        commander = awareness_state.get("commander", {}) if isinstance(awareness_state, dict) else {}
-        display_name = str(commander.get("display_name", "")).strip() or "The Commander"
+        commander_awareness = awareness_state.get("commander", {}) if isinstance(awareness_state, dict) else {}
+        if not isinstance(commander_awareness, dict):
+            commander_awareness = {}
+        commander_runtime = command_center_state.get("commander", {}) if isinstance(command_center_state, dict) else {}
+        if not isinstance(commander_runtime, dict):
+            commander_runtime = {}
+        display_name = (
+            str(commander_awareness.get("display_name", "")).strip()
+            or str(commander_runtime.get("name", "")).strip()
+            or "The Commander"
+        )
         action = (
             str(command_center_state.get("orchestrator", {}).get("currentAction", "")).strip()
             if isinstance(command_center_state, dict)
             else ""
         )
         posture = str(awareness_state.get("posture", "")).strip() if isinstance(awareness_state, dict) else ""
+        online = bool(commander_runtime.get("online", commander_awareness.get("online", False)))
+        online_state = (
+            str(commander_runtime.get("online_state", "")).strip()
+            or str(commander_awareness.get("online_state", "")).strip()
+            or ("online" if online else "offline")
+        )
+        online_reason = (
+            str(commander_runtime.get("online_reason", "")).strip()
+            or str(commander_awareness.get("online_reason", "")).strip()
+            or ("Commander routing available" if online else "Commander routing unavailable")
+        )
         status_report = {
             "source": "computed",
             "stale": False,
@@ -238,12 +258,16 @@ def load_command_center_node_status(
         return {
             "ok": True,
             "project_slug": commander_node_slug,
-            "agent_id": str(commander.get("agent_id", "maestro-company")).strip() or "maestro-company",
+            "agent_id": (
+                str(commander_awareness.get("agent_id", "")).strip()
+                or str(commander_runtime.get("agent_id", "")).strip()
+                or "maestro-company"
+            ),
             "project_name": "Command Center Control Plane",
             "node_display_name": display_name,
-            "online": bool(commander.get("online", True)),
-            "online_state": str(commander.get("online_state", "online")).strip() or "online",
-            "online_reason": str(commander.get("online_reason", "Commander routing available")).strip(),
+            "online": online,
+            "online_state": online_state,
+            "online_reason": online_reason,
             "status_report": status_report,
             "heartbeat": {
                 "available": True,

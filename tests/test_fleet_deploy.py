@@ -535,6 +535,118 @@ def test_run_deploy_existing_key_prompt_defaults_to_no(monkeypatch, tmp_path: Pa
     assert existing_key_prompt is False
 
 
+def test_run_deploy_initial_project_prompt_defaults_to_no(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    config_path = home / ".openclaw" / "openclaw.json"
+    config = {
+        "env": {},
+        "agents": {
+            "list": [
+                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.2"},
+            ]
+        },
+        "channels": {"telegram": {"enabled": True, "accounts": {}}},
+    }
+    _write_json(config_path, config)
+
+    prompts: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_prereqs",
+        lambda require_tailscale: fleet_deploy.PrereqResult(ok=True, failures=[], warnings=[]),
+    )
+    monkeypatch.setattr(fleet_deploy, "set_profile", lambda *args, **kwargs: {"profile": "fleet"})
+    monkeypatch.setattr(fleet_deploy, "_ensure_openclaw_config_exists", lambda *args, **kwargs: config_path)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_check_shared_gateway_collision",
+        lambda target_gateway_port: {"blocked": False},
+    )
+    monkeypatch.setattr(fleet_deploy, "run_update", lambda **kwargs: 0)
+    monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_configure_company_openclaw",
+        lambda **kwargs: {
+            "config_path": str(config_path),
+            "workspace_root": str(tmp_path / "workspace-maestro"),
+            "provider_env_key": "OPENAI_API_KEY",
+            "binding_changes": [],
+        },
+    )
+    monkeypatch.setattr(fleet_deploy, "resolve_fleet_store_root", lambda _store: (tmp_path / "store"))
+    monkeypatch.setattr(fleet_deploy, "save_install_state", lambda payload: None)
+    monkeypatch.setattr(fleet_deploy, "_run_doctor_for_deploy", lambda **kwargs: {"code": 0, "timed_out": False, "output": ""})
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_repair_gateway_device_token_mismatch",
+        lambda: {"mismatch_detected": False, "repaired": False},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_ensure_gateway_running_for_pairing",
+        lambda: {"ok": True, "already_running": True, "actions": []},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_complete_commander_pairing",
+        lambda **kwargs: {"approved": False, "skipped": True, "reason": "user_skipped"},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_commissioning_report",
+        lambda **kwargs: {"ok": True, "checks": [], "critical_failures": []},
+    )
+    monkeypatch.setattr(fleet_deploy, "_print_commissioning_report", lambda report: None)
+    monkeypatch.setattr(
+        fleet_deploy,
+        "resolve_network_urls",
+        lambda web_port, route_path="/command-center": {
+            "recommended_url": f"http://localhost:{web_port}{route_path}",
+            "localhost_url": f"http://localhost:{web_port}{route_path}",
+            "tailnet_url": "",
+        },
+    )
+
+    def _fake_confirm_ask(*args, **kwargs):
+        prompt = str(args[0]) if args else ""
+        prompts.append((prompt, kwargs.get("default")))
+        return False
+
+    monkeypatch.setattr(fleet_deploy.Confirm, "ask", _fake_confirm_ask)
+
+    def _fail_run_purchase(**kwargs):
+        _ = kwargs
+        raise AssertionError("run_purchase should not be called")
+
+    monkeypatch.setattr(fleet_deploy, "run_purchase", _fail_run_purchase)
+
+    code = fleet_deploy.run_deploy(
+        company_name="TestCo",
+        model="openai/gpt-5.2",
+        project_model="openai/gpt-5.2",
+        gemini_api_key="AIzaTestGeminiKey0000000000000000000000",
+        openai_api_key="sk-test-openai-key",
+        anthropic_api_key="sk-ant-test-key",
+        telegram_token="123456:ABCDEF",
+        non_interactive=False,
+        skip_remote_validation=True,
+        start_services=False,
+    )
+    assert code == 0
+
+    initial_project_prompt_default = next(
+        (
+            default
+            for prompt, default in prompts
+            if "Provision an initial project Maestro now?" in prompt
+        ),
+        None,
+    )
+    assert initial_project_prompt_default is False
+
+
 def test_fleet_openclaw_profile_isolated_from_shared_config(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     shared_path = home / ".openclaw" / "openclaw.json"

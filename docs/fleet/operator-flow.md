@@ -28,7 +28,7 @@ Deploy currently runs 8 steps:
 3. Company Profile
 4. Provider Keys
 5. Commander Telegram
-6. Initial Project Maestro
+6. Initial Project Maestro (optional, default: No)
 7. Doctor + Runtime Health
 8. Commander Commissioning
 
@@ -42,6 +42,13 @@ During deploy:
 4. Detached Maestro server is started (default web port 3000).
 5. Command Center API health is checked.
 6. Deployment summary is printed with URLs and bot handles.
+7. If no project flags are provided, Fleet stays commander-only after install.
+
+Create project maestros later (explicitly) with:
+
+```bash
+maestro-fleet project create --project-name "..." --assignee "..."
+```
 
 ## 4. Telegram Pairing
 

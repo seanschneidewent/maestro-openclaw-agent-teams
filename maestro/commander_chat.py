@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .openclaw_profile import (
+    DEFAULT_FLEET_OPENCLAW_PROFILE,
+    openclaw_state_root,
+    prepend_openclaw_profile_args,
+)
 from .utils import load_json
 
 
@@ -31,8 +36,11 @@ class SessionRef:
 
 
 def _session_store_path(agent_id: str, home_dir: Path | None = None) -> tuple[Path, Path]:
-    home = (home_dir or Path.home()).expanduser().resolve()
-    sessions_dir = home / ".openclaw" / "agents" / agent_id / "sessions"
+    state_root = openclaw_state_root(
+        home_dir=home_dir,
+        default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE,
+    )
+    sessions_dir = state_root / "agents" / agent_id / "sessions"
     sessions_path = sessions_dir / "sessions.json"
     return sessions_dir, sessions_path
 
@@ -317,6 +325,7 @@ def send_agent_message(
         "--timeout",
         str(max(10, int(timeout))),
     ]
+    cmd = prepend_openclaw_profile_args(cmd, default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
 
     try:
         result = subprocess.run(
@@ -371,4 +380,3 @@ def send_agent_message(
         "result": response_payload if response_payload is not None else {"stdout": stdout, "stderr": stderr},
         "conversation": conversation,
     }
-
