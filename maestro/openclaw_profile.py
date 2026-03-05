@@ -5,12 +5,26 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 from pathlib import Path
 
 
 DEFAULT_FLEET_OPENCLAW_PROFILE = "maestro-fleet"
 _PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _PROFILE_OFF_VALUES = {"default", "none", "off", "shared"}
+
+
+def _resolve_openclaw_executable(executable: str) -> str:
+    candidate = str(executable or "").strip()
+    if candidate != "openclaw":
+        return candidate
+    if os.name != "nt":
+        return candidate
+    if shutil.which("openclaw.cmd"):
+        return "openclaw.cmd"
+    if shutil.which("openclaw.exe"):
+        return "openclaw.exe"
+    return candidate
 
 
 def _normalize_profile(raw: str | None) -> str:
@@ -90,10 +104,11 @@ def openclaw_workspace_root(
 def prepend_openclaw_profile_args(args: list[str], *, default_profile: str = "") -> list[str]:
     if not args or args[0] != "openclaw" or "--profile" in args:
         return list(args)
+    executable = _resolve_openclaw_executable(args[0])
     profile = resolve_openclaw_profile(default_profile=default_profile)
     if not profile:
-        return list(args)
-    return [args[0], "--profile", profile, *args[1:]]
+        return [executable, *args[1:]]
+    return [executable, "--profile", profile, *args[1:]]
 
 
 def prepend_openclaw_profile_shell(cmd: str, *, default_profile: str = "") -> str:

@@ -43,11 +43,50 @@ def _default_runner(args: list[str], timeout: int = 6) -> tuple[bool, str]:
     default_profile = DEFAULT_FLEET_OPENCLAW_PROFILE if resolve_profile() == PROFILE_FLEET else ""
     profiled_args = prepend_openclaw_profile_args(args, default_profile=default_profile)
     try:
-        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            profiled_args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
     return result.returncode == 0, output
+
+
+def _parse_json_from_output(text: str) -> dict[str, Any]:
+    raw = str(text or "")
+    idx = raw.find("{")
+    if idx < 0:
+        return {}
+    snippet = raw[idx:].strip()
+    try:
+        payload = json.loads(snippet)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _gateway_status_running(gateway_status: dict[str, Any]) -> bool:
+    service = gateway_status.get("service", {}) if isinstance(gateway_status.get("service"), dict) else {}
+    runtime = service.get("runtime", {}) if isinstance(service.get("runtime"), dict) else {}
+    status_text = str(runtime.get("status", "")).strip().lower()
+    if status_text in {"running", "started", "active"}:
+        return True
+
+    rpc = gateway_status.get("rpc", {}) if isinstance(gateway_status.get("rpc"), dict) else {}
+    if bool(rpc.get("ok")):
+        return True
+
+    port = gateway_status.get("port", {}) if isinstance(gateway_status.get("port"), dict) else {}
+    port_status = str(port.get("status", "")).strip().lower()
+    listeners = port.get("listeners")
+    if port_status in {"busy", "listening", "occupied"} and isinstance(listeners, list) and listeners:
+        return True
+    return False
 
 
 def _parse_iso(value: Any) -> datetime | None:
@@ -681,6 +720,7 @@ def build_ingest_command(
 ) -> dict[str, Any]:
     root = Path(store_root).resolve()
     project_name = str(project_entry.get("project_name", project_entry.get("project_slug", ""))).strip()
+    project_store_path = str(project_entry.get("project_store_path", "")).strip()
     input_root_raw = input_root_override or str(project_entry.get("ingest_input_root", "")).strip()
     resolved_input = _resolve_input_root(input_root_raw)
 
@@ -691,10 +731,11 @@ def build_ingest_command(
         input_token = DEFAULT_INPUT_PLACEHOLDER
         needs_input_path = True
 
+    store_token = _quote_path(Path(project_store_path).resolve()) if project_store_path else _quote_path(root)
     command = (
         f"maestro ingest {input_token} "
         f"--project-name {_quote_path(project_name)} "
-        f"--store {_quote_path(root)} "
+        f"--store {store_token} "
         f"--dpi {int(dpi)}"
     )
     return {
@@ -1256,10 +1297,18 @@ def _service_status(
     pairing_required = False
     status_output = ""
     if openclaw_installed:
+        gw_ok, gw_out = runner(["openclaw", "gateway", "status", "--json"], timeout=8)
+        gw_status = _parse_json_from_output(gw_out)
+        if gw_status:
+            openclaw_running = _gateway_status_running(gw_status)
+            status_output = gw_out
+
         ok, out = runner(["openclaw", "status"], timeout=6)
-        status_output = out
+        if not status_output:
+            status_output = out
         lowered = out.lower()
-        openclaw_running = (ok and "running" in lowered) or ("gateway service" in lowered and "running" in lowered)
+        if not gw_status:
+            openclaw_running = (ok and "running" in lowered) or ("gateway service" in lowered and "running" in lowered)
         pairing_required = "pairing required" in lowered
 
     gateway_auth = _gateway_auth_health(config)
@@ -1345,6 +1394,15 @@ def build_awareness_state(
 
     fleet_projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
     project_count = len([p for p in fleet_projects if isinstance(p, dict) and p.get("status") != "archived"])
+    slug_counts: dict[str, int] = {}
+    for item in fleet_projects:
+        if not isinstance(item, dict):
+            continue
+        slug = str(item.get("project_slug", "")).strip()
+        if not slug:
+            continue
+        slug_counts[slug] = slug_counts.get(slug, 0) + 1
+    duplicate_project_slugs = sorted(slug for slug, count in slug_counts.items() if count > 1)
 
     stale_projects: list[dict[str, Any]] = []
     for item in fleet_projects:
@@ -1384,6 +1442,10 @@ def build_awareness_state(
         degraded_reasons.append("Knowledge store root missing")
     if project_count == 0:
         degraded_reasons.append("No project nodes discovered")
+    if duplicate_project_slugs:
+        degraded_reasons.append(
+            "Duplicate project slug registrations: " + ", ".join(duplicate_project_slugs)
+        )
 
     posture = "healthy" if not degraded_reasons else "degraded"
     current_action = ""
@@ -1410,6 +1472,7 @@ def build_awareness_state(
         },
         "fleet": {
             "project_count": project_count,
+            "duplicate_project_slugs": duplicate_project_slugs,
             "stale_projects": stale_projects,
             "registry": registry,
             "current_action": current_action,

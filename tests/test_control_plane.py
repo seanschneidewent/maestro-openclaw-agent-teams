@@ -140,6 +140,33 @@ def test_awareness_state_contract(tmp_path: Path):
     assert "routing" in awareness["services"]["telegram"]
 
 
+def test_awareness_state_treats_gateway_rpc_ok_as_running(tmp_path: Path):
+    project_dir = tmp_path / "alpha"
+    _make_project(project_dir)
+
+    def _runner(args: list[str], timeout: int = 6):
+        _ = timeout
+        if args[:4] == ["openclaw", "gateway", "status", "--json"]:
+            return True, json.dumps({
+                "service": {"runtime": {"status": "stopped"}},
+                "rpc": {"ok": True, "url": "ws://127.0.0.1:18789"},
+                "port": {"status": "busy", "listeners": [{"pid": 1234}]},
+            })
+        if args[:2] == ["openclaw", "status"]:
+            return True, "OpenClaw status"
+        return False, ""
+
+    awareness = build_awareness_state(
+        store_root=tmp_path,
+        web_port=3333,
+        command_runner=_runner,
+        home_dir=tmp_path / "home",
+    )
+
+    assert awareness["services"]["openclaw"]["running"] is True
+    assert "OpenClaw gateway not running" not in awareness["degraded_reasons"]
+
+
 def test_register_project_agent_adds_telegram_binding(tmp_path: Path):
     home = tmp_path / "home"
     workspace = home / ".openclaw" / "workspace-maestro"

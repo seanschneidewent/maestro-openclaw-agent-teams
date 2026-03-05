@@ -378,6 +378,55 @@ def send_node_message(
     node_exists_fn: NodeExistsFn | None = None,
     node_agent_id_for_slug_fn: NodeAgentIdForSlugFn | None = None,
 ) -> dict[str, Any]:
+    def _commander_live_context() -> str:
+        by_slug = registry_by_slug(fleet_registry)
+        active_slugs: list[str] = []
+        for candidate in sorted(set(projects.keys()) | set(by_slug.keys())):
+            clean = str(candidate).strip()
+            if not clean or clean == commander_node_slug:
+                continue
+            active_slugs.append(clean)
+
+        segments = [
+            "LIVE FLEET CONTEXT FROM COMMAND CENTER",
+            f"store_root={Path(store_path).resolve()}",
+            "commander_node_slug=commander",
+        ]
+        if not active_slugs:
+            segments.append("active_project_nodes=none")
+        else:
+            project_segments: list[str] = []
+            for project_slug in active_slugs:
+                entry = by_slug.get(project_slug, {})
+                project = projects.get(project_slug, {})
+                agent_id = ""
+                if node_agent_id_for_slug_fn is not None:
+                    agent_id = str(node_agent_id_for_slug_fn(project_slug)).strip()
+                if not agent_id:
+                    agent_id = str(
+                        entry.get("maestro_agent_id")
+                        or project.get("agent_id")
+                        or f"maestro-project-{project_slug}"
+                    ).strip()
+                project_name = str(
+                    entry.get("project_name")
+                    or project.get("project_name")
+                    or project.get("name")
+                    or project_slug
+                ).strip()
+                status = str(entry.get("status") or project.get("status") or "active").strip()
+                project_segments.append(
+                    f"slug={project_slug}|agent_id={agent_id}|name={project_name}|status={status}"
+                )
+            segments.append(f"active_project_nodes={';'.join(project_segments)}")
+
+        segments.extend([
+            "rule=answer_project_node_existence_from_live_list",
+            "rule=never_claim_zero_projects_when_live_list_non_empty",
+            "rule=report_project_maestro_replies_after_dispatch",
+        ])
+        return " || ".join(segments).strip()
+
     if slug != commander_node_slug:
         if node_exists_fn is not None and not node_exists_fn(slug):
             raise KeyError(slug)
@@ -401,9 +450,13 @@ def send_node_message(
         if resolved_agent_id:
             agent_id = resolved_agent_id
 
+    outbound_message = clean_message
+    if slug == commander_node_slug:
+        outbound_message = f"{_commander_live_context()} || USER REQUEST: {clean_message}"
+
     result = send_agent_message_fn(
         agent_id=agent_id,
-        message=clean_message,
+        message=outbound_message,
         project_slug=commander_node_slug,
         session_id=f"agent:{agent_id}:main",
     )

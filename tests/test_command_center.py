@@ -471,11 +471,13 @@ class TestCommandCenterAPI:
         server.load_all_projects()
         server._refresh_command_center_state()
         server._refresh_control_plane_state()
+        slug = build_project_snapshot(single_project_store)["slug"]
+        captured: dict[str, str] = {}
 
         monkeypatch.setattr(
             server,
             "send_agent_message",
-            lambda **kwargs: {
+            lambda **kwargs: captured.update({"message": kwargs["message"]}) or {
                 "ok": True,
                 "conversation": {
                     "ok": True,
@@ -504,6 +506,9 @@ class TestCommandCenterAPI:
         assert payload["ok"] is True
         assert payload["project_slug"] == "commander"
         assert payload["agent_id"] == "maestro-company"
+        assert "LIVE FLEET CONTEXT FROM COMMAND CENTER" in captured["message"]
+        assert f"slug={slug}" in captured["message"]
+        assert "USER REQUEST: status report" in captured["message"]
 
     def test_registry_identity_overlays_assignee_in_state_and_detail(self, single_project_store: Path):
         slug = build_project_snapshot(single_project_store)["slug"]

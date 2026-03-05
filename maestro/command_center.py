@@ -151,10 +151,36 @@ def discover_project_dirs(store_root: Path) -> list[Path]:
     if (root / "project.json").exists():
         return [root]
 
-    projects: list[Path] = []
+    grouped: dict[str, list[Path]] = {}
     for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-        if child.is_dir() and (child / "project.json").exists():
-            projects.append(child)
+        if not child.is_dir() or not (child / "project.json").exists():
+            continue
+        meta = load_json(child / "project.json")
+        if not isinstance(meta, dict):
+            meta = {}
+        raw_slug = str(meta.get("slug", "")).strip()
+        raw_name = str(meta.get("name", "")).strip()
+        slug = slugify(raw_slug or raw_name or child.name)
+        grouped.setdefault(slug, []).append(child)
+
+    projects: list[Path] = []
+    for slug, candidates in grouped.items():
+        if len(candidates) == 1:
+            projects.append(candidates[0])
+            continue
+
+        def _candidate_score(path: Path) -> tuple[int, int, int, int]:
+            meta = load_json(path / "project.json")
+            if not isinstance(meta, dict):
+                meta = {}
+            summary = meta.get("index_summary") if isinstance(meta.get("index_summary"), dict) else {}
+            pointer_count = _safe_int(summary.get("pointer_count"), 0)
+            page_count = _safe_int(summary.get("page_count"), _safe_int(meta.get("total_pages"), 0))
+            ingested = 1 if _clean_str(meta.get("ingested_at")) else 0
+            exact_slug_dir = 1 if slugify(path.name) == slug else 0
+            return (pointer_count, page_count, ingested, exact_slug_dir)
+
+        projects.append(max(candidates, key=_candidate_score))
     return projects
 
 

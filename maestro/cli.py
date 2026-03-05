@@ -280,6 +280,15 @@ def _add_fleet_project_create_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--allow-openclaw-override", action="store_true")
 
 
+def _add_fleet_project_set_telegram_flags(parser: argparse.ArgumentParser):
+    parser.add_argument("--project", required=True, help="Project slug or project name")
+    parser.add_argument("--telegram-token", required=True, help="Telegram bot token to bind to the project agent")
+    parser.add_argument("--pairing-code", help="Optional Telegram pairing code to auto-approve")
+    parser.add_argument("--store")
+    parser.add_argument("--skip-remote-validation", action="store_true")
+    parser.add_argument("--allow-openclaw-override", action="store_true")
+
+
 def _add_fleet_license_generate_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--project-slug")
@@ -305,6 +314,11 @@ def _add_fleet_deploy_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--assignee")
     parser.add_argument("--superintendent")
     parser.add_argument("--project-telegram-token")
+    parser.add_argument(
+        "--provision-initial-project",
+        action="store_true",
+        help="Explicitly provision an initial project maestro during deploy",
+    )
     parser.add_argument("--store")
     parser.add_argument("--port", type=int, default=3000)
     parser.add_argument("--host", default="0.0.0.0")
@@ -342,6 +356,8 @@ def _add_fleet_parser(subparsers: argparse._SubParsersAction):
     _add_fleet_project_create_flags(project_create)
     project_set_model = project_sub.add_parser("set-model", help="Set model for an existing Project Maestro")
     _add_fleet_set_model_flags(project_set_model, include_project=True)
+    project_set_telegram = project_sub.add_parser("set-telegram", help="Set Telegram bot for an existing Project Maestro")
+    _add_fleet_project_set_telegram_flags(project_set_telegram)
 
     # Legacy parser kept only to print an explicit disable message.
     purchase = fleet_sub.add_parser("purchase", help=argparse.SUPPRESS)
@@ -544,7 +560,7 @@ def _open_url(url: str):
 def _run_fleet(args: argparse.Namespace):
     from .control_plane import resolve_network_urls
     from .fleet_deploy import run_deploy
-    from .fleet_models import run_set_commander_model, run_set_project_model
+    from .fleet_models import run_set_commander_model, run_set_project_model, run_set_project_telegram
     from .install_state import resolve_fleet_store_root
     from .license import generate_project_key, validate_project_key
     from .doctor import run_doctor
@@ -621,6 +637,7 @@ def _run_fleet(args: argparse.Namespace):
             assignee=args.assignee,
             superintendent=args.superintendent,
             project_telegram_token=args.project_telegram_token,
+            provision_initial_project=bool(args.provision_initial_project),
             store_override=args.store,
             port=int(args.port),
             host=str(args.host),
@@ -684,6 +701,18 @@ def _run_fleet(args: argparse.Namespace):
                 project=args.project,
                 model=args.model,
                 api_key=args.api_key,
+                skip_remote_validation=bool(args.skip_remote_validation),
+                allow_openclaw_override=bool(args.allow_openclaw_override),
+                store_override=args.store,
+            )
+            if code != 0:
+                sys.exit(code)
+            return
+        if str(args.fleet_project_command or "").strip() == "set-telegram":
+            code = run_set_project_telegram(
+                project=args.project,
+                telegram_token=args.telegram_token,
+                pairing_code=args.pairing_code,
                 skip_remote_validation=bool(args.skip_remote_validation),
                 allow_openclaw_override=bool(args.allow_openclaw_override),
                 store_override=args.store,

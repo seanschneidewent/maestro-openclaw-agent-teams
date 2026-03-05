@@ -103,7 +103,14 @@ class MonitorState:
 def _safe_run(args: list[str], timeout: int = 6) -> tuple[bool, str]:
     profiled_args = prepend_openclaw_profile_args(args)
     try:
-        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            profiled_args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()

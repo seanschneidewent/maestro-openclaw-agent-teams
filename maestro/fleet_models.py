@@ -1,4 +1,4 @@
-"""Fleet model-switch helpers for commander and project agents."""
+"""Fleet model/binding helpers for commander and project agents."""
 
 from __future__ import annotations
 
@@ -9,8 +9,14 @@ from typing import Any
 from rich.console import Console
 from rich.panel import Panel
 
-from .control_plane import sync_fleet_registry
-from .fleet_deploy import _is_maestro_managed_agent, _validate_api_key
+from .control_plane import ensure_telegram_account_bindings, save_fleet_registry, sync_fleet_registry
+from .fleet_deploy import (
+    _approve_telegram_pairing_code,
+    _fleet_gateway_port,
+    _is_maestro_managed_agent,
+    _validate_api_key,
+    _validate_telegram_token,
+)
 from .install_state import resolve_fleet_store_root
 from .openclaw_guard import ensure_openclaw_override_allowed
 from .openclaw_profile import (
@@ -36,34 +42,53 @@ def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any],
 
 
 def _restart_openclaw_gateway() -> tuple[bool, str]:
-    try:
-        restart = subprocess.run(
-            prepend_openclaw_profile_args(["openclaw", "gateway", "restart"]),
-            capture_output=True,
-            text=True,
-            timeout=35,
-            check=False,
-        )
-    except FileNotFoundError:
-        return False, "openclaw CLI not found on PATH"
-    except Exception as exc:
-        return False, str(exc)
+    def _run_gateway(args: list[str], timeout: int) -> tuple[bool, str]:
+        try:
+            result = subprocess.run(
+                prepend_openclaw_profile_args(args),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError:
+            return False, "openclaw CLI not found on PATH"
+        except Exception as exc:
+            return False, str(exc)
+        output = (result.stdout or result.stderr or "").strip()
+        return result.returncode == 0, output
 
-    output = (restart.stdout or restart.stderr or "").strip()
-    if restart.returncode == 0:
-        return True, output or "Gateway restarted"
+    actions: list[str] = []
 
-    start = subprocess.run(
-        prepend_openclaw_profile_args(["openclaw", "gateway", "start"]),
-        capture_output=True,
-        text=True,
-        timeout=35,
-        check=False,
+    restart_ok, restart_output = _run_gateway(["openclaw", "gateway", "restart"], timeout=45)
+    if restart_output:
+        actions.append(restart_output)
+    if restart_ok:
+        return True, "\n".join(actions) or "Gateway restarted"
+
+    start_ok, start_output = _run_gateway(["openclaw", "gateway", "start"], timeout=45)
+    if start_output:
+        actions.append(start_output)
+    if start_ok:
+        return True, "\n".join(actions) or "Gateway started"
+
+    install_ok, install_output = _run_gateway(
+        ["openclaw", "gateway", "install", "--force", "--port", str(_fleet_gateway_port())],
+        timeout=75,
     )
-    start_output = (start.stdout or start.stderr or "").strip()
-    if start.returncode == 0:
-        return True, start_output or "Gateway started"
-    return False, output or start_output or "Failed to restart gateway"
+    if install_output:
+        actions.append(install_output)
+    if not install_ok:
+        return False, "\n".join(item for item in actions if item).strip() or "Failed to restart gateway"
+
+    start2_ok, start2_output = _run_gateway(["openclaw", "gateway", "start"], timeout=45)
+    if start2_output:
+        actions.append(start2_output)
+    if start2_ok:
+        return True, "\n".join(item for item in actions if item).strip() or "Gateway reinstalled and started"
+    return False, "\n".join(item for item in actions if item).strip() or "Failed to restart gateway"
 
 
 def _resolve_selected_key(
@@ -308,3 +333,130 @@ def run_set_project_model(
         )
     )
     return 0 if restart_ok else 1
+
+
+def run_set_project_telegram(
+    *,
+    project: str,
+    telegram_token: str,
+    pairing_code: str | None = None,
+    skip_remote_validation: bool = False,
+    allow_openclaw_override: bool = False,
+    store_override: str | None = None,
+) -> int:
+    requested = str(project or "").strip()
+    if not requested:
+        console.print("[red]Project slug/name is required.[/]")
+        return 1
+
+    token = str(telegram_token or "").strip()
+    if not token:
+        console.print("[red]Telegram token is required.[/]")
+        return 1
+
+    store_root = resolve_fleet_store_root(store_override)
+    registry = sync_fleet_registry(store_root)
+    projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
+    requested_slug = slugify(requested)
+    matched = next(
+        (
+            item for item in projects
+            if isinstance(item, dict) and (
+                str(item.get("project_slug", "")).strip() == requested
+                or str(item.get("project_slug", "")).strip() == requested_slug
+                or str(item.get("project_name", "")).strip().lower() == requested.lower()
+            )
+        ),
+        None,
+    )
+    resolved_slug = str(matched.get("project_slug", "")).strip() if isinstance(matched, dict) else requested_slug
+    if not resolved_slug:
+        console.print(f"[red]Could not resolve project: {requested}[/]")
+        return 1
+
+    config, config_path = _load_openclaw_config()
+    safe_override, override_message = ensure_openclaw_override_allowed(
+        config,
+        allow_override=allow_openclaw_override,
+    )
+    if not safe_override:
+        console.print(f"[red]{override_message}[/]")
+        return 1
+
+    username = ""
+    display_name = ""
+    if not skip_remote_validation:
+        ok, username, display_name, detail = _validate_telegram_token(token)
+        if not ok:
+            console.print(f"[red]Telegram token validation failed: {detail}[/]")
+            return 1
+
+    if not isinstance(config.get("channels"), dict):
+        config["channels"] = {}
+    channels = config["channels"]
+    telegram = channels.get("telegram")
+    if not isinstance(telegram, dict):
+        telegram = {"enabled": True, "accounts": {}}
+        channels["telegram"] = telegram
+    if not isinstance(telegram.get("accounts"), dict):
+        telegram["accounts"] = {}
+    telegram["enabled"] = True
+
+    agent_id = f"maestro-project-{resolved_slug}"
+    account = telegram["accounts"].get(agent_id)
+    if not isinstance(account, dict):
+        account = {}
+        telegram["accounts"][agent_id] = account
+
+    account["botToken"] = token
+    account["dmPolicy"] = "pairing"
+    account["groupPolicy"] = "allowlist"
+    account["streamMode"] = "partial"
+    if username:
+        account["botUsername"] = username
+    if display_name:
+        account["botDisplayName"] = display_name
+
+    binding_changes = ensure_telegram_account_bindings(config)
+    save_json(config_path, config)
+
+    registry_changed = False
+    if isinstance(matched, dict):
+        if username and str(matched.get("telegram_bot_username", "")).strip() != username:
+            matched["telegram_bot_username"] = username
+            registry_changed = True
+        if display_name and str(matched.get("telegram_bot_display_name", "")).strip() != display_name:
+            matched["telegram_bot_display_name"] = display_name
+            registry_changed = True
+        if registry_changed:
+            save_fleet_registry(store_root, registry)
+
+    pairing_result = "not requested"
+    pairing_ok = True
+    clean_pairing_code = str(pairing_code or "").strip()
+    if clean_pairing_code:
+        pairing_ok, pairing_result = _approve_telegram_pairing_code(clean_pairing_code)
+
+    restart_ok, restart_detail = _restart_openclaw_gateway()
+    ok = restart_ok and pairing_ok
+    console.print(
+        Panel(
+            "\n".join([
+                "Project Telegram binding updated",
+                f"Project: {resolved_slug}",
+                f"Agent: {agent_id}",
+                f"Validated bot username: @{username}" if username else "Validated bot username: skipped",
+                f"Validated bot display: {display_name}" if display_name else "Validated bot display: skipped",
+                (
+                    "Config bindings: " + ", ".join(binding_changes)
+                    if binding_changes else "Config bindings: no new routing entries needed"
+                ),
+                f"Pairing: {'OK' if pairing_ok else 'FAILED'} ({pairing_result})",
+                f"Gateway reload: {'OK' if restart_ok else 'FAILED'}",
+                restart_detail,
+            ]),
+            title="maestro-fleet project set-telegram",
+            border_style="cyan" if ok else "red",
+        )
+    )
+    return 0 if ok else 1

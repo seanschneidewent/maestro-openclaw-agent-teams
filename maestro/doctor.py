@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .control_plane import ensure_telegram_account_bindings, resolve_network_urls
+from .control_plane import ensure_telegram_account_bindings, resolve_network_urls, sync_fleet_registry
 from .openclaw_profile import (
     DEFAULT_FLEET_OPENCLAW_PROFILE,
     openclaw_config_path,
@@ -463,7 +463,14 @@ def _run_cmd(args: list[str], timeout: int = 25) -> tuple[bool, str]:
     default_profile = _default_openclaw_profile_for_runtime(Path.home().resolve())
     profiled_args = prepend_openclaw_profile_args(args, default_profile=default_profile)
     try:
-        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            profiled_args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -946,6 +953,35 @@ def build_doctor_report(
         ok=store_root.exists(),
         detail=f"{store_root}",
         warning=not store_root.exists(),
+    ))
+
+    registry = sync_fleet_registry(store_root)
+    registry_projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
+    active_registry_projects = [
+        item for item in registry_projects
+        if isinstance(item, dict) and str(item.get("status", "active")).strip().lower() != "archived"
+    ]
+    checks.append(DoctorCheck(
+        name="registry_projects",
+        ok=True,
+        detail=f"{len(active_registry_projects)} active project maestro(s) registered",
+        warning=True,
+    ))
+    slug_counts: dict[str, int] = {}
+    for item in active_registry_projects:
+        slug = str(item.get("project_slug", "")).strip()
+        if not slug:
+            continue
+        slug_counts[slug] = slug_counts.get(slug, 0) + 1
+    duplicate_slugs = sorted(slug for slug, count in slug_counts.items() if count > 1)
+    checks.append(DoctorCheck(
+        name="registry_unique_project_slugs",
+        ok=not duplicate_slugs,
+        detail=(
+            "All active registry project slugs are unique"
+            if not duplicate_slugs
+            else "Duplicate registry project slugs: " + ", ".join(duplicate_slugs)
+        ),
     ))
 
     checks.append(_sync_workspace_tools_md(

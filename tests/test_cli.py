@@ -152,8 +152,28 @@ def test_fleet_deploy_parser():
     assert args.commander_pairing_code == "PAIR-1234"
     assert args.gemini_api_key.startswith("AIza")
     assert args.project_name == "Tower A"
+    assert args.provision_initial_project is False
     assert args.local_license_mode is True
     assert args.non_interactive is True
+
+
+def test_fleet_deploy_parser_accepts_initial_project_opt_in():
+    parser = build_parser()
+    args = parser.parse_args([
+        "fleet",
+        "deploy",
+        "--company-name",
+        "ACME",
+        "--provision-initial-project",
+        "--project-name",
+        "Tower A",
+        "--assignee",
+        "Sean",
+    ])
+    assert args.mode == "fleet"
+    assert args.fleet_command == "deploy"
+    assert args.provision_initial_project is True
+    assert args.project_name == "Tower A"
 
 
 def test_up_parser_accepts_tui_flag():

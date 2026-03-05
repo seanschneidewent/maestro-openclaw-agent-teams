@@ -746,12 +746,20 @@ async def _broadcast_command_center_update():
 # Schedule data helpers moved to `maestro.server_schedule`.
 
 def _ensure_command_center_state():
+    refreshed = False
     if _state_is_stale(
         command_center_state,
         timestamp_key="updated_at",
         max_age_seconds=_STATE_REFRESH_TTL_SECONDS,
     ):
         _refresh_command_center_state()
+        refreshed = True
+    if command_center_state and awareness_state and (refreshed or not _state_is_stale(
+        awareness_state,
+        timestamp_key="generated_at",
+        max_age_seconds=_STATE_REFRESH_TTL_SECONDS,
+    )):
+        _apply_runtime_node_state(command_center_state, awareness_state)
 
 
 def _ensure_awareness_state():
@@ -761,6 +769,8 @@ def _ensure_awareness_state():
         max_age_seconds=_STATE_REFRESH_TTL_SECONDS,
     ):
         _refresh_control_plane_state()
+    elif command_center_state and awareness_state:
+        _apply_runtime_node_state(command_center_state, awareness_state)
 
 
 def _ensure_fleet_registry():

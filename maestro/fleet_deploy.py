@@ -8,6 +8,7 @@ import socket
 import shutil
 import subprocess
 import signal
+import shlex
 import sys
 import time
 import json
@@ -38,6 +39,7 @@ from .openclaw_profile import (
     openclaw_config_path,
     openclaw_workspace_root,
     prepend_openclaw_profile_args,
+    resolve_openclaw_profile,
 )
 from .profile import set_profile
 from .purchase import run_purchase
@@ -257,6 +259,8 @@ def _run_cmd(args: list[str], timeout: int = 12) -> tuple[bool, str]:
             profiled_args,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -271,7 +275,16 @@ def _run_cmd_raw(args: list[str], timeout: int = 12, *, clear_profile_env: bool 
     if clear_profile_env:
         env.pop("MAESTRO_OPENCLAW_PROFILE", None)
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False, env=env)
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -299,6 +312,8 @@ def _run_doctor_for_deploy(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         env=env,
         start_new_session=True,
     )
@@ -350,7 +365,15 @@ def _gateway_service_running(gateway_status: dict[str, Any]) -> bool:
     service = gateway_status.get("service", {}) if isinstance(gateway_status.get("service"), dict) else {}
     runtime = service.get("runtime", {}) if isinstance(service.get("runtime"), dict) else {}
     status_text = str(runtime.get("status", "")).strip().lower()
-    return status_text in {"running", "started", "active"}
+    if status_text in {"running", "started", "active"}:
+        return True
+    rpc = gateway_status.get("rpc", {}) if isinstance(gateway_status.get("rpc"), dict) else {}
+    if bool(rpc.get("ok")):
+        return True
+    port = gateway_status.get("port", {}) if isinstance(gateway_status.get("port"), dict) else {}
+    port_status = str(port.get("status", "")).strip().lower()
+    listeners = port.get("listeners")
+    return port_status in {"busy", "listening", "occupied"} and isinstance(listeners, list) and bool(listeners)
 
 
 def _check_shared_gateway_collision(*, target_gateway_port: int) -> dict[str, Any]:
@@ -656,7 +679,14 @@ def _configure_company_openclaw(
 
 
 def _fleet_state_dir() -> Path:
-    path = (Path.home() / ".maestro" / "fleet").resolve()
+    base = (Path.home() / ".maestro" / "fleet").resolve()
+    profile = resolve_openclaw_profile(default_profile=FLEET_PROFILE)
+    if profile and profile != FLEET_PROFILE:
+        # Keep default profile paths stable while isolating test/alternate profiles.
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", profile).strip("._-") or "profile"
+        path = base / "profiles" / safe
+    else:
+        path = base
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -671,17 +701,168 @@ def _pid_running(pid: int) -> bool:
     return True
 
 
+def _read_process_command(pid: int) -> str:
+    if pid <= 0:
+        return ""
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except Exception:
+        return ""
+    return str(result.stdout or "").strip()
+
+
+def _listener_pids(port: int) -> list[int]:
+    if int(port) <= 0 or shutil.which("lsof") is None:
+        return []
+    try:
+        result = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-t"],
+            capture_output=True,
+            text=True,
+            timeout=4,
+            check=False,
+        )
+    except Exception:
+        return []
+    out: list[int] = []
+    for raw in str(result.stdout or "").splitlines():
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            out.append(int(text))
+        except ValueError:
+            continue
+    return sorted(set(out))
+
+
+def _is_fleet_server_process(
+    pid: int,
+    *,
+    port: int | None = None,
+    store_root: Path | None = None,
+    host: str | None = None,
+) -> bool:
+    command = _read_process_command(pid)
+    if not command:
+        return False
+    lowered = command.lower()
+    if "maestro.cli" not in command or " serve " not in f" {lowered} ":
+        return False
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+
+    def _arg_value(flag: str) -> str:
+        if flag in parts:
+            idx = parts.index(flag)
+            if idx + 1 < len(parts):
+                return str(parts[idx + 1]).strip()
+        prefix = f"{flag}="
+        for item in parts:
+            if item.startswith(prefix):
+                return str(item[len(prefix):]).strip()
+        return ""
+
+    if port is not None:
+        port_text = str(int(port))
+        if _arg_value("--port") != port_text:
+            return False
+    if host:
+        if _arg_value("--host") != str(host):
+            return False
+    if store_root is not None:
+        resolved_store = Path(store_root).resolve()
+        store_arg = _arg_value("--store")
+        if not store_arg:
+            return False
+        try:
+            command_store = Path(store_arg).resolve()
+        except Exception:
+            return False
+        if command_store != resolved_store:
+            return False
+    return True
+
+
+def _terminate_process(pid: int, *, timeout_seconds: float = 8.0) -> bool:
+    if pid <= 0 or not _pid_running(pid):
+        return True
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return not _pid_running(pid)
+    end = time.time() + float(timeout_seconds)
+    while time.time() < end:
+        if not _pid_running(pid):
+            return True
+        time.sleep(0.25)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        return not _pid_running(pid)
+    time.sleep(0.5)
+    return not _pid_running(pid)
+
+
+def _managed_listener_pids(*, port: int, store_root: Path, host: str) -> list[int]:
+    matched: list[int] = []
+    for pid in _listener_pids(port):
+        if _is_fleet_server_process(pid, port=port, store_root=store_root, host=host):
+            matched.append(int(pid))
+    return matched
+
+
+def _save_detached_server_state(
+    *,
+    pid_path: Path,
+    pid: int,
+    port: int,
+    host: str,
+    store_root: Path,
+    command: list[str] | None = None,
+):
+    if command is None:
+        command = []
+    save_json(
+        pid_path,
+        {
+            "pid": int(pid),
+            "started_at": _now_iso(),
+            "port": int(port),
+            "host": str(host),
+            "store_root": str(store_root),
+            "command": command,
+        },
+    )
+
+
 def _port_listening(port: int, host: str = "127.0.0.1") -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.2)
         return sock.connect_ex((host, int(port))) == 0
 
 
-def _resolve_deploy_port(preferred_port: int, max_attempts: int = 20) -> tuple[int, bool]:
+def _resolve_deploy_port(
+    preferred_port: int,
+    max_attempts: int = 20,
+    *,
+    store_root: Path | None = None,
+    host: str = "127.0.0.1",
+) -> tuple[int, bool]:
     requested = int(preferred_port)
     if requested <= 0:
         requested = 3000
     if not _port_listening(requested):
+        return requested, False
+    if store_root is not None and _managed_listener_pids(port=requested, store_root=store_root, host=host):
         return requested, False
     for offset in range(1, int(max_attempts) + 1):
         candidate = requested + offset
@@ -695,22 +876,92 @@ def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[st
     pid_path = state_dir / "serve.pid.json"
     log_path = state_dir / "serve.log"
     requested_port = int(port)
+    resolved_store = Path(store_root).resolve()
+
+    managed_listener_pids = _managed_listener_pids(port=requested_port, store_root=resolved_store, host=host)
+    if managed_listener_pids:
+        primary_pid = int(managed_listener_pids[0])
+        for extra_pid in managed_listener_pids[1:]:
+            _terminate_process(int(extra_pid))
+        _save_detached_server_state(
+            pid_path=pid_path,
+            pid=primary_pid,
+            port=requested_port,
+            host=host,
+            store_root=resolved_store,
+        )
+        return {
+            "ok": True,
+            "already_running": True,
+            "pid": primary_pid,
+            "port": requested_port,
+            "port_mismatch": False,
+            "pid_path": str(pid_path),
+            "log_path": str(log_path),
+            "reconciled_existing_listener": True,
+        }
 
     if pid_path.exists():
         payload = load_json(pid_path, default={})
         running_pid = int(payload.get("pid", 0)) if isinstance(payload, dict) else 0
         if _pid_running(running_pid):
             running_port = int(payload.get("port", 0)) if isinstance(payload, dict) else 0
-            return {
-                "ok": True,
-                "already_running": True,
-                "pid": running_pid,
-                "port": running_port or requested_port,
-                "port_mismatch": bool(running_port and running_port != requested_port),
-                "pid_path": str(pid_path),
-                "log_path": str(log_path),
-            }
+            if _is_fleet_server_process(
+                running_pid,
+                port=running_port or requested_port,
+                store_root=resolved_store,
+                host=str(payload.get("host", "")).strip() or host,
+            ):
+                if running_port and running_port != requested_port:
+                    current_port = int(running_port)
+                    if _managed_listener_pids(port=current_port, store_root=resolved_store, host=host):
+                        _save_detached_server_state(
+                            pid_path=pid_path,
+                            pid=running_pid,
+                            port=current_port,
+                            host=host,
+                            store_root=resolved_store,
+                        )
+                        return {
+                            "ok": True,
+                            "already_running": True,
+                            "pid": running_pid,
+                            "port": current_port,
+                            "port_mismatch": True,
+                            "pid_path": str(pid_path),
+                            "log_path": str(log_path),
+                        }
+                elif _managed_listener_pids(port=requested_port, store_root=resolved_store, host=host):
+                    _save_detached_server_state(
+                        pid_path=pid_path,
+                        pid=running_pid,
+                        port=requested_port,
+                        host=host,
+                        store_root=resolved_store,
+                    )
+                    return {
+                        "ok": True,
+                        "already_running": True,
+                        "pid": running_pid,
+                        "port": requested_port,
+                        "port_mismatch": False,
+                        "pid_path": str(pid_path),
+                        "log_path": str(log_path),
+                    }
+            _terminate_process(running_pid)
         pid_path.unlink(missing_ok=True)
+
+    foreign_listener_pids = _listener_pids(requested_port)
+    if foreign_listener_pids:
+        return {
+            "ok": False,
+            "detail": (
+                f"Port {requested_port} is already in use by non-Fleet listener(s): "
+                + ", ".join(str(pid) for pid in foreign_listener_pids)
+            ),
+            "log_path": str(log_path),
+            "pid_path": str(pid_path),
+        }
 
     cmd = [
         sys.executable,
@@ -735,28 +986,31 @@ def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[st
             close_fds=True,
         )
 
-    time.sleep(1.0)
-    if proc.poll() is not None:
+    deadline = time.time() + 8.0
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break
+        if _managed_listener_pids(port=requested_port, store_root=resolved_store, host=host):
+            break
+        time.sleep(0.25)
+    if proc.poll() is not None or not _managed_listener_pids(port=requested_port, store_root=resolved_store, host=host):
         try:
             lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
             tail = "\n".join(lines[-12:]).strip()
         except Exception:
             tail = ""
-        detail = f"maestro serve exited immediately (code={proc.returncode})"
+        detail = f"maestro serve did not become healthy (code={proc.returncode})"
         if tail:
             detail = f"{detail}\n{tail}"
         return {"ok": False, "detail": detail, "log_path": str(log_path)}
 
-    save_json(
-        pid_path,
-        {
-            "pid": int(proc.pid),
-            "started_at": _now_iso(),
-            "port": int(port),
-            "host": str(host),
-            "store_root": str(store_root),
-            "command": cmd,
-        },
+    _save_detached_server_state(
+        pid_path=pid_path,
+        pid=int(proc.pid),
+        port=int(port),
+        host=str(host),
+        store_root=resolved_store,
+        command=cmd,
     )
     return {
         "ok": True,
@@ -789,20 +1043,19 @@ def _gateway_status_snapshot(timeout: int = 12) -> tuple[bool, dict[str, Any], s
 
 
 def _repair_gateway_device_token_mismatch() -> dict[str, Any]:
+    def _is_token_mismatch(status_payload: dict[str, Any], raw_output: str) -> bool:
+        rpc = status_payload.get("rpc", {}) if isinstance(status_payload.get("rpc"), dict) else {}
+        rpc_error = str(rpc.get("error", "")).strip()
+        lowered = f"{str(raw_output or '').lower()} {rpc_error.lower()}".strip()
+        return "token mismatch" in lowered
+
     gw_ok, gw_status, gw_out = _gateway_status_snapshot(timeout=12)
-    rpc = gw_status.get("rpc", {}) if isinstance(gw_status.get("rpc"), dict) else {}
-    rpc_error = str(rpc.get("error", "")).strip()
-    lowered = f"{str(gw_out or '').lower()} {rpc_error.lower()}".strip()
-    mismatch = "token mismatch" in lowered
+    mismatch = _is_token_mismatch(gw_status, gw_out)
     if not mismatch:
         return {"ok": True, "mismatch_detected": False, "repaired": False, "detail": gw_out if gw_ok else ""}
 
     actions: list[str] = []
-    rotate_ok, rotate_out = _run_cmd(["openclaw", "gateway", "token", "rotate"], timeout=20)
-    actions.append(f"token rotate: {'ok' if rotate_ok else 'failed'}")
-    if rotate_out:
-        actions.append(rotate_out)
-
+    # Use only supported gateway commands for recovery.
     restart_ok, restart_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
     if not restart_ok:
         start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
@@ -813,9 +1066,29 @@ def _repair_gateway_device_token_mismatch() -> dict[str, Any]:
         actions.append(restart_out)
 
     recheck_ok, recheck_status, recheck_out = _gateway_status_snapshot(timeout=12)
-    recheck_rpc = recheck_status.get("rpc", {}) if isinstance(recheck_status.get("rpc"), dict) else {}
-    recheck_error = str(recheck_rpc.get("error", "")).strip().lower()
-    repaired = recheck_ok and "token mismatch" not in f"{str(recheck_out or '').lower()} {recheck_error}".strip()
+    repaired = bool(recheck_ok) and not _is_token_mismatch(recheck_status, recheck_out)
+
+    if not repaired:
+        install_ok, install_out = _run_cmd(
+            ["openclaw", "gateway", "install", "--force", "--port", str(_fleet_gateway_port())],
+            timeout=60,
+        )
+        actions.append(f"gateway install --force: {'ok' if install_ok else 'failed'}")
+        if install_out:
+            actions.append(install_out)
+
+        restart2_ok, restart2_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
+        if not restart2_ok:
+            start2_ok, start2_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+            restart2_ok = start2_ok
+            restart2_out = start2_out
+        actions.append(f"gateway restart (post-install): {'ok' if restart2_ok else 'failed'}")
+        if restart2_out:
+            actions.append(restart2_out)
+
+        recheck2_ok, recheck2_status, recheck2_out = _gateway_status_snapshot(timeout=12)
+        recheck_ok, recheck_out = recheck2_ok, recheck2_out
+        repaired = bool(recheck2_ok) and not _is_token_mismatch(recheck2_status, recheck2_out)
     return {
         "ok": repaired,
         "mismatch_detected": True,
@@ -963,12 +1236,29 @@ def _commissioning_report(
         item for item in projects
         if isinstance(item, dict) and str(item.get("status", "active")).strip().lower() != "archived"
     ]
+    slug_counts: dict[str, int] = {}
+    for item in active_projects:
+        slug = str(item.get("project_slug", "")).strip()
+        if not slug:
+            continue
+        slug_counts[slug] = slug_counts.get(slug, 0) + 1
+    duplicate_slugs = sorted(slug for slug, count in slug_counts.items() if count > 1)
     checks.append({
         "name": "registry_projects",
         "ok": True,
         "level": "warning",
         "detail": f"{len(active_projects)} active project maestro(s) registered",
         "fix": "maestro-fleet project create --project-name \"...\" --assignee \"...\"",
+    })
+    checks.append({
+        "name": "registry_unique_project_slugs",
+        "ok": len(duplicate_slugs) == 0,
+        "level": "critical",
+        "detail": (
+            "All active registry project slugs are unique"
+            if not duplicate_slugs else f"Duplicate registry project slugs: {', '.join(duplicate_slugs)}"
+        ),
+        "fix": "Consolidate duplicate project stores so each project slug maps to one knowledge_store directory",
     })
     if expected_project_slug:
         expected_exists = any(
@@ -1045,6 +1335,7 @@ def run_deploy(
     assignee: str | None = None,
     superintendent: str | None = None,
     project_telegram_token: str | None = None,
+    provision_initial_project: bool = False,
     store_override: str | None = None,
     port: int = 3000,
     host: str = "0.0.0.0",
@@ -1213,9 +1504,13 @@ def run_deploy(
 
     # FLEET_STEP_6_INITIAL_PROJECT
     _step_header(6, total_steps, _deploy_step_title(6), enabled=interactive_setup)
-    create_project = bool(project_name or assignee or project_telegram_token)
-    if not create_project and not non_interactive:
-        create_project = Confirm.ask("Provision an initial project Maestro now? (optional)", default=False)
+    initial_project_args_present = bool(project_name or assignee or project_telegram_token)
+    create_project = bool(provision_initial_project)
+    if initial_project_args_present and not create_project:
+        console.print(
+            "[yellow]Initial project arguments were provided, but deploy defaults to commander-only mode.[/]\n"
+            "[yellow]Re-run with --provision-initial-project to create a project maestro during install.[/]"
+        )
     if create_project:
         chosen_project_name = str(project_name or "").strip()
         chosen_assignee = str(assignee or "").strip()
@@ -1298,7 +1593,7 @@ def run_deploy(
         else:
             console.print(
                 "[yellow]Gateway device-token mismatch detected and auto-repair did not fully resolve.[/]\n"
-                "[yellow]Run: openclaw --profile maestro-fleet gateway token rotate && "
+                f"[yellow]Run: openclaw --profile maestro-fleet gateway install --force --port {_fleet_gateway_port()} && "
                 "openclaw --profile maestro-fleet gateway restart[/]"
             )
 
@@ -1331,7 +1626,11 @@ def run_deploy(
     effective_port = requested_port
     detached = {"ok": True, "already_running": False, "pid": 0, "pid_path": "", "log_path": ""}
     if start_services:
-        resolved_port, shifted_port = _resolve_deploy_port(requested_port)
+        resolved_port, shifted_port = _resolve_deploy_port(
+            requested_port,
+            store_root=store_root,
+            host=str(host),
+        )
         if resolved_port <= 0:
             console.print(f"[red]No available port found near {requested_port} for Fleet web server.[/]")
             return 1

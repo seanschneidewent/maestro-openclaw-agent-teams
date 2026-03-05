@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 
 
@@ -13,6 +14,19 @@ DEFAULT_MAESTRO_GATEWAY_PORT = 19124
 _PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _PROFILE_OFF_VALUES = {"default", "none", "off", "shared"}
 _TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _resolve_openclaw_executable(executable: str) -> str:
+    candidate = str(executable or "").strip()
+    if candidate != "openclaw":
+        return candidate
+    if os.name != "nt":
+        return candidate
+    if shutil.which("openclaw.cmd"):
+        return "openclaw.cmd"
+    if shutil.which("openclaw.exe"):
+        return "openclaw.exe"
+    return candidate
 
 
 def shared_openclaw_allowed() -> bool:
@@ -117,11 +131,12 @@ def prepend_openclaw_profile_args(args: list[str], *, profile: str | None = None
         return list(args)
     if args[0] != "openclaw":
         return list(args)
+    executable = _resolve_openclaw_executable(args[0])
     if "--profile" in args:
-        return list(args)
+        return [executable, *args[1:]]
     resolved = resolve_openclaw_profile() if profile is None else _normalize_profile(profile)
     if not resolved and not shared_openclaw_allowed():
         resolved = DEFAULT_MAESTRO_OPENCLAW_PROFILE
     if not resolved:
-        return list(args)
-    return [args[0], "--profile", resolved, *args[1:]]
+        return [executable, *args[1:]]
+    return [executable, "--profile", resolved, *args[1:]]

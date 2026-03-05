@@ -74,3 +74,17 @@ def test_install_state_profile_is_used(monkeypatch, tmp_path):
     install_path.write_text(json.dumps({"openclaw_profile": "custom-profile"}), encoding="utf-8")
 
     assert openclaw_runtime.resolve_openclaw_profile() == "custom-profile"
+
+
+def test_windows_uses_openclaw_cmd(monkeypatch, tmp_path):
+    _configure_env(monkeypatch, tmp_path)
+    monkeypatch.delenv("MAESTRO_OPENCLAW_PROFILE", raising=False)
+    monkeypatch.delenv("MAESTRO_ALLOW_SHARED_OPENCLAW", raising=False)
+    monkeypatch.setattr(openclaw_runtime, "_resolve_openclaw_executable", lambda _: "openclaw.cmd")
+
+    assert openclaw_runtime.prepend_openclaw_profile_args(["openclaw", "status"]) == [
+        "openclaw.cmd",
+        "--profile",
+        openclaw_runtime.DEFAULT_MAESTRO_OPENCLAW_PROFILE,
+        "status",
+    ]

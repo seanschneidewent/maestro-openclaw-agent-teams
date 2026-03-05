@@ -43,6 +43,7 @@ from .utils import (
     normalize_bbox,
     parse_json,
     save_json,
+    slugify,
 )
 from .index import build_index
 
@@ -300,8 +301,43 @@ def ingest(
         sys.exit(1)
 
     name = project_name or folder.name
-    store = Path(store_path) if store_path else get_store_path()
-    project_dir = store / name
+    desired_slug = slugify(name)
+    store = (Path(store_path) if store_path else get_store_path()).expanduser().resolve()
+
+    def _project_slug_for_dir(project_dir: Path) -> str:
+        meta = load_json(project_dir / "project.json")
+        if not isinstance(meta, dict):
+            meta = {}
+        raw_slug = str(meta.get("slug", "")).strip()
+        raw_name = str(meta.get("name", "")).strip()
+        return slugify(raw_slug or raw_name or project_dir.name)
+
+    def _project_dir_score(project_dir: Path) -> tuple[int, int, int]:
+        meta = load_json(project_dir / "project.json")
+        if not isinstance(meta, dict):
+            meta = {}
+        summary = meta.get("index_summary") if isinstance(meta.get("index_summary"), dict) else {}
+        pointer_count = int(summary.get("pointer_count", 0) or 0)
+        page_count = int(summary.get("page_count", meta.get("total_pages", 0)) or 0)
+        exact_slug_dir = 1 if slugify(project_dir.name) == desired_slug else 0
+        return (pointer_count, page_count, exact_slug_dir)
+
+    def _resolve_project_dir() -> Path:
+        if store_path:
+            if (store / "project.json").exists() or slugify(store.name) == desired_slug:
+                return store
+        if (store / "project.json").exists():
+            return store
+        if store.exists() and store.is_dir():
+            matches: list[Path] = []
+            for child in sorted(store.iterdir(), key=lambda p: p.name.lower()):
+                if child.is_dir() and (child / "project.json").exists() and _project_slug_for_dir(child) == desired_slug:
+                    matches.append(child)
+            if matches:
+                return max(matches, key=_project_dir_score)
+        return store / name
+
+    project_dir = _resolve_project_dir()
     project_dir.mkdir(parents=True, exist_ok=True)
 
     pdfs = discover_pdfs(folder)
@@ -409,6 +445,7 @@ def ingest(
     # Project metadata
     meta = {
         "name": name,
+        "slug": desired_slug,
         "source_path": str(folder),
         "total_pages": total,
         "disciplines": sorted(set(p["discipline"] for p in pdfs)),
