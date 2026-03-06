@@ -217,6 +217,89 @@ function Resolve-PythonHostCommand() {
   return $false
 }
 
+function Remove-StalePythonRegistrations() {
+  $entries = Get-ItemProperty `
+    HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*, `
+    HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*, `
+    HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* `
+    -ErrorAction SilentlyContinue |
+    Where-Object {
+      $name = [string]$_.DisplayName
+      $name -like "Python 3.12*" -or $name -eq "Python Launcher"
+    }
+
+  foreach ($entry in $entries) {
+    $raw = @($entry.QuietUninstallString, $entry.UninstallString) | Where-Object { $_ } | Select-Object -First 1
+    $guid = $null
+    if ([string]$raw -match "\{[A-F0-9-]+\}") {
+      $guid = $matches[0]
+    }
+    try {
+      if ($guid) {
+        Start-Process msiexec.exe -ArgumentList @("/x", $guid, "/qn", "/norestart") -Wait -NoNewWindow
+      } elseif ($raw) {
+        $command = [string]$raw
+        if ($command -notmatch "(?i)/quiet") {
+          $command = "$command /quiet"
+        }
+        if ($command -notmatch "(?i)/uninstall") {
+          $command = "$command /uninstall"
+        }
+        Start-Process cmd.exe -ArgumentList @("/c", $command) -Wait -NoNewWindow
+      }
+    }
+    catch {
+      Write-Warn ("Stale Python uninstall attempt failed for " + [string]$entry.DisplayName)
+    }
+  }
+
+  foreach ($path in @(
+    (Join-Path $HOME "AppData\Local\Programs\Python"),
+    "C:\Python312",
+    "C:\Program Files\Python312"
+  )) {
+    if (Test-Path $path) {
+      try {
+        Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue
+      }
+      catch {
+      }
+    }
+  }
+}
+
+function Invoke-DirectPythonInstall([string]$label) {
+  $version = if ($env:MAESTRO_WINDOWS_PYTHON_VERSION) { [string]$env:MAESTRO_WINDOWS_PYTHON_VERSION } else { "3.12.10" }
+  $url = if ($env:MAESTRO_WINDOWS_PYTHON_URL) {
+    [string]$env:MAESTRO_WINDOWS_PYTHON_URL
+  } else {
+    "https://www.python.org/ftp/python/$version/python-$version-amd64.exe"
+  }
+
+  $tmpInstaller = Join-Path ([System.IO.Path]::GetTempPath()) ("maestro-python-" + $version + ".exe")
+  Write-Log ("Downloading " + $label + " installer from python.org.")
+  Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $tmpInstaller
+  try {
+    $args = @(
+      "/quiet",
+      "InstallAllUsers=0",
+      "PrependPath=1",
+      "Include_launcher=1",
+      "Include_pip=1",
+      "Include_test=0",
+      "SimpleInstall=1"
+    )
+    Write-Log ("Installing " + $label + " via direct installer.")
+    $process = Start-Process -FilePath $tmpInstaller -ArgumentList $args -Wait -NoNewWindow -PassThru
+    if ($process.ExitCode -ne 0) {
+      Fail ("Direct Python installer failed with exit code " + $process.ExitCode)
+    }
+  }
+  finally {
+    Remove-Item $tmpInstaller -Force -ErrorAction SilentlyContinue
+  }
+}
+
 function Ensure-Python() {
   $script:pythonHostCommand = @()
   [void](Resolve-PythonHostCommand)
@@ -225,7 +308,20 @@ function Ensure-Python() {
     if (-not (Prompt-YesNo "Install Python now?" $true)) {
       Fail "Python 3.11+ is required."
     }
-    Invoke-WingetInstall "Python.Python.3.12" "Python 3.12"
+    try {
+      Invoke-DirectPythonInstall "Python 3.12"
+    }
+    catch {
+      Write-Warn "Direct Python installer failed. Trying winget fallback."
+      try {
+        Invoke-WingetInstall "Python.Python.3.12" "Python 3.12"
+      }
+      catch {
+        Write-Warn "winget Python install failed. Attempting stale-registration cleanup and direct reinstall."
+        Remove-StalePythonRegistrations
+        Invoke-DirectPythonInstall "Python 3.12"
+      }
+    }
     Start-Sleep -Seconds 2
     if (-not (Resolve-PythonHostCommand)) {
       Fail "Python 3.12 install did not produce a usable launcher."
