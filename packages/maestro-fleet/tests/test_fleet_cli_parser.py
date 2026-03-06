@@ -41,6 +41,27 @@ def test_forward_project_set_model_args():
     assert "--skip-remote-validation" in forwarded
 
 
+def test_forward_project_set_telegram_args():
+    parser = cli.build_parser()
+    args = parser.parse_args([
+        "project",
+        "set-telegram",
+        "--project",
+        "tower-a",
+        "--telegram-token",
+        "123:abc",
+        "--pairing-code",
+        "PAIR123",
+        "--skip-remote-validation",
+    ])
+    forwarded = cli._to_legacy_argv(args)
+    assert forwarded[:3] == ["fleet", "project", "set-telegram"]
+    assert "--project" in forwarded
+    assert "--telegram-token" in forwarded
+    assert "--pairing-code" in forwarded
+    assert "--skip-remote-validation" in forwarded
+
+
 def test_forward_commander_set_model_args():
     parser = cli.build_parser()
     args = parser.parse_args([
@@ -88,6 +109,7 @@ def test_forward_deploy_args():
         "Sean",
         "--project-telegram-token",
         "123:abc",
+        "--provision-initial-project",
         "--local",
         "--non-interactive",
     ])
@@ -97,6 +119,7 @@ def test_forward_deploy_args():
     assert "--commander-model" in forwarded
     assert "--project-model" in forwarded
     assert "--project-name" in forwarded
+    assert "--provision-initial-project" in forwarded
     assert "--local" in forwarded
 
 

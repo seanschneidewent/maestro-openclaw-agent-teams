@@ -88,16 +88,18 @@ main() {
   local free_script
   local pro_script
   local fleet_script=""
+  local fleet_windows_script=""
   install_script="$(fetch_script "$billing_url/install")"
   free_script="$(fetch_script "$billing_url/free")"
   pro_script="$(fetch_script "$billing_url/pro")"
   if [[ "$check_fleet" == "1" ]]; then
     fleet_script="$(fetch_script "$billing_url/fleet")"
+    fleet_windows_script="$(fetch_script "$billing_url/fleet.ps1")"
   fi
 
   echo "[verify-installers] fetched /install /free /pro from $billing_url"
   if [[ "$check_fleet" == "1" ]]; then
-    echo "[verify-installers] fetched /fleet from $billing_url"
+    echo "[verify-installers] fetched /fleet and /fleet.ps1 from $billing_url"
   fi
 
   for name in install free pro; do
@@ -135,6 +137,11 @@ main() {
     assert_contains "$fleet_script" "export MAESTRO_FLEET_DEPLOY='" "fleet"
     assert_contains "$fleet_script" "install-maestro-fleet.sh" "fleet"
     assert_contains "$fleet_script" "install-maestro-fleet-linux.sh" "fleet"
+    assert_contains "$fleet_windows_script" "\$env:MAESTRO_INSTALL_AUTO = '1'" "fleet.ps1"
+    assert_contains "$fleet_windows_script" "\$env:MAESTRO_FLEET_PACKAGE_SPEC = '" "fleet.ps1"
+    assert_contains "$fleet_windows_script" "\$env:MAESTRO_FLEET_REQUIRE_TAILSCALE = '" "fleet.ps1"
+    assert_contains "$fleet_windows_script" "\$env:MAESTRO_FLEET_DEPLOY = '" "fleet.ps1"
+    assert_contains "$fleet_windows_script" "install-maestro-fleet-windows.ps1" "fleet.ps1"
   fi
 
   if [[ -n "$expect_version" ]]; then
@@ -147,16 +154,18 @@ main() {
       local fleet_tag="fleet-v${expect_version#v}"
       local expected_fleet_marker="/releases/download/$fleet_tag/"
       assert_contains "$fleet_script" "$expected_fleet_marker" "fleet"
+      assert_contains "$fleet_windows_script" "$expected_fleet_marker" "fleet.ps1"
     fi
     echo "[verify-installers] release marker check passed for $tag"
   fi
 
-  local install_sha free_sha pro_sha fleet_sha
+  local install_sha free_sha pro_sha fleet_sha fleet_windows_sha
   install_sha="$(echo "$install_script" | shasum -a 256 | awk '{print $1}')"
   free_sha="$(echo "$free_script" | shasum -a 256 | awk '{print $1}')"
   pro_sha="$(echo "$pro_script" | shasum -a 256 | awk '{print $1}')"
   if [[ "$check_fleet" == "1" ]]; then
     fleet_sha="$(echo "$fleet_script" | shasum -a 256 | awk '{print $1}')"
+    fleet_windows_sha="$(echo "$fleet_windows_script" | shasum -a 256 | awk '{print $1}')"
   fi
 
   echo "[verify-installers] /install sha256: $install_sha"
@@ -164,6 +173,7 @@ main() {
   echo "[verify-installers] /pro     sha256: $pro_sha"
   if [[ "$check_fleet" == "1" ]]; then
     echo "[verify-installers] /fleet   sha256: $fleet_sha"
+    echo "[verify-installers] /fleet.ps1 sha256: $fleet_windows_sha"
   fi
   echo "[verify-installers] PASS"
 }

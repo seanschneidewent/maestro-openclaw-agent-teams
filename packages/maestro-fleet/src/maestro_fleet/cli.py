@@ -104,6 +104,13 @@ def build_parser() -> argparse.ArgumentParser:
     project_set_model.add_argument("--skip-remote-validation", action="store_true")
     project_set_model.add_argument("--allow-openclaw-override", action="store_true")
     project_set_model.add_argument("--store")
+    project_set_telegram = project_sub.add_parser("set-telegram", help="Set Telegram bot for an existing Project Maestro")
+    project_set_telegram.add_argument("--project", required=True, help="Project slug or project name")
+    project_set_telegram.add_argument("--telegram-token", required=True, help="Telegram bot token to bind to the project agent")
+    project_set_telegram.add_argument("--pairing-code")
+    project_set_telegram.add_argument("--store")
+    project_set_telegram.add_argument("--skip-remote-validation", action="store_true")
+    project_set_telegram.add_argument("--allow-openclaw-override", action="store_true")
 
     # Legacy command kept only to return an explicit disable message from runtime.
     purchase = subparsers.add_parser("purchase", help=argparse.SUPPRESS)
@@ -149,6 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
     deploy.add_argument("--assignee")
     deploy.add_argument("--superintendent")
     deploy.add_argument("--project-telegram-token")
+    deploy.add_argument(
+        "--provision-initial-project",
+        action="store_true",
+        help="Explicitly provision an initial project maestro during deploy",
+    )
     deploy.add_argument("--store")
     deploy.add_argument("--port", type=int, default=3000)
     deploy.add_argument("--host", type=str, default="0.0.0.0")
@@ -267,6 +279,7 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
                     "assignee": "--assignee",
                     "superintendent": "--superintendent",
                     "project_telegram_token": "--project-telegram-token",
+                    "provision_initial_project": "--provision-initial-project",
                     "store": "--store",
                     "port": "--port",
                     "host": "--host",
@@ -311,6 +324,18 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
                     "project": "--project",
                     "model": "--model",
                     "api_key": "--api-key",
+                    "skip_remote_validation": "--skip-remote-validation",
+                    "allow_openclaw_override": "--allow-openclaw-override",
+                    "store": "--store",
+                },
+            )
+        if sub == "set-telegram":
+            return ["fleet", "project", "set-telegram"] + _flag_args(
+                args,
+                {
+                    "project": "--project",
+                    "telegram_token": "--telegram-token",
+                    "pairing_code": "--pairing-code",
                     "skip_remote_validation": "--skip-remote-validation",
                     "allow_openclaw_override": "--allow-openclaw-override",
                     "store": "--store",

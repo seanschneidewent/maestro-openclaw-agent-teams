@@ -212,6 +212,26 @@ def test_run_deploy_uses_shifted_port_when_requested_port_busy(monkeypatch, tmp_
             "tailnet_url": "",
         },
     )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_ensure_gateway_running_for_pairing",
+        lambda: {"ok": True, "already_running": True, "detail": "", "actions": []},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_repair_gateway_device_token_mismatch",
+        lambda: {"mismatch_detected": False, "repaired": False},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_complete_commander_pairing",
+        lambda **kwargs: {"approved": False, "skipped": True, "reason": "test"},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_commissioning_report",
+        lambda **kwargs: {"ok": True, "checks": [], "critical_failures": []},
+    )
 
     code = fleet_deploy.run_deploy(
         company_name="TestCo",
@@ -302,6 +322,26 @@ def test_run_deploy_reuses_existing_server_port_from_pid_state(monkeypatch, tmp_
             "localhost_url": f"http://localhost:{web_port}{route_path}",
             "tailnet_url": "",
         },
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_ensure_gateway_running_for_pairing",
+        lambda: {"ok": True, "already_running": True, "detail": "", "actions": []},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_repair_gateway_device_token_mismatch",
+        lambda: {"mismatch_detected": False, "repaired": False},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_complete_commander_pairing",
+        lambda **kwargs: {"approved": False, "skipped": True, "reason": "test"},
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_commissioning_report",
+        lambda **kwargs: {"ok": True, "checks": [], "critical_failures": []},
     )
 
     code = fleet_deploy.run_deploy(
@@ -826,6 +866,149 @@ def test_ensure_gateway_running_for_pairing_when_already_running(monkeypatch):
     assert result["already_running"] is True
 
 
+def test_read_process_command_windows_uses_powershell(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class _Result:
+        stdout = 'C:\\Python313\\python.exe -m maestro.cli serve --port 3401 --store C:\\fleet'
+
+    def _fake_run(args, **kwargs):
+        observed["args"] = list(args)
+        observed["kwargs"] = kwargs
+        return _Result()
+
+    monkeypatch.setattr(fleet_deploy.os, "name", "nt", raising=False)
+    monkeypatch.setattr(fleet_deploy.subprocess, "run", _fake_run)
+
+    command = fleet_deploy._read_process_command(4242)
+    assert command.endswith("--store C:\\fleet")
+    assert observed["args"][:3] == ["powershell", "-NoProfile", "-Command"]
+    assert 'ProcessId=4242' in str(observed["args"][3])
+
+
+def test_listener_pids_windows_uses_powershell(monkeypatch):
+    observed: dict[str, object] = {}
+
+    class _Result:
+        stdout = "1234\n5678\n1234\n"
+
+    def _fake_run(args, **kwargs):
+        observed["args"] = list(args)
+        observed["kwargs"] = kwargs
+        return _Result()
+
+    monkeypatch.setattr(fleet_deploy.os, "name", "nt", raising=False)
+    monkeypatch.setattr(fleet_deploy.subprocess, "run", _fake_run)
+
+    assert fleet_deploy._listener_pids(3401) == [1234, 5678]
+    assert observed["args"][:3] == ["powershell", "-NoProfile", "-Command"]
+    assert "Get-NetTCPConnection" in str(observed["args"][3])
+    assert "-LocalPort 3401" in str(observed["args"][3])
+
+
+def test_listener_pids_windows_falls_back_to_netstat(monkeypatch):
+    calls: list[list[str]] = []
+
+    class _PsResult:
+        stdout = ""
+
+    class _NetstatResult:
+        stdout = (
+            "  TCP    0.0.0.0:3401           0.0.0.0:0              LISTENING       8123\n"
+            "  TCP    [::]:3401              [::]:0                 LISTENING       8124\n"
+        )
+
+    def _fake_run(args, **kwargs):
+        calls.append(list(args))
+        if args[0] == "powershell":
+            return _PsResult()
+        return _NetstatResult()
+
+    monkeypatch.setattr(fleet_deploy.os, "name", "nt", raising=False)
+    monkeypatch.setattr(fleet_deploy.subprocess, "run", _fake_run)
+
+    assert fleet_deploy._listener_pids(3401) == [8123, 8124]
+    assert calls[0][:3] == ["powershell", "-NoProfile", "-Command"]
+    assert calls[1] == ["netstat", "-ano", "-p", "tcp"]
+
+
+def test_start_detached_server_uses_windows_task_runner(monkeypatch, tmp_path: Path):
+    state_dir = tmp_path / "state"
+    store_root = tmp_path / "store"
+    log_path = state_dir / "serve.log"
+    calls: list[str] = []
+    listener_checks = iter([[], [4242]])
+
+    monkeypatch.setattr(fleet_deploy, "_is_windows", lambda: True)
+    monkeypatch.setattr(fleet_deploy, "_fleet_state_dir", lambda: state_dir)
+    monkeypatch.setattr(fleet_deploy, "_listener_pids", lambda port: [])
+    monkeypatch.setattr(fleet_deploy, "_pid_running", lambda pid: False)
+    monkeypatch.setattr(fleet_deploy, "_managed_listener_pids", lambda **kwargs: next(listener_checks))
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_ensure_windows_server_task",
+        lambda **kwargs: calls.append("install") or (True, "task installed"),
+    )
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_start_windows_server_task_runner",
+        lambda **kwargs: calls.append("start") or (True, "task started"),
+    )
+    monkeypatch.setattr(fleet_deploy.time, "sleep", lambda _: None)
+
+    result = fleet_deploy._start_detached_server(port=3300, store_root=store_root, host="127.0.0.1")
+
+    assert result["ok"] is True
+    assert result["pid"] == 4242
+    assert result["task_installed"] is True
+    assert calls == ["install", "start"]
+    assert (state_dir / "run-fleet-server.ps1").exists()
+    assert json.loads((state_dir / "serve.pid.json").read_text(encoding="utf-8"))["pid"] == 4242
+    assert str(store_root) in (state_dir / "run-fleet-server.ps1").read_text(encoding="utf-8")
+    assert str(log_path) in (state_dir / "run-fleet-server.ps1").read_text(encoding="utf-8")
+
+
+def test_start_detached_server_windows_task_failure_returns_detail(monkeypatch, tmp_path: Path):
+    state_dir = tmp_path / "state"
+    store_root = tmp_path / "store"
+
+    monkeypatch.setattr(fleet_deploy, "_is_windows", lambda: True)
+    monkeypatch.setattr(fleet_deploy, "_fleet_state_dir", lambda: state_dir)
+    monkeypatch.setattr(fleet_deploy, "_listener_pids", lambda port: [])
+    monkeypatch.setattr(fleet_deploy, "_pid_running", lambda pid: False)
+    monkeypatch.setattr(fleet_deploy, "_managed_listener_pids", lambda **kwargs: [])
+    monkeypatch.setattr(
+        fleet_deploy,
+        "_ensure_windows_server_task",
+        lambda **kwargs: (False, "Access denied"),
+    )
+
+    result = fleet_deploy._start_detached_server(port=3300, store_root=store_root, host="127.0.0.1")
+
+    assert result["ok"] is False
+    assert "Access denied" in result["detail"]
+
+
+def test_ensure_windows_server_task_uses_schtasks_with_script_path(monkeypatch, tmp_path: Path):
+    calls: list[list[str]] = []
+
+    def _fake_run_cmd(args, timeout=12):
+        calls.append(list(args))
+        return True, "ok"
+
+    monkeypatch.setattr(fleet_deploy, "_run_cmd", _fake_run_cmd)
+
+    ok, _ = fleet_deploy._ensure_windows_server_task(
+        task_name="Maestro Fleet Server (maestro-fleet)",
+        script_path=tmp_path / "run-fleet-server.ps1",
+    )
+
+    assert ok is True
+    assert calls[0][:4] == ["schtasks", "/Create", "/TN", "Maestro Fleet Server (maestro-fleet)"]
+    assert calls[0][4:8] == ["/TR", f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{tmp_path / "run-fleet-server.ps1"}"', "/SC", "ONCE"]
+    assert calls[1] == ["schtasks", "/Query", "/TN", "Maestro Fleet Server (maestro-fleet)", "/FO", "LIST", "/V"]
+
+
 def test_ensure_gateway_running_for_pairing_restarts_when_needed(monkeypatch):
     responses = iter([
         (True, '{"service":{"runtime":{"status":"stopped"}}}'),
@@ -841,6 +1024,91 @@ def test_ensure_gateway_running_for_pairing_restarts_when_needed(monkeypatch):
     assert result["ok"] is True
     assert result["already_running"] is False
     assert result["restart_attempt_ok"] is True
+
+
+def test_repair_gateway_device_token_mismatch_evicts_stale_listener(monkeypatch):
+    snapshots = iter([
+        (
+            True,
+            {
+                "rpc": {"ok": False, "error": "unauthorized: gateway token mismatch"},
+                "port": {"status": "busy", "listeners": [{"pid": 42}]},
+            },
+            "token mismatch",
+        ),
+        (
+            True,
+            {
+                "rpc": {"ok": False, "error": "unauthorized: gateway token mismatch"},
+                "port": {"status": "busy", "listeners": [{"pid": 42}]},
+            },
+            "still mismatched",
+        ),
+        (
+            True,
+            {
+                "rpc": {"ok": False, "error": "unauthorized: gateway token mismatch"},
+                "port": {"status": "busy", "listeners": [{"pid": 42}]},
+            },
+            "still mismatched",
+        ),
+        (
+            True,
+            {
+                "rpc": {"ok": True},
+                "service": {"runtime": {"status": "running"}},
+                "port": {"status": "busy", "listeners": [{"pid": 99}]},
+            },
+            "healthy",
+        ),
+    ])
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(fleet_deploy, "_gateway_status_snapshot", lambda timeout=12: next(snapshots))
+    def _fake_run(args, timeout=12):
+        commands.append(list(args))
+        return True, "ok"
+
+    monkeypatch.setattr(fleet_deploy, "_run_cmd", _fake_run)
+    monkeypatch.setattr(fleet_deploy, "_evict_gateway_listener_pids", lambda status, only_pids=None: [42])
+
+    result = fleet_deploy._repair_gateway_device_token_mismatch()
+    assert result["ok"] is True
+    assert result["repaired"] is True
+    assert ["openclaw", "gateway", "start"] in commands
+    assert any("evicted stale gateway listener pid(s): 42" in item for item in result["actions"])
+
+
+def test_ensure_gateway_running_for_pairing_evicts_stale_listener(monkeypatch):
+    snapshots = iter([
+        (True, {"service": {"runtime": {"status": "stopped"}}, "port": {"status": "free", "listeners": []}} , "stopped"),
+        (True, {"service": {"runtime": {"status": "stopped"}}, "port": {"status": "free", "listeners": []}} , "still stopped"),
+        (
+            True,
+            {
+                "service": {"runtime": {"status": "stopped"}},
+                "rpc": {"ok": False, "error": "unauthorized: gateway token mismatch"},
+                "port": {"status": "busy", "listeners": [{"pid": 42}]},
+            },
+            "still stopped",
+        ),
+        (True, {"service": {"runtime": {"status": "running"}}, "rpc": {"ok": True}, "port": {"status": "busy", "listeners": [{"pid": 99}]}} , "running"),
+    ])
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(fleet_deploy, "_gateway_status_snapshot", lambda timeout=12: next(snapshots))
+    def _fake_run(args, timeout=12):
+        commands.append(list(args))
+        return True, "ok"
+
+    monkeypatch.setattr(fleet_deploy, "_run_cmd", _fake_run)
+    monkeypatch.setattr(fleet_deploy, "_evict_gateway_listener_pids", lambda status, only_pids=None: [42])
+
+    result = fleet_deploy._ensure_gateway_running_for_pairing()
+    assert result["ok"] is True
+    assert result["already_running"] is False
+    assert ["openclaw", "gateway", "start"] in commands
+    assert any("evicted stale gateway listener pid(s): 42" in item for item in result["actions"])
 
 
 def test_run_deploy_blocks_when_shared_gateway_would_collide(monkeypatch, tmp_path: Path):

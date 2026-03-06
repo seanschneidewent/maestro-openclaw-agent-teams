@@ -21,7 +21,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-from .billing_installers import build_fleet_installer_script, build_installer_script
+from .billing_installers import (
+    build_fleet_installer_script,
+    build_fleet_windows_installer_script,
+    build_installer_script,
+)
 from .billing_storage import billing_state_default, load_billing_state, save_billing_state
 from .billing_stripe import (
     create_billing_portal_session,
@@ -1085,6 +1089,13 @@ def install_script(raw_request: Request):
 def install_fleet_script(raw_request: Request):
     script = build_fleet_installer_script(billing_base_url=_request_base_url(raw_request))
     return PlainTextResponse(script, media_type="text/x-shellscript; charset=utf-8")
+
+
+@app.get("/fleet.ps1")
+@app.get("/install/fleet.ps1")
+def install_fleet_windows_script(raw_request: Request):
+    script = build_fleet_windows_installer_script(billing_base_url=_request_base_url(raw_request))
+    return PlainTextResponse(script, media_type="text/plain; charset=utf-8")
 
 
 @app.get("/upgrade")

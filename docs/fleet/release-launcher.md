@@ -17,6 +17,7 @@ This runbook covers how to publish Fleet artifacts and keep the `/fleet` install
   - `scripts/install-maestro-fleet.sh`
   - `scripts/install-maestro-fleet-linux.sh`
   - `scripts/install-maestro-fleet-macos.sh`
+  - `scripts/install-maestro-fleet-windows.ps1`
 
 ## Standard Release Flow
 
@@ -41,7 +42,7 @@ What the script does:
    - `MAESTRO_INSTALLER_SCRIPT_BASE_URL`
    - `MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC`
 5. Waits for Railway deployment success.
-6. Smoke-checks `https://<billing-domain>/fleet`.
+6. Smoke-checks `https://<billing-domain>/fleet` and `https://<billing-domain>/fleet.ps1`.
 
 ## Environment Overrides
 
@@ -62,11 +63,14 @@ bash scripts/verify-prod-installers.sh \
 
 Expected:
 
-- `/install`, `/free`, `/pro`, and `/fleet` checks pass.
+- `/install`, `/free`, `/pro`, `/fleet`, and `/fleet.ps1` checks pass.
 - `/fleet` includes:
   - `MAESTRO_FLEET_PACKAGE_SPEC`
   - `MAESTRO_INSTALL_BASE_URL`
   - `install-maestro-fleet-linux.sh`
+- `/fleet.ps1` includes:
+  - `MAESTRO_FLEET_PACKAGE_SPEC`
+  - `install-maestro-fleet-windows.ps1`
 
 ## Promote Branch URLs to Main URLs
 
@@ -84,10 +88,12 @@ Then re-verify:
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/fleet
+curl -fsSL https://maestro-billing-service-production.up.railway.app/fleet.ps1
 ```
 
 ## Customer Command
 
 ```bash
 curl -fsSL https://maestro-billing-service-production.up.railway.app/fleet | bash
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://maestro-billing-service-production.up.railway.app/fleet.ps1 | iex"
 ```

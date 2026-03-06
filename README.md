@@ -97,6 +97,12 @@ MAESTRO_INSTALL_BASE_URL="<pinned_install_script_url>" \
 curl -fsSL "<pinned_linux_wrapper_script_url>" | bash
 ```
 
+Fleet Windows remote install:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://get.maestro.run/fleet.ps1 | iex"
+```
+
 Use `bash scripts/release-maestro-fleet.sh <version>` to publish Fleet wheels and generate pinned install commands.
 `release-maestro-fleet.sh` also updates Railway billing vars for `/fleet` and smoke-checks the launcher endpoint.
 

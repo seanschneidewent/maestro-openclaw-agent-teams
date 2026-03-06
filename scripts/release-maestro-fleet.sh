@@ -141,6 +141,7 @@ main() {
   local script_base_url="https://raw.githubusercontent.com/$REPO_SLUG/$script_commit/scripts"
   local installer_url_macos="$script_base_url/install-maestro-fleet-macos.sh"
   local installer_url_linux="$script_base_url/install-maestro-fleet-linux.sh"
+  local installer_url_windows="$script_base_url/install-maestro-fleet-windows.ps1"
   local base_install_url="$script_base_url/install-maestro-fleet.sh"
 
   local payload
@@ -148,6 +149,9 @@ main() {
   assert_contains "$payload" "install-maestro-fleet.sh" "macOS installer payload"
   payload="$(curl -fsSL "$installer_url_linux")"
   assert_contains "$payload" "install-maestro-fleet.sh" "linux installer payload"
+  payload="$(curl -fsSL "$installer_url_windows")"
+  assert_contains "$payload" "MAESTRO_FLEET_PACKAGE_SPEC" "windows installer payload"
+  assert_contains "$payload" "maestro-fleet.exe" "windows installer payload"
 
   echo "[fleet-release] Updating Railway installer vars"
   npx @railway/cli variable set \
@@ -169,6 +173,14 @@ main() {
   assert_contains "$fleet_script" "install-maestro-fleet-linux.sh" "/fleet script"
   assert_contains "$fleet_script" "MAESTRO_FLEET_PACKAGE_SPEC='" "/fleet script"
 
+  local fleet_windows_script
+  fleet_windows_script="$(curl -fsSL "$BILLING_URL/fleet.ps1")"
+  assert_contains "$fleet_windows_script" "$engine_wheel_url" "/fleet.ps1 script"
+  assert_contains "$fleet_windows_script" "$root_wheel_url" "/fleet.ps1 script"
+  assert_contains "$fleet_windows_script" "$fleet_wheel_url" "/fleet.ps1 script"
+  assert_contains "$fleet_windows_script" "install-maestro-fleet-windows.ps1" "/fleet.ps1 script"
+  assert_contains "$fleet_windows_script" "MAESTRO_FLEET_PACKAGE_SPEC" "/fleet.ps1 script"
+
   echo "[fleet-release] DONE"
   echo "[fleet-release] Engine wheel: $engine_wheel_url"
   echo "[fleet-release] Root wheel:  $root_wheel_url"
@@ -176,6 +188,7 @@ main() {
   echo
   echo "[fleet-release] Fleet launcher endpoint:"
   echo "curl -fsSL $BILLING_URL/fleet | bash"
+  echo "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm $BILLING_URL/fleet.ps1 | iex\""
   echo
   echo "[fleet-release] Remote install one-liner (Linux over SSH):"
   echo "MAESTRO_FLEET_PACKAGE_SPEC=\"$package_spec\" \\"

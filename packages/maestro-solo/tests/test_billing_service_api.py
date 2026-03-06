@@ -365,6 +365,29 @@ def test_installer_launcher_fleet_renders_script(monkeypatch):
     assert 'bash "$tmp_script" "$@"' in response.text
 
 
+def test_installer_launcher_fleet_windows_renders_script(monkeypatch):
+    monkeypatch.setenv(
+        "MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC",
+        "https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_fleet.whl",
+    )
+
+    client = TestClient(billing_service.app)
+    response = client.get(
+        "/install/fleet.ps1",
+        headers={"x-forwarded-proto": "https", "x-forwarded-host": "get.maestro.run"},
+    )
+    assert response.status_code == 200
+    assert "$env:MAESTRO_FLEET_PACKAGE_SPEC = 'https://downloads.example.com/maestro_engine.whl https://downloads.example.com/maestro_fleet.whl'" in response.text
+    assert "$env:MAESTRO_INSTALL_AUTO = 'auto'" in response.text
+    assert "$env:MAESTRO_FLEET_REQUIRE_TAILSCALE = '1'" in response.text
+    assert "$env:MAESTRO_FLEET_DEPLOY = '1'" in response.text
+    assert "$env:MAESTRO_OPENCLAW_PROFILE = 'maestro-fleet'" in response.text
+    assert "$env:MAESTRO_BILLING_URL = 'https://get.maestro.run'" in response.text
+    assert "install-maestro-fleet-windows.ps1" in response.text
+    assert "Invoke-WebRequest -UseBasicParsing" in response.text
+    assert "& powershell -NoProfile -ExecutionPolicy Bypass -File $tmpScript @args" in response.text
+
+
 def test_checkout_success_and_cancel_pages_render():
     client = TestClient(billing_service.app)
 

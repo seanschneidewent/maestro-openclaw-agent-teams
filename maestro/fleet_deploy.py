@@ -12,6 +12,7 @@ import shlex
 import sys
 import time
 import json
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -376,6 +377,78 @@ def _gateway_service_running(gateway_status: dict[str, Any]) -> bool:
     return port_status in {"busy", "listening", "occupied"} and isinstance(listeners, list) and bool(listeners)
 
 
+def _gateway_cli_ready(gateway_status: dict[str, Any]) -> bool:
+    rpc = gateway_status.get("rpc", {}) if isinstance(gateway_status.get("rpc"), dict) else {}
+    if bool(rpc.get("ok")):
+        return True
+    lowered = str(rpc.get("error", "")).strip().lower()
+    if "token mismatch" in lowered or "unauthorized" in lowered or "pairing required" in lowered:
+        return False
+    return _gateway_service_running(gateway_status)
+
+
+def _gateway_listener_pids(gateway_status: dict[str, Any]) -> list[int]:
+    port = gateway_status.get("port", {}) if isinstance(gateway_status.get("port"), dict) else {}
+    listeners = port.get("listeners")
+    if not isinstance(listeners, list):
+        return []
+    pids: list[int] = []
+    for item in listeners:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pid = int(item.get("pid"))
+        except Exception:
+            continue
+        if pid > 0 and pid not in pids:
+            pids.append(pid)
+    return pids
+
+
+def _terminate_pid(pid: int) -> bool:
+    try:
+        target = int(pid)
+    except Exception:
+        return False
+    if target <= 0:
+        return False
+    if os.name == "nt":
+        result = subprocess.run(
+            ["taskkill", "/PID", str(target), "/F"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        return result.returncode == 0
+    try:
+        os.kill(target, signal.SIGTERM)
+    except Exception:
+        return False
+    deadline = time.time() + 2.0
+    while time.time() < deadline:
+        try:
+            os.kill(target, 0)
+        except OSError:
+            return True
+        time.sleep(0.1)
+    try:
+        os.kill(target, signal.SIGKILL)
+    except Exception:
+        return False
+    return True
+
+
+def _evict_gateway_listener_pids(gateway_status: dict[str, Any], *, only_pids: set[int] | None = None) -> list[int]:
+    removed: list[int] = []
+    for pid in _gateway_listener_pids(gateway_status):
+        if only_pids is not None and pid not in only_pids:
+            continue
+        if _terminate_pid(pid):
+            removed.append(pid)
+    return removed
+
+
 def _check_shared_gateway_collision(*, target_gateway_port: int) -> dict[str, Any]:
     shared_ok, shared_out = _run_cmd_raw(
         ["openclaw", "gateway", "status", "--json"],
@@ -691,6 +764,10 @@ def _fleet_state_dir() -> Path:
     return path
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 def _pid_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -704,6 +781,26 @@ def _pid_running(pid: int) -> bool:
 def _read_process_command(pid: int) -> str:
     if pid <= 0:
         return ""
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    (
+                        f'$p = Get-CimInstance Win32_Process -Filter "ProcessId={int(pid)}"; '
+                        'if ($p) { [Console]::Out.Write($p.CommandLine) }'
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=4,
+                check=False,
+            )
+        except Exception:
+            return ""
+        return str(result.stdout or "").strip()
     try:
         result = subprocess.run(
             ["ps", "-p", str(int(pid)), "-o", "command="],
@@ -718,7 +815,65 @@ def _read_process_command(pid: int) -> str:
 
 
 def _listener_pids(port: int) -> list[int]:
-    if int(port) <= 0 or shutil.which("lsof") is None:
+    if int(port) <= 0:
+        return []
+    if os.name == "nt":
+        try:
+            result = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    (
+                        f"Get-NetTCPConnection -State Listen -LocalPort {int(port)} "
+                        "| Select-Object -ExpandProperty OwningProcess"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=4,
+                check=False,
+            )
+        except Exception:
+            result = None
+        out: list[int] = []
+        text_output = str(result.stdout or "").splitlines() if result is not None else []
+        for raw in text_output:
+            text = raw.strip()
+            if not text:
+                continue
+            try:
+                out.append(int(text))
+            except ValueError:
+                continue
+        if out:
+            return sorted(set(out))
+        try:
+            fallback = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                timeout=4,
+                check=False,
+            )
+        except Exception:
+            return []
+        for raw in str(fallback.stdout or "").splitlines():
+            text = raw.strip()
+            if not text or "LISTENING" not in text.upper():
+                continue
+            parts = text.split()
+            if len(parts) < 5:
+                continue
+            local_addr = parts[1].rsplit(":", 1)
+            if len(local_addr) != 2 or local_addr[1] != str(int(port)):
+                continue
+            try:
+                out.append(int(parts[-1]))
+            except ValueError:
+                continue
+        return sorted(set(out))
+    if shutil.which("lsof") is None:
         return []
     try:
         result = subprocess.run(
@@ -975,6 +1130,15 @@ def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[st
         "--host",
         str(host),
     ]
+    if _is_windows():
+        return _start_windows_task_server(
+            port=requested_port,
+            store_root=resolved_store,
+            host=str(host),
+            pid_path=pid_path,
+            log_path=log_path,
+            command=cmd,
+        )
     with log_path.open("a", encoding="utf-8") as log_file:
         log_file.write(f"\n[{_now_iso()}] starting detached server: {' '.join(cmd)}\n")
         proc = subprocess.Popen(
@@ -1023,6 +1187,157 @@ def _start_detached_server(*, port: int, store_root: Path, host: str) -> dict[st
     }
 
 
+def _fleet_server_task_name() -> str:
+    profile = resolve_openclaw_profile(default_profile=FLEET_PROFILE)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", str(profile or FLEET_PROFILE)).strip("-.") or FLEET_PROFILE
+    return f"Maestro Fleet Server ({safe})"
+
+
+def _ps_single_quote(value: str) -> str:
+    return str(value or "").replace("'", "''")
+
+
+def _run_windows_powershell(script: str, *, timeout: int = 45) -> tuple[bool, str]:
+    encoded = base64.b64encode(str(script or "").encode("utf-16le")).decode("ascii")
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    stdout = str(result.stdout or "").strip()
+    stderr = str(result.stderr or "").strip()
+    output = "\n".join(part for part in [stdout, stderr] if part).strip()
+    return result.returncode == 0, output
+
+
+def _write_windows_server_task_script(*, script_path: Path, log_path: Path, port: int, store_root: Path, host: str):
+    python_exe = Path(sys.executable).resolve()
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "$ErrorActionPreference = 'Stop'",
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+        f"$env:MAESTRO_OPENCLAW_PROFILE = '{_ps_single_quote(FLEET_PROFILE)}'",
+        "$env:PYTHONUTF8 = '1'",
+        "$env:PYTHONIOENCODING = 'utf-8'",
+        f"$logPath = '{_ps_single_quote(str(log_path))}'",
+        f"$storeRoot = '{_ps_single_quote(str(store_root))}'",
+        f"$hostName = '{_ps_single_quote(str(host))}'",
+        f"$pythonExe = '{_ps_single_quote(str(python_exe))}'",
+        (
+            "Add-Content -Path $logPath -Value "
+            f"\"`n[{_now_iso()}] starting scheduled Fleet server on port {int(port)}\""
+        ),
+        (
+            "& $pythonExe '-m' 'maestro.cli' 'serve' '--port' "
+            f"'{int(port)}' '--store' $storeRoot '--host' $hostName *>> $logPath"
+        ),
+    ]
+    script_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _ensure_windows_server_task(*, task_name: str, script_path: Path) -> tuple[bool, str]:
+    action = f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{script_path}"'
+    create_ok, create_out = _run_cmd(
+        ["schtasks", "/Create", "/TN", task_name, "/TR", action, "/SC", "ONCE", "/ST", "00:00", "/F"],
+        timeout=45,
+    )
+    query_ok, query_out = _run_cmd(["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"], timeout=30)
+    detail = "\n".join(part for part in [create_out, query_out] if part).strip()
+    return create_ok and query_ok, detail
+
+
+def _start_windows_server_task_runner(*, task_name: str) -> tuple[bool, str]:
+    start_ok, start_out = _run_cmd(["schtasks", "/Run", "/TN", task_name], timeout=30)
+    query_ok, query_out = _run_cmd(["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"], timeout=30)
+    detail = "\n".join(part for part in [start_out, query_out] if part).strip()
+    return start_ok and query_ok, detail
+
+
+def _start_windows_task_server(
+    *,
+    port: int,
+    store_root: Path,
+    host: str,
+    pid_path: Path,
+    log_path: Path,
+    command: list[str] | None = None,
+) -> dict[str, Any]:
+    task_name = _fleet_server_task_name()
+    state_dir = _fleet_state_dir()
+    script_path = state_dir / "run-fleet-server.ps1"
+    _write_windows_server_task_script(
+        script_path=script_path,
+        log_path=log_path,
+        port=int(port),
+        store_root=store_root,
+        host=host,
+    )
+    install_ok, install_out = _ensure_windows_server_task(task_name=task_name, script_path=script_path)
+    if not install_ok:
+        return {
+            "ok": False,
+            "detail": f"Failed to register Fleet server task: {install_out}",
+            "log_path": str(log_path),
+            "pid_path": str(pid_path),
+            "task_name": task_name,
+        }
+    start_ok, start_out = _start_windows_server_task_runner(task_name=task_name)
+    deadline = time.time() + 12.0
+    listeners: list[int] = []
+    while time.time() < deadline:
+        listeners = _managed_listener_pids(port=int(port), store_root=store_root, host=host)
+        if listeners:
+            break
+        time.sleep(0.25)
+    if not listeners:
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            tail = "\n".join(lines[-12:]).strip()
+        except Exception:
+            tail = ""
+        detail = f"Fleet server task did not become healthy: {start_out or install_out}".strip()
+        if tail:
+            detail = f"{detail}\n{tail}"
+        return {
+            "ok": False,
+            "detail": detail,
+            "log_path": str(log_path),
+            "pid_path": str(pid_path),
+            "task_name": task_name,
+        }
+    primary_pid = int(listeners[0])
+    for extra_pid in listeners[1:]:
+        _terminate_process(int(extra_pid))
+    _save_detached_server_state(
+        pid_path=pid_path,
+        pid=primary_pid,
+        port=int(port),
+        host=host,
+        store_root=store_root,
+        command=command or [],
+    )
+    return {
+        "ok": True,
+        "already_running": False,
+        "pid": primary_pid,
+        "port": int(port),
+        "port_mismatch": False,
+        "pid_path": str(pid_path),
+        "log_path": str(log_path),
+        "task_name": task_name,
+        "task_installed": True,
+        "task_start_detail": start_out,
+        "start_ok": start_ok,
+    }
+
+
 def _verify_command_center_http(port: int, timeout_seconds: int = 60) -> bool:
     end = time.time() + float(timeout_seconds)
     while time.time() < end:
@@ -1055,6 +1370,7 @@ def _repair_gateway_device_token_mismatch() -> dict[str, Any]:
         return {"ok": True, "mismatch_detected": False, "repaired": False, "detail": gw_out if gw_ok else ""}
 
     actions: list[str] = []
+    stale_pids = set(_gateway_listener_pids(gw_status))
     # Use only supported gateway commands for recovery.
     restart_ok, restart_out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
     if not restart_ok:
@@ -1089,6 +1405,17 @@ def _repair_gateway_device_token_mismatch() -> dict[str, Any]:
         recheck2_ok, recheck2_status, recheck2_out = _gateway_status_snapshot(timeout=12)
         recheck_ok, recheck_out = recheck2_ok, recheck2_out
         repaired = bool(recheck2_ok) and not _is_token_mismatch(recheck2_status, recheck2_out)
+        if not repaired:
+            removed = _evict_gateway_listener_pids(recheck2_status, only_pids=stale_pids or None)
+            if removed:
+                actions.append(f"evicted stale gateway listener pid(s): {', '.join(str(pid) for pid in removed)}")
+                start3_ok, start3_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+                actions.append(f"gateway start (post-evict): {'ok' if start3_ok else 'failed'}")
+                if start3_out:
+                    actions.append(start3_out)
+                recheck3_ok, recheck3_status, recheck3_out = _gateway_status_snapshot(timeout=12)
+                recheck_ok, recheck_out = recheck3_ok, recheck3_out
+                repaired = bool(recheck3_ok) and not _is_token_mismatch(recheck3_status, recheck3_out)
     return {
         "ok": repaired,
         "mismatch_detected": True,
@@ -1107,7 +1434,7 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
     actions: list[str] = []
 
     gw_ok, gw_status, gw_out = _gateway_status_snapshot(timeout=12)
-    if _gateway_service_running(gw_status):
+    if _gateway_cli_ready(gw_status):
         return {
             "ok": True,
             "already_running": True,
@@ -1130,7 +1457,7 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
             actions.append(start_out)
 
     recheck_gw_ok, recheck_gw_status, recheck_gw_out = _gateway_status_snapshot(timeout=12)
-    running = _gateway_service_running(recheck_gw_status)
+    running = _gateway_cli_ready(recheck_gw_status)
     if not running:
         install_ok, install_out = _run_cmd(
             ["openclaw", "gateway", "install", "--force", "--port", str(_fleet_gateway_port())],
@@ -1144,8 +1471,19 @@ def _ensure_gateway_running_for_pairing() -> dict[str, Any]:
         if start2_out:
             actions.append(start2_out)
         recheck2_gw_ok, recheck2_gw_status, recheck2_gw_out = _gateway_status_snapshot(timeout=12)
-        running = _gateway_service_running(recheck2_gw_status)
+        running = _gateway_cli_ready(recheck2_gw_status)
         recheck_gw_ok, recheck_gw_out = recheck2_gw_ok, recheck2_gw_out
+        if not running:
+            removed = _evict_gateway_listener_pids(recheck2_gw_status)
+            if removed:
+                actions.append(f"evicted stale gateway listener pid(s): {', '.join(str(pid) for pid in removed)}")
+                start3_ok, start3_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
+                actions.append(f"gateway start (post-evict): {'ok' if start3_ok else 'failed'}")
+                if start3_out:
+                    actions.append(start3_out)
+                recheck3_gw_ok, recheck3_gw_status, recheck3_gw_out = _gateway_status_snapshot(timeout=12)
+                running = _gateway_cli_ready(recheck3_gw_status)
+                recheck_gw_ok, recheck_gw_out = recheck3_gw_ok, recheck3_gw_out
     return {
         "ok": running,
         "already_running": False,

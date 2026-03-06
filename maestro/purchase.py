@@ -23,6 +23,7 @@ from .control_plane import (
     resolve_network_urls,
     sync_fleet_registry,
 )
+from .fleet_constants import FLEET_PROFILE
 from .install_state import resolve_fleet_store_root
 from .license import (
     LicenseError,
@@ -35,6 +36,7 @@ from .openclaw_profile import (
     openclaw_config_path,
     openclaw_workspace_root,
     prepend_openclaw_profile_args,
+    resolve_openclaw_profile,
 )
 from .utils import load_json, save_json, slugify
 from .workspace_templates import provider_env_key_for_model, render_workspace_env
@@ -77,6 +79,27 @@ def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any],
     if not isinstance(config, dict):
         config = {}
     return config, config_path
+
+
+def _fleet_state_dir() -> Path:
+    base = (Path.home() / ".maestro" / "fleet").resolve()
+    profile = resolve_openclaw_profile(default_profile=FLEET_PROFILE)
+    if profile and profile != FLEET_PROFILE:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", profile).strip("._-") or "profile"
+        return base / "profiles" / safe
+    return base
+
+
+def _current_command_center_url(default_port: int = 3000) -> str:
+    pid_path = _fleet_state_dir() / "serve.pid.json"
+    payload = load_json(pid_path, default={})
+    if not isinstance(payload, dict):
+        payload = {}
+    port = int(payload.get("port", 0) or 0)
+    if port <= 0:
+        port = int(default_port)
+    network = resolve_network_urls(web_port=port)
+    return str(network.get("recommended_url", f"http://localhost:{port}/command-center"))
 
 
 def _resolve_company_agent(config: dict[str, Any]) -> dict[str, Any]:
@@ -694,8 +717,6 @@ def run_purchase(
     )
 
     control = project_control_payload(store_root, project_slug=project_slug)
-    network = resolve_network_urls(web_port=3000)
-
     output = {
         "ok": True,
         "dry_run": dry_run,
@@ -716,7 +737,7 @@ def run_purchase(
         "gateway_restart": gateway_restart,
         "telegram_pairing": pairing_result,
         "ingest_command": control.get("ingest", {}).get("command") if isinstance(control.get("ingest"), dict) else "",
-        "command_center_url": network["recommended_url"],
+        "command_center_url": _current_command_center_url(),
         "project_create_command": "maestro-fleet project create",
     }
 
