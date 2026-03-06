@@ -59,11 +59,24 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 4. `maestro/fleet_deploy.py` (`_run_doctor_for_deploy`, detached server bring-up, commissioning report)
 5. `packages/maestro-fleet/src/maestro_fleet/monitor.py`
 
+## Command Center
+
+1. `maestro/server.py`
+   - FastAPI routes and compatibility wrappers
+2. `maestro/fleet/command_center/state.py`
+   - command-center refresh logic, awareness application, node index maintenance
+3. `maestro/fleet/command_center/routing.py`
+   - node/project detail resolution, conversation routing, send orchestration
+4. `maestro/server_command_center_state.py`
+   - lower-level node identity and conversation helpers reused by server wrappers
+5. `maestro/server_command_center.py`
+   - command-center router factory
+
 ## Current Hotspots
 
 - `maestro/fleet_deploy.py` — deploy + gateway + server + Windows tasking
 - `maestro/control_plane_core.py` — registry + awareness + project lifecycle
-- `maestro/server.py` — command-center state + node routing + HTTP handlers
+- `maestro/server.py` — still owns HTTP surface and workspace routes, but no longer carries most command-center internals
 - `maestro/cli.py` — parser + Fleet command dispatch
 
 ## Recently Extracted
@@ -74,6 +87,8 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 - `maestro/fleet/platform/windows.py` — Windows Scheduled Task Fleet server supervision
 - `maestro/fleet/doctor/checks.py` — doctor read-side checks
 - `maestro/fleet/doctor/repairs.py` — doctor mutation-side repairs
+- `maestro/fleet/command_center/state.py` — command-center state assembly and node indexing
+- `maestro/fleet/command_center/routing.py` — command-center node/project routing
 
 ## Tests To Run For Fleet Changes
 

@@ -19,7 +19,7 @@ Refactor the Fleet codebase so that:
 | File | Lines | Why it should be split first |
 | --- | ---: | --- |
 | `maestro/fleet_deploy.py` | 1619 | still mixes deploy flow, gateway lifecycle, server supervision, Windows tasking, commissioning |
-| `maestro/server.py` | 1841 | mixes API endpoints with command-center state assembly and node routing |
+| `maestro/server.py` | 1586 | still mixes API endpoints with workspace routes and some command-center wrappers |
 | `maestro/control_plane_core.py` | 1489 | mixes registry, awareness, Telegram health, project lifecycle, ingest command generation |
 | `maestro/cli.py` | 1040 | parser definitions and Fleet command dispatch live together |
 | `maestro/doctor.py` | 541 | now mostly orchestration, but still worth reducing further into a report-only adapter |
@@ -251,6 +251,13 @@ Move from `maestro/server.py`:
 Result:
 
 - `server.py` becomes a thin HTTP adapter
+
+Status:
+
+- done for `maestro/fleet/command_center/state.py`
+- done for `maestro/fleet/command_center/routing.py`
+- `server.py` now keeps the HTTP surface and compatibility wrappers
+- `actions.py` is deferred because command-center actions already live cleanly in `server_actions.py`
 
 ### Phase 5: Reduce CLI to Thin Adapters
 
