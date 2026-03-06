@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from maestro.fleet.runtime.gateway import gateway_service_running
+
 
 @dataclass
 class DoctorCheck:
@@ -387,12 +389,8 @@ def gateway_running(
                 payload = json.loads(raw[idx:])
             except Exception:
                 payload = {}
-            if isinstance(payload, dict):
-                service = payload.get("service", {}) if isinstance(payload.get("service"), dict) else {}
-                runtime = service.get("runtime", {}) if isinstance(payload.get("runtime"), dict) else {}
-                status = str(runtime.get("status", "")).strip().lower()
-                if status in {"running", "started", "active"}:
-                    return True
+            if isinstance(payload, dict) and gateway_service_running(payload):
+                return True
     status_ok, status_out = run_cmd(["openclaw", "status"], 10)
     if not status_ok:
         return False

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import maestro.doctor as doctor
+from maestro.fleet.doctor import checks as doctor_checks
 from maestro.doctor import run_doctor
 from maestro.install_state import save_install_state
 
@@ -449,3 +450,33 @@ def test_doctor_prefers_fleet_profiled_openclaw_config(tmp_path: Path, monkeypat
     config_check = next((c for c in checks if isinstance(c, dict) and c.get("name") == "openclaw_config"), {})
     assert config_check.get("ok") is True
     assert ".openclaw-maestro-fleet/openclaw.json" in str(config_check.get("detail", ""))
+
+
+def test_gateway_running_accepts_rpc_healthy_task_state():
+    def _fake_run_cmd(args: list[str], timeout: int = 25):
+        if args[:4] == ["openclaw", "gateway", "status", "--json"]:
+            return True, json.dumps(
+                {
+                    "service": {"runtime": {"status": "stopped", "state": "Ready"}},
+                    "rpc": {"ok": True, "url": "ws://127.0.0.1:18789"},
+                    "port": {"status": "busy", "listeners": [{"pid": 1234}]},
+                }
+            )
+        raise AssertionError(f"unexpected command: {args}")
+
+    assert doctor_checks.gateway_running(run_cmd=_fake_run_cmd) is True
+
+
+def test_gateway_running_accepts_busy_listener_when_rpc_probe_is_unavailable():
+    def _fake_run_cmd(args: list[str], timeout: int = 25):
+        if args[:4] == ["openclaw", "gateway", "status", "--json"]:
+            return True, json.dumps(
+                {
+                    "service": {"runtime": {"status": "stopped", "state": "Ready"}},
+                    "rpc": {"ok": False, "error": "probe skipped"},
+                    "port": {"status": "busy", "listeners": [{"pid": 1234}]},
+                }
+            )
+        raise AssertionError(f"unexpected command: {args}")
+
+    assert doctor_checks.gateway_running(run_cmd=_fake_run_cmd) is True
