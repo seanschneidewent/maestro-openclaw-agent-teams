@@ -33,10 +33,10 @@ if [[ "${STRIPE_LIVE_MODE:-0}" == "1" ]]; then
   MODE_LABEL="live"
 fi
 
-SETUP_NAME="${SETUP_NAME:-Maestro Solo Deployment}"
+SETUP_NAME="${SETUP_NAME:-Maestro Fleet Deployment}"
 SETUP_DESCRIPTION="${SETUP_DESCRIPTION:-One-time deployment and remote setup session.}"
 SETUP_PRICE_CENTS="${SETUP_PRICE_CENTS:-150000}"
-MONTHLY_NAME="${MONTHLY_NAME:-Maestro Solo Monthly Coverage}"
+MONTHLY_NAME="${MONTHLY_NAME:-Maestro Fleet Monthly Coverage}"
 MONTHLY_DESCRIPTION="${MONTHLY_DESCRIPTION:-Recurring support, monitoring, and operating coverage.}"
 MONTHLY_PRICE_CENTS="${MONTHLY_PRICE_CENTS:-40000}"
 SITE_URL="${SITE_URL:-http://localhost:5173}"

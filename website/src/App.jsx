@@ -384,6 +384,23 @@ export default function App() {
   const emailPipelineReady = Boolean(kitFormUid && kitFormScriptUrl);
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
 
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+
+    const titles = {
+      '/': 'Maestro Fleet | Construction Intelligence Operating System',
+      '/privacy': 'Maestro Fleet | Privacy Policy',
+      '/terms': 'Maestro Fleet | Terms of Service',
+      '/refund': 'Maestro Fleet | Refund Policy',
+      '/checkout/success': 'Maestro Fleet | Checkout Complete',
+      '/checkout/cancel': 'Maestro Fleet | Checkout Canceled',
+    };
+
+    document.title = titles[pathname] || titles['/'];
+  }, [pathname]);
+
   const standalonePage = renderStandalonePage(pathname, primaryContactHref);
   if (standalonePage) {
     return standalonePage;
