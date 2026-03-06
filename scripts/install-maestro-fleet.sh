@@ -53,6 +53,25 @@ is_linux() {
   [[ "$(uname -s)" == "Linux" ]]
 }
 
+resolve_desktop_dir() {
+  local override="${MAESTRO_DESKTOP_DIR:-}"
+  if [[ -n "$override" ]]; then
+    printf '%s' "$override"
+    return 0
+  fi
+
+  if is_linux && command -v xdg-user-dir >/dev/null 2>&1; then
+    local xdg_desktop=""
+    xdg_desktop="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+    if [[ -n "$xdg_desktop" ]]; then
+      printf '%s' "$xdg_desktop"
+      return 0
+    fi
+  fi
+
+  printf '%s' "$HOME/Desktop"
+}
+
 refresh_path_for_brew() {
   if [[ -x "/opt/homebrew/bin/brew" ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -550,6 +569,30 @@ validate_install() {
   log "maestro-fleet CLI installed."
 }
 
+install_customer_help_folder() {
+  local desktop_dir=""
+  local help_dir=""
+
+  desktop_dir="$(resolve_desktop_dir)"
+  if [[ -z "$desktop_dir" ]]; then
+    warn "Could not resolve desktop directory; skipping customer help folder install."
+    return 0
+  fi
+
+  if ! mkdir -p "$desktop_dir"; then
+    warn "Could not create desktop directory at $desktop_dir; skipping customer help folder install."
+    return 0
+  fi
+
+  help_dir="$desktop_dir/Maestro Fleet Help"
+  if ! "$PYTHON_BIN" -m maestro.help_pack install-fleet --target-dir "$help_dir" >/dev/null; then
+    warn "Failed to install customer help folder at $help_dir"
+    return 0
+  fi
+
+  log "Installed customer help folder: $help_dir"
+}
+
 run_deploy_if_enabled() {
   if [[ "$AUTO_DEPLOY" != "1" ]]; then
     log "Install complete. Run manually: $VENV_DIR/bin/maestro-fleet deploy"
@@ -573,6 +616,7 @@ run_deploy_if_enabled() {
   if ! "${cmd[@]}"; then
     return 1
   fi
+  install_customer_help_folder
   if [[ "$AUTO_TUI" == "1" && "$arg_count" -eq 0 ]]; then
     log "Starting Fleet runtime TUI."
     exec "$VENV_DIR/bin/maestro-fleet" up --tui
