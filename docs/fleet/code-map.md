@@ -51,16 +51,29 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 ## Runtime + Health
 
 1. `maestro/doctor.py`
-2. `maestro/fleet_deploy.py` (`_run_doctor_for_deploy`, detached server bring-up, commissioning report)
-3. `packages/maestro-fleet/src/maestro_fleet/monitor.py`
+   - thin doctor orchestrator and compatibility wrappers
+2. `maestro/fleet/doctor/checks.py`
+   - workspace drift checks, launchagent sync, gateway status check, session hygiene
+3. `maestro/fleet/doctor/repairs.py`
+   - gateway token repair, Telegram repair, device pairing repair, gateway restart
+4. `maestro/fleet_deploy.py` (`_run_doctor_for_deploy`, detached server bring-up, commissioning report)
+5. `packages/maestro-fleet/src/maestro_fleet/monitor.py`
 
 ## Current Hotspots
 
 - `maestro/fleet_deploy.py` — deploy + gateway + server + Windows tasking
-- `maestro/doctor.py` — checks + repairs + gateway restart
 - `maestro/control_plane_core.py` — registry + awareness + project lifecycle
 - `maestro/server.py` — command-center state + node routing + HTTP handlers
 - `maestro/cli.py` — parser + Fleet command dispatch
+
+## Recently Extracted
+
+- `maestro/fleet/shared/subprocesses.py` — shared profiled subprocess execution
+- `maestro/fleet/runtime/gateway.py` — gateway readiness, status, device-token repair
+- `maestro/fleet/runtime/server.py` — server listener ownership and detached runtime state
+- `maestro/fleet/platform/windows.py` — Windows Scheduled Task Fleet server supervision
+- `maestro/fleet/doctor/checks.py` — doctor read-side checks
+- `maestro/fleet/doctor/repairs.py` — doctor mutation-side repairs
 
 ## Tests To Run For Fleet Changes
 

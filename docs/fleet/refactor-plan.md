@@ -18,11 +18,11 @@ Refactor the Fleet codebase so that:
 
 | File | Lines | Why it should be split first |
 | --- | ---: | --- |
-| `maestro/fleet_deploy.py` | 2104 | mixes deploy flow, gateway lifecycle, server supervision, Windows tasking, commissioning |
-| `maestro/doctor.py` | 1120 | mixes check logic with repair logic and platform restart flows |
+| `maestro/fleet_deploy.py` | 1619 | still mixes deploy flow, gateway lifecycle, server supervision, Windows tasking, commissioning |
 | `maestro/server.py` | 1841 | mixes API endpoints with command-center state assembly and node routing |
-| `maestro/control_plane_core.py` | 1506 | mixes registry, awareness, Telegram health, project lifecycle, ingest command generation |
+| `maestro/control_plane_core.py` | 1489 | mixes registry, awareness, Telegram health, project lifecycle, ingest command generation |
 | `maestro/cli.py` | 1040 | parser definitions and Fleet command dispatch live together |
+| `maestro/doctor.py` | 541 | now mostly orchestration, but still worth reducing further into a report-only adapter |
 
 ## Phase Order
 
@@ -104,6 +104,13 @@ Result:
 - `run_deploy()` becomes orchestration only
 - gateway/server logic becomes reusable by doctor/runtime code
 
+Status:
+
+- done for shared subprocess helpers
+- done for gateway runtime helpers
+- done for server supervision helpers
+- done for Windows platform helpers
+
 ### Phase 2: Extract Doctor Checks and Repairs
 
 Goal:
@@ -145,6 +152,13 @@ Result:
 
 - the word `repair` means mutation
 - the word `inspect` or `check` means read-only validation
+
+Status:
+
+- done for `checks.py`
+- done for `repairs.py`
+- `doctor.py` remains the orchestrator/report surface for compatibility
+- `report.py` is intentionally deferred because the wrapper module is now small and stable
 
 ### Phase 3: Extract Project and Registry Lifecycle
 

@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-import platform
-import plistlib
-import secrets
-import shutil
 import subprocess
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls, sync_fleet_registry
+from .fleet.doctor import checks as doctor_checks
+from .fleet.doctor import repairs as doctor_repairs
+from .fleet.doctor.checks import DoctorCheck
 from .fleet.shared import subprocesses as fleet_subprocesses
 from .openclaw_profile import (
     DEFAULT_FLEET_OPENCLAW_PROFILE,
@@ -38,16 +37,6 @@ from .workspace_templates import (
 PROVIDER_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY")
 _ENV_TRUE = {"1", "true", "yes", "on"}
 DEFAULT_FLEET_GATEWAY_PORT = 18789
-
-
-@dataclass
-class DoctorCheck:
-    name: str
-    ok: bool
-    detail: str
-    fixed: bool = False
-    warning: bool = False
-
 
 def _is_placeholder(value: str | None) -> bool:
     if not value:
@@ -131,54 +120,14 @@ def _sync_launchagent_env(
     profile: str,
     fix: bool,
 ) -> DoctorCheck:
-    plist_path = _launchagent_path(home_dir, profile=profile)
-    if platform.system().lower() != "darwin":
-        return DoctorCheck(
-            name="launchagent_env_sync",
-            ok=True,
-            detail="Not macOS; launchagent sync skipped",
-            warning=True,
-        )
-    if not plist_path.exists():
-        return DoctorCheck(
-            name="launchagent_env_sync",
-            ok=False,
-            detail=f"LaunchAgent plist missing: {plist_path}",
-            warning=True,
-        )
-
-    payload = plistlib.loads(plist_path.read_bytes())
-    env = payload.get("EnvironmentVariables")
-    if not isinstance(env, dict):
-        env = {}
-        payload["EnvironmentVariables"] = env
-
-    changed = False
-    for key in PROVIDER_ENV_KEYS:
-        raw = config_env.get(key)
-        value = str(raw).strip() if isinstance(raw, str) else ""
-        if value and not _is_placeholder(value):
-            if env.get(key) != value:
-                env[key] = value
-                changed = True
-        else:
-            if key in env:
-                env.pop(key, None)
-                changed = True
-
-    if changed and fix:
-        plist_path.write_bytes(plistlib.dumps(payload))
-        return DoctorCheck(
-            name="launchagent_env_sync",
-            ok=True,
-            detail="LaunchAgent provider env synced from openclaw.json",
-            fixed=True,
-        )
-
-    return DoctorCheck(
-        name="launchagent_env_sync",
-        ok=True,
-        detail="LaunchAgent provider env already aligned",
+    return doctor_checks.sync_launchagent_env(
+        home_dir,
+        config_env,
+        profile,
+        fix,
+        launchagent_path=lambda path: _launchagent_path(path, profile=profile),
+        provider_env_keys=PROVIDER_ENV_KEYS,
+        is_placeholder=_is_placeholder,
     )
 
 
@@ -189,53 +138,15 @@ def _sync_workspace_tools_md(
     profile: str,
     fix: bool,
 ) -> DoctorCheck:
-    if not workspace_root:
-        return DoctorCheck(
-            name="workspace_tools_md",
-            ok=False,
-            detail="Company workspace not configured",
-            warning=True,
-        )
-    tools_path = workspace_root / "TOOLS.md"
-    desired = (
-        render_tools_md(company_name=company_name, active_provider_env_key=active_provider_env_key)
-        if profile == PROFILE_FLEET
-        else render_personal_tools_md(active_provider_env_key=active_provider_env_key)
-    )
-
-    if tools_path.exists():
-        current = tools_path.read_text(encoding="utf-8")
-        if current == desired:
-            return DoctorCheck(name="workspace_tools_md", ok=True, detail="TOOLS.md already current")
-        if fix:
-            tools_path.write_text(desired, encoding="utf-8")
-            return DoctorCheck(
-                name="workspace_tools_md",
-                ok=True,
-                detail=f"Updated {tools_path}",
-                fixed=True,
-            )
-        return DoctorCheck(
-            name="workspace_tools_md",
-            ok=False,
-            detail=f"TOOLS.md drift detected at {tools_path}",
-            warning=True,
-        )
-
-    if fix:
-        tools_path.parent.mkdir(parents=True, exist_ok=True)
-        tools_path.write_text(desired, encoding="utf-8")
-        return DoctorCheck(
-            name="workspace_tools_md",
-            ok=True,
-            detail=f"Created {tools_path}",
-            fixed=True,
-        )
-    return DoctorCheck(
-        name="workspace_tools_md",
-        ok=False,
-        detail=f"Missing TOOLS.md at {tools_path}",
-        warning=True,
+    return doctor_checks.sync_workspace_tools_md(
+        workspace_root,
+        company_name,
+        active_provider_env_key,
+        profile,
+        fix,
+        fleet_profile=PROFILE_FLEET,
+        render_tools_md=render_tools_md,
+        render_personal_tools_md=render_personal_tools_md,
     )
 
 
@@ -244,51 +155,14 @@ def _sync_workspace_agents_md(
     profile: str,
     fix: bool,
 ) -> DoctorCheck:
-    if not workspace_root:
-        return DoctorCheck(
-            name="workspace_agents_md",
-            ok=False,
-            detail="Company workspace not configured",
-            warning=True,
-        )
-
-    agents_path = workspace_root / "AGENTS.md"
-    desired = render_company_agents_md() if profile == PROFILE_FLEET else render_personal_agents_md()
-    if not agents_path.exists():
-        if fix:
-            agents_path.parent.mkdir(parents=True, exist_ok=True)
-            agents_path.write_text(desired, encoding="utf-8")
-            return DoctorCheck(
-                name="workspace_agents_md",
-                ok=True,
-                detail=f"Created {agents_path}",
-                fixed=True,
-            )
-        return DoctorCheck(
-            name="workspace_agents_md",
-            ok=False,
-            detail=f"Missing AGENTS.md at {agents_path}",
-            warning=True,
-        )
-
-    current = agents_path.read_text(encoding="utf-8")
-    if current.strip() != desired.strip():
-        if fix:
-            agents_path.write_text(desired, encoding="utf-8")
-            return DoctorCheck(
-                name="workspace_agents_md",
-                ok=True,
-                detail="Updated AGENTS.md to match active profile policy",
-                fixed=True,
-            )
-        return DoctorCheck(
-            name="workspace_agents_md",
-            ok=False,
-            detail="AGENTS.md policy differs from active profile template",
-            warning=True,
-        )
-
-    return DoctorCheck(name="workspace_agents_md", ok=True, detail="AGENTS.md policy is current")
+    return doctor_checks.sync_workspace_agents_md(
+        workspace_root,
+        profile,
+        fix,
+        fleet_profile=PROFILE_FLEET,
+        render_company_agents_md=render_company_agents_md,
+        render_personal_agents_md=render_personal_agents_md,
+    )
 
 
 def _sync_workspace_env_role(
@@ -296,95 +170,18 @@ def _sync_workspace_env_role(
     expected_role: str,
     fix: bool,
 ) -> DoctorCheck:
-    if not workspace_root:
-        return DoctorCheck(
-            name="workspace_env_role",
-            ok=False,
-            detail="Company workspace not configured",
-            warning=True,
-        )
-
-    env_path = workspace_root / ".env"
-    if not env_path.exists():
-        return DoctorCheck(
-            name="workspace_env_role",
-            ok=False,
-            detail=f"Missing .env at {env_path}",
-            warning=True,
-        )
-
-    current = env_path.read_text(encoding="utf-8")
-    for raw_line in current.splitlines():
-        line = raw_line.strip()
-        if line.startswith("MAESTRO_AGENT_ROLE="):
-            value = line.split("=", 1)[1].strip().lower()
-            if value == expected_role:
-                return DoctorCheck(name="workspace_env_role", ok=True, detail=f"MAESTRO_AGENT_ROLE={expected_role}")
-            if fix:
-                lines = current.splitlines()
-                out = []
-                for item in lines:
-                    if item.strip().startswith("MAESTRO_AGENT_ROLE="):
-                        out.append(f"MAESTRO_AGENT_ROLE={expected_role}")
-                    else:
-                        out.append(item)
-                env_path.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
-                return DoctorCheck(
-                    name="workspace_env_role",
-                    ok=True,
-                    detail=f"Normalized MAESTRO_AGENT_ROLE={expected_role} in .env",
-                    fixed=True,
-                )
-            return DoctorCheck(
-                name="workspace_env_role",
-                ok=False,
-                detail=f"MAESTRO_AGENT_ROLE is '{value}', expected '{expected_role}'",
-                warning=True,
-            )
-
-    if fix:
-        with env_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"MAESTRO_AGENT_ROLE={expected_role}\n")
-        return DoctorCheck(
-            name="workspace_env_role",
-            ok=True,
-            detail=f"Added MAESTRO_AGENT_ROLE={expected_role} to .env",
-            fixed=True,
-        )
-    return DoctorCheck(
-        name="workspace_env_role",
-        ok=False,
-        detail="MAESTRO_AGENT_ROLE missing in .env",
-        warning=True,
-    )
+    return doctor_checks.sync_workspace_env_role(workspace_root, expected_role, fix)
 
 
 def _read_workspace_env_value(
     workspace_root: Path | None,
     key: str,
 ) -> str:
-    if not workspace_root:
-        return ""
-    env_path = workspace_root / ".env"
-    if not env_path.exists():
-        return ""
-    for raw in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        left, right = line.split("=", 1)
-        if left.strip() == key:
-            return right.strip()
-    return ""
+    return doctor_checks.read_workspace_env_value(workspace_root, key)
 
 
 def _tail_text(path: Path, max_bytes: int = 180_000) -> str:
-    if not path.exists():
-        return ""
-    data = path.read_bytes()
-    if len(data) > max_bytes:
-        data = data[-max_bytes:]
-    return data.decode("utf-8", errors="ignore")
+    return doctor_checks.tail_text(path, max_bytes)
 
 
 def _rotate_stale_sessions(
@@ -393,70 +190,16 @@ def _rotate_stale_sessions(
     *,
     profile: str,
 ) -> DoctorCheck:
-    default_profile = DEFAULT_FLEET_OPENCLAW_PROFILE if profile == PROFILE_FLEET else ""
-    sessions_dir = openclaw_state_root(home_dir=home_dir, default_profile=default_profile) / "agents" / "maestro-company" / "sessions"
-    sessions_path = sessions_dir / "sessions.json"
-    if not sessions_path.exists():
-        return DoctorCheck(
-            name="session_hygiene",
-            ok=True,
-            detail="No session store found; skipped",
-            warning=True,
-        )
-
-    payload = load_json(sessions_path, default={})
-    if not isinstance(payload, dict):
-        payload = {}
-
-    stale: list[tuple[str, str]] = []
-    for key, entry in payload.items():
-        if not isinstance(entry, dict):
-            continue
-        session_id = str(entry.get("sessionId", "")).strip()
-        session_file = sessions_dir / f"{session_id}.jsonl" if session_id else None
-
-        total_tokens = entry.get("totalTokens")
-        context_tokens = entry.get("contextTokens")
-        if isinstance(total_tokens, (int, float)) and isinstance(context_tokens, (int, float)) and context_tokens > 0:
-            if float(total_tokens) > float(context_tokens) * 1.05:
-                stale.append((key, session_id))
-                continue
-
-        if session_file and session_file.exists():
-            tail = _tail_text(session_file)
-            if "Incorrect API key provided" in tail:
-                stale.append((key, session_id))
-
-    if not stale:
-        return DoctorCheck(name="session_hygiene", ok=True, detail="No stale sessions detected")
-
-    if not fix:
-        return DoctorCheck(
-            name="session_hygiene",
-            ok=False,
-            detail=f"{len(stale)} stale session(s) detected",
-            warning=True,
-        )
-
-    backup_dir = sessions_dir / f"doctor-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(sessions_path, backup_dir / "sessions.json.bak")
-
-    removed = 0
-    for map_key, session_id in stale:
-        payload.pop(map_key, None)
-        if session_id:
-            session_file = sessions_dir / f"{session_id}.jsonl"
-            if session_file.exists():
-                shutil.move(str(session_file), str(backup_dir / session_file.name))
-                removed += 1
-
-    save_json(sessions_path, payload)
-    return DoctorCheck(
-        name="session_hygiene",
-        ok=True,
-        detail=f"Rotated {len(stale)} stale session(s), moved {removed} log(s) to {backup_dir}",
-        fixed=True,
+    return doctor_checks.rotate_stale_sessions(
+        home_dir,
+        fix,
+        profile=profile,
+        fleet_profile=PROFILE_FLEET,
+        default_openclaw_profile=DEFAULT_FLEET_OPENCLAW_PROFILE,
+        openclaw_state_root=openclaw_state_root,
+        load_json=load_json,
+        save_json=save_json,
+        tail_text_func=_tail_text,
     )
 
 
@@ -475,71 +218,15 @@ def _sync_gateway_auth_tokens(
     profile: str,
     fix: bool,
 ) -> DoctorCheck:
-    gateway = config.get("gateway")
-    if not isinstance(gateway, dict):
-        gateway = {}
-        config["gateway"] = gateway
-
-    auth = gateway.get("auth")
-    if not isinstance(auth, dict):
-        auth = {}
-        gateway["auth"] = auth
-
-    remote = gateway.get("remote")
-    if not isinstance(remote, dict):
-        remote = {}
-        gateway["remote"] = remote
-
-    raw_auth = auth.get("token")
-    auth_token = str(raw_auth).strip() if isinstance(raw_auth, str) else ""
-    raw_remote = remote.get("token")
-    remote_token = str(raw_remote).strip() if isinstance(raw_remote, str) else ""
-    expected_remote_url = f"ws://127.0.0.1:{_fleet_gateway_port()}" if profile == PROFILE_FLEET else ""
-    current_remote_url = str(remote.get("url", "")).strip() if isinstance(remote.get("url"), str) else ""
-    bad_remote_url = bool(expected_remote_url and current_remote_url != expected_remote_url)
-
-    bad_auth = (not auth_token) or _is_placeholder(auth_token)
-    bad_remote = (not remote_token) or _is_placeholder(remote_token)
-    mismatch = bool(auth_token and remote_token and auth_token != remote_token)
-
-    if not (bad_auth or bad_remote or mismatch or bad_remote_url):
-        return DoctorCheck(
-            name="gateway_auth_tokens",
-            ok=True,
-            detail=(
-                "gateway.auth.token and gateway.remote.token are aligned"
-                if not expected_remote_url else "gateway tokens aligned; fleet remote URL configured"
-            ),
-        )
-
-    if not fix:
-        return DoctorCheck(
-            name="gateway_auth_tokens",
-            ok=False,
-            detail=(
-                "Gateway auth token missing/invalid, mismatched, or remote URL not configured. "
-                "Run maestro doctor --fix."
-            ),
-        )
-
-    token = ""
-    if auth_token and not _is_placeholder(auth_token):
-        token = auth_token
-    elif remote_token and not _is_placeholder(remote_token):
-        token = remote_token
-    else:
-        token = secrets.token_urlsafe(32)
-
-    auth["token"] = token
-    remote["token"] = token
-    if profile == PROFILE_FLEET:
-        remote["url"] = expected_remote_url
-    save_json(config_path, config)
-    return DoctorCheck(
-        name="gateway_auth_tokens",
-        ok=True,
-        detail="Normalized gateway auth token and synced remote token",
-        fixed=True,
+    return doctor_repairs.sync_gateway_auth_tokens(
+        config,
+        config_path,
+        profile,
+        fix,
+        fleet_profile=PROFILE_FLEET,
+        fleet_gateway_port=_fleet_gateway_port,
+        is_placeholder=_is_placeholder,
+        save_json=save_json,
     )
 
 
@@ -548,30 +235,12 @@ def _sync_telegram_bindings(
     config_path: Path,
     fix: bool,
 ) -> DoctorCheck:
-    changes = ensure_telegram_account_bindings(config)
-    if not changes:
-        return DoctorCheck(
-            name="telegram_bindings",
-            ok=True,
-            detail="Telegram account routing bindings are aligned",
-        )
-
-    if not fix:
-        return DoctorCheck(
-            name="telegram_bindings",
-            ok=False,
-            detail=(
-                f"{len(changes)} Telegram account binding(s) missing. "
-                "Run maestro doctor --fix."
-            ),
-        )
-
-    save_json(config_path, config)
-    return DoctorCheck(
-        name="telegram_bindings",
-        ok=True,
-        detail=f"Added {len(changes)} Telegram account routing binding(s)",
-        fixed=True,
+    return doctor_repairs.sync_telegram_bindings(
+        config,
+        config_path,
+        fix,
+        ensure_telegram_account_bindings=ensure_telegram_account_bindings,
+        save_json=save_json,
     )
 
 
@@ -582,58 +251,13 @@ def _enforce_commander_telegram_policy(
     profile: str,
     fix: bool,
 ) -> DoctorCheck:
-    if profile != PROFILE_FLEET:
-        return DoctorCheck(
-            name="commander_telegram_policy",
-            ok=True,
-            detail="Not applicable outside Fleet profile",
-        )
-    channels = config.get("channels")
-    if not isinstance(channels, dict):
-        channels = {}
-        config["channels"] = channels
-    telegram = channels.get("telegram")
-    if not isinstance(telegram, dict):
-        telegram = {}
-        channels["telegram"] = telegram
-    accounts = telegram.get("accounts")
-    if not isinstance(accounts, dict):
-        accounts = {}
-        telegram["accounts"] = accounts
-    commander = accounts.get("maestro-company")
-    if not isinstance(commander, dict):
-        return DoctorCheck(
-            name="commander_telegram_policy",
-            ok=False,
-            detail="Commander Telegram account missing",
-            warning=True,
-        )
-    dm_policy = str(commander.get("dmPolicy", "")).strip().lower()
-    group_policy = str(commander.get("groupPolicy", "")).strip().lower()
-    stream_mode = str(commander.get("streamMode", "")).strip().lower()
-    ok = dm_policy == "pairing" and group_policy == "allowlist" and stream_mode == "partial"
-    if ok:
-        return DoctorCheck(
-            name="commander_telegram_policy",
-            ok=True,
-            detail="Commander Telegram policy locked (dm=pairing, groups=allowlist)",
-        )
-    if not fix:
-        return DoctorCheck(
-            name="commander_telegram_policy",
-            ok=False,
-            detail="Commander Telegram policy not strict; run maestro doctor --fix",
-            warning=True,
-        )
-    commander["dmPolicy"] = "pairing"
-    commander["groupPolicy"] = "allowlist"
-    commander["streamMode"] = "partial"
-    save_json(config_path, config)
-    return DoctorCheck(
-        name="commander_telegram_policy",
-        ok=True,
-        detail="Enforced strict Commander Telegram policy (dm=pairing, groups=allowlist)",
-        fixed=True,
+    return doctor_repairs.enforce_commander_telegram_policy(
+        config,
+        config_path,
+        profile=profile,
+        fleet_profile=PROFILE_FLEET,
+        fix=fix,
+        save_json=save_json,
     )
 
 
@@ -643,234 +267,39 @@ def _sync_gateway_launchagent_token(
     token_check: DoctorCheck,
     profile: str,
 ) -> DoctorCheck:
-    if not token_check.fixed:
-        return DoctorCheck(
-            name="gateway_launchagent_sync",
-            ok=True,
-            detail="Gateway LaunchAgent token sync not needed",
-        )
-
-    if not fix:
-        return DoctorCheck(
-            name="gateway_launchagent_sync",
-            ok=False,
-            detail="Gateway token changed but LaunchAgent sync skipped (fix mode off)",
-            warning=True,
-        )
-
-    # Fleet runs in its own profiled LaunchAgent label. Ensure the profiled
-    # service is explicitly installed and started on a dedicated port.
-    if profile == PROFILE_FLEET:
-        port = _fleet_gateway_port()
-        install_ok, install_out = _run_cmd(
-            ["openclaw", "gateway", "install", "--force", "--port", str(port)],
-            timeout=60,
-        )
-        start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
-        if (install_ok or start_ok) and _gateway_running():
-            return DoctorCheck(
-                name="gateway_launchagent_sync",
-                ok=True,
-                detail=f"Fleet mode: refreshed profiled gateway service on port {port}",
-                fixed=True,
-            )
-        return DoctorCheck(
-            name="gateway_launchagent_sync",
-            ok=False,
-            detail=(
-                f"Fleet mode gateway refresh failed: install={install_out or install_ok}, "
-                f"start={start_out or start_ok}"
-            ),
-            warning=True,
-        )
-
-    ok, out = _run_cmd(["openclaw", "gateway", "install", "--force"], timeout=60)
-    if ok:
-        return DoctorCheck(
-            name="gateway_launchagent_sync",
-            ok=True,
-            detail="Reinstalled OpenClaw LaunchAgent to sync gateway token",
-            fixed=True,
-        )
-    return DoctorCheck(
-        name="gateway_launchagent_sync",
-        ok=False,
-        detail=f"Failed to sync LaunchAgent token: {out}",
-        warning=True,
+    return doctor_repairs.sync_gateway_launchagent_token(
+        fix=fix,
+        token_check=token_check,
+        profile=profile,
+        fleet_profile=PROFILE_FLEET,
+        fleet_gateway_port=_fleet_gateway_port,
+        run_cmd=lambda args, timeout: _run_cmd(args, timeout=timeout),
+        gateway_running=_gateway_running,
     )
 
 
 def _repair_cli_device_pairing(fix: bool) -> DoctorCheck:
-    pending_ok, pending_out = _run_cmd(["openclaw", "devices", "list", "--json"], timeout=20)
-    if not pending_ok:
-        lowered = str(pending_out or "").lower()
-        if "pairing required" in lowered:
-            if not fix:
-                return DoctorCheck(
-                    name="cli_device_pairing",
-                    ok=False,
-                    detail="CLI requires gateway device pairing approval (run maestro doctor --fix)",
-                )
-            return DoctorCheck(
-                name="cli_device_pairing",
-                ok=False,
-                detail=(
-                    "Gateway requires pairing but pending requests could not be listed. "
-                    "Run openclaw devices list."
-                ),
-                warning=True,
-            )
-        return DoctorCheck(
-            name="cli_device_pairing",
-            ok=False,
-            detail=f"Could not verify device pairing: {pending_out}",
-            warning=True,
-        )
-
-    try:
-        payload = json.loads(pending_out)
-    except Exception:
-        return DoctorCheck(
-            name="cli_device_pairing",
-            ok=False,
-            detail="Could not parse pending device request payload",
-            warning=True,
-        )
-
-    pending = payload.get("pending")
-    pending_list = pending if isinstance(pending, list) else []
-    if not pending_list:
-        return DoctorCheck(
-            name="cli_device_pairing",
-            ok=True,
-            detail="CLI device pairing access healthy",
-        )
-
-    if not fix:
-        return DoctorCheck(
-            name="cli_device_pairing",
-            ok=False,
-            detail="CLI requires gateway device pairing approval (run maestro doctor --fix)",
-        )
-
-    if len(pending_list) > 1:
-        return DoctorCheck(
-            name="cli_device_pairing",
-            ok=False,
-            detail=(
-                f"Multiple pending device requests ({len(pending_list)}); "
-                "approve manually with openclaw devices list/approve."
-            ),
-            warning=True,
-        )
-
-    approve_ok, approve_out = _run_cmd(["openclaw", "devices", "approve", "--latest", "--json"], timeout=20)
-    if not approve_ok:
-        return DoctorCheck(
-            name="cli_device_pairing",
-            ok=False,
-            detail=f"Failed to auto-approve device pairing: {approve_out}",
-            warning=True,
-        )
-
-    return DoctorCheck(
-        name="cli_device_pairing",
-        ok=True,
-        detail="Approved pending CLI device pairing request",
-        fixed=True,
+    return doctor_repairs.repair_cli_device_pairing(
+        fix,
+        run_cmd=lambda args, timeout: _run_cmd(args, timeout=timeout),
     )
 
 
 def _restart_gateway(home_dir: Path, fix: bool, *, profile: str) -> DoctorCheck:
-    ok, out = _run_cmd(["openclaw", "gateway", "restart"], timeout=35)
-    if ok and _gateway_running():
-        return DoctorCheck(
-            name="gateway_restart",
-            ok=True,
-            detail="openclaw gateway restart completed",
-            fixed=fix,
-        )
-    if ok:
-        _run_cmd(["openclaw", "gateway", "start"], timeout=35)
-        if _gateway_running():
-            return DoctorCheck(
-                name="gateway_restart",
-                ok=True,
-                detail="openclaw gateway restart/start completed",
-                fixed=fix,
-            )
-
-    if profile == PROFILE_FLEET:
-        port = _fleet_gateway_port()
-        _run_cmd(["openclaw", "gateway", "install", "--force", "--port", str(port)], timeout=60)
-        start_ok, start_out = _run_cmd(["openclaw", "gateway", "start"], timeout=35)
-        if start_ok and _gateway_running():
-            return DoctorCheck(
-                name="gateway_restart",
-                ok=True,
-                detail=f"openclaw gateway reinstalled and started on port {port}",
-                fixed=fix,
-            )
-        return DoctorCheck(
-            name="gateway_restart",
-            ok=False,
-            detail=f"Gateway restart/start failed in fleet mode: {start_out or out}",
-            warning=True,
-        )
-
-    # Fallback for mac LaunchAgent flows when restart races with stale PID.
-    if platform.system().lower() == "darwin":
-        plist_path = _launchagent_path(home_dir, profile=profile)
-        if plist_path.exists():
-            uid = str(os.getuid())
-            label = "ai.openclaw.gateway"
-            _run_cmd(["launchctl", "bootout", f"gui/{uid}/{label}"], timeout=15)
-            _run_cmd(["pkill", "-f", "openclaw-gateway"], timeout=8)
-            _run_cmd(["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)], timeout=15)
-            kick_ok, kick_out = _run_cmd(["launchctl", "kickstart", "-k", f"gui/{uid}/{label}"], timeout=15)
-            if kick_ok:
-                return DoctorCheck(
-                    name="gateway_restart",
-                    ok=True,
-                    detail="Gateway restarted via launchctl fallback",
-                    fixed=fix,
-                )
-            return DoctorCheck(
-                name="gateway_restart",
-                ok=False,
-                detail=f"Gateway restart fallback failed: {kick_out or out}",
-                warning=True,
-            )
-
-    return DoctorCheck(
-        name="gateway_restart",
-        ok=False,
-        detail=f"Gateway restart failed: {out}",
-        warning=True,
+    return doctor_repairs.restart_gateway(
+        home_dir,
+        fix,
+        profile=profile,
+        fleet_profile=PROFILE_FLEET,
+        fleet_gateway_port=_fleet_gateway_port,
+        run_cmd=lambda args, timeout: _run_cmd(args, timeout=timeout),
+        gateway_running=_gateway_running,
+        launchagent_path=lambda path: _launchagent_path(path, profile=profile),
     )
 
 
 def _gateway_running() -> bool:
-    ok, out = _run_cmd(["openclaw", "gateway", "status", "--json"], timeout=10)
-    if ok:
-        raw = str(out or "")
-        idx = raw.find("{")
-        if idx >= 0:
-            try:
-                payload = json.loads(raw[idx:])
-            except Exception:
-                payload = {}
-            if isinstance(payload, dict):
-                service = payload.get("service", {}) if isinstance(payload.get("service"), dict) else {}
-                runtime = service.get("runtime", {}) if isinstance(service.get("runtime"), dict) else {}
-                status = str(runtime.get("status", "")).strip().lower()
-                if status in {"running", "started", "active"}:
-                    return True
-    status_ok, status_out = _run_cmd(["openclaw", "status"], timeout=10)
-    if not status_ok:
-        return False
-    lowered = str(status_out or "").lower()
-    return "gateway service" in lowered and "running" in lowered
+    return doctor_checks.gateway_running(run_cmd=lambda args, timeout: _run_cmd(args, timeout=timeout))
 
 
 def build_doctor_report(
