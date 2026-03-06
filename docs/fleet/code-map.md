@@ -54,8 +54,12 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
    - registry file pathing, normalization, project discovery sync, node identity resolution
 2. `maestro/fleet/projects/ingest_commands.py`
    - ingest preflight, ingest/index command builders, project control payload assembly
-3. `maestro/control_plane_core.py`
-   - still owns lifecycle and awareness orchestration, but no longer owns registry or ingest command internals
+3. `maestro/fleet/projects/lifecycle.py`
+   - project creation, store onboarding/move, project-agent registration
+4. `maestro/fleet/projects/awareness.py`
+   - service status, onboarding status, purchase alias, awareness-state assembly
+5. `maestro/control_plane_core.py`
+   - compatibility wrappers and remaining control-plane helpers
 
 ## Runtime + Health
 
@@ -84,7 +88,6 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 ## Current Hotspots
 
 - `maestro/fleet_deploy.py` — deploy + gateway + server + Windows tasking
-- `maestro/control_plane_core.py` — awareness + project lifecycle
 - `maestro/server.py` — still owns HTTP surface and workspace routes, but no longer carries most command-center internals
 - `maestro/cli.py` — parser + Fleet command dispatch
 
@@ -100,6 +103,8 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 - `maestro/fleet/command_center/routing.py` — command-center node/project routing
 - `maestro/fleet/projects/registry.py` — project registry ownership and node identity normalization
 - `maestro/fleet/projects/ingest_commands.py` — project ingest/index command ownership
+- `maestro/fleet/projects/lifecycle.py` — project lifecycle and project-agent registration
+- `maestro/fleet/projects/awareness.py` — runtime awareness and onboarding status assembly
 
 ## Tests To Run For Fleet Changes
 

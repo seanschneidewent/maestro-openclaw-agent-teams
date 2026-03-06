@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .command_center import build_project_snapshot, discover_project_dirs
+from .fleet.projects import awareness as project_awareness
 from .fleet.projects import ingest_commands as project_ingest_commands
+from .fleet.projects import lifecycle as project_lifecycle
 from .fleet.projects import registry as project_registry
 from .fleet.shared import subprocesses as fleet_subprocesses
 from .openclaw_profile import (
@@ -478,127 +480,32 @@ def create_project_node(
     telegram_bot_display_name: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    root = Path(store_root).resolve()
-    name = project_name.strip()
-    slug = slugify(project_slug or name)
-    dir_name = (project_dir_name or slug).strip() or slug
-    project_dir = root / dir_name
-    now_iso = _now_iso()
-
-    created = False
-    if not project_dir.exists() and not dry_run:
-        (project_dir / "pages").mkdir(parents=True, exist_ok=True)
-        (project_dir / "workspaces").mkdir(parents=True, exist_ok=True)
-        (project_dir / "schedule").mkdir(parents=True, exist_ok=True)
-        (project_dir / "rfis").mkdir(parents=True, exist_ok=True)
-        (project_dir / "submittals").mkdir(parents=True, exist_ok=True)
-        (project_dir / "comms").mkdir(parents=True, exist_ok=True)
-        (project_dir / "contracts").mkdir(parents=True, exist_ok=True)
-        created = True
-
-    project_json_path = project_dir / "project.json"
-    if (not project_json_path.exists()) and (not dry_run):
-        save_json(
-            project_json_path,
-            {
-                "name": name,
-                "slug": slug,
-                "total_pages": 0,
-                "disciplines": [],
-                "created_at": now_iso,
-                "index_summary": {
-                    "page_count": 0,
-                    "pointer_count": 0,
-                },
-            },
-        )
-
-    index_json_path = project_dir / "index.json"
-    if (not index_json_path.exists()) and (not dry_run):
-        save_json(
-            index_json_path,
-            {
-                "summary": {
-                    "page_count": 0,
-                    "pointer_count": 0,
-                    "unique_material_count": 0,
-                    "unique_keyword_count": 0,
-                },
-                "generated": now_iso,
-            },
-        )
-
-    registry = sync_fleet_registry(root, dry_run=dry_run)
-    entry = _find_registry_project(registry, slug)
-    if not entry:
-        entry = {
-            "project_slug": slug,
-            "project_name": name,
-            "project_dir_name": dir_name,
-            "project_store_path": str(project_dir.resolve()),
-            "maestro_agent_id": f"maestro-project-{slug}",
-            "ingest_input_root": "",
-            "superintendent": "Unknown",
-            "assignee": "Unassigned",
-            "status": "setup",
-            "last_ingest_at": "",
-            "last_index_at": "",
-            "last_updated": "",
-            "telegram_bot_username": "",
-            "telegram_bot_display_name": "",
-            "last_conversation_at": "",
-        }
-        registry.setdefault("projects", []).append(entry)
-
-    if ingest_input_root:
-        entry["ingest_input_root"] = str(Path(ingest_input_root).expanduser().resolve())
-    if superintendent:
-        entry["superintendent"] = superintendent.strip() or "Unknown"
-    if assignee:
-        entry["assignee"] = assignee.strip() or "Unassigned"
-    if telegram_bot_username:
-        entry["telegram_bot_username"] = _normalize_bot_username(telegram_bot_username)
-    if telegram_bot_display_name:
-        entry["telegram_bot_display_name"] = telegram_bot_display_name.strip()
-    display_name, source, handle = resolve_node_identity(entry)
-    entry["node_display_name"] = display_name
-    entry["node_identity_source"] = source
-    entry["node_handle"] = handle
-
-    if not dry_run:
-        save_fleet_registry(root, {
-            "version": REGISTRY_VERSION,
-            "updated_at": _now_iso(),
-            "store_root": str(root),
-            "projects": sorted(registry.get("projects", []), key=lambda x: x.get("project_name", "").lower()),
-        })
-        registry = sync_fleet_registry(root)
-        entry = _find_registry_project(registry, slug) or entry
-
-    controls = project_control_payload(root, slug, dpi=200)
-    registration = None
-    if register_agent:
-        registration = register_project_agent(
-            store_root=root,
-            project_slug=slug,
-            project_name=name,
-            project_store_path=str(project_dir.resolve()),
-            home_dir=home_dir,
-            dry_run=dry_run,
-            model=agent_model,
-        )
-    return {
-        "ok": True,
-        "created_project_dir": created,
-        "project_exists": project_dir.exists(),
-        "project_dir": str(project_dir.resolve()),
-        "project_slug": slug,
-        "project_name": name,
-        "dry_run": dry_run,
-        "project": entry,
-        "control": controls,
-        "agent_registration": registration,
-    }
+    return project_lifecycle.create_project_node(
+        store_root,
+        project_name,
+        slugify_fn=slugify,
+        now_iso_fn=_now_iso,
+        save_json_fn=save_json,
+        sync_fleet_registry_fn=lambda root: sync_fleet_registry(root, dry_run=dry_run),
+        find_registry_project_fn=_find_registry_project,
+        save_fleet_registry_fn=save_fleet_registry,
+        resolve_node_identity_fn=resolve_node_identity,
+        project_control_payload_fn=lambda root, slug: project_control_payload(root, slug, dpi=200),
+        register_project_agent_fn=register_project_agent,
+        registry_version=REGISTRY_VERSION,
+        project_slug=project_slug,
+        project_dir_name=project_dir_name,
+        ingest_input_root=ingest_input_root,
+        superintendent=superintendent,
+        assignee=assignee,
+        register_agent=register_agent,
+        home_dir=home_dir,
+        agent_model=agent_model,
+        telegram_bot_username=telegram_bot_username,
+        telegram_bot_display_name=telegram_bot_display_name,
+        normalize_bot_username_fn=_normalize_bot_username,
+        dry_run=dry_run,
+    )
 
 
 def onboard_project_store(
@@ -616,202 +523,46 @@ def onboard_project_store(
     agent_model: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Attach a pre-ingested project store into the active fleet in one operation."""
-    root = Path(store_root).resolve()
-    source_root = Path(source_path).expanduser().resolve()
-    if not source_root.exists() or not source_root.is_dir():
-        return {
-            "ok": False,
-            "error": f"Source path is not a directory: {source_root}",
-        }
-
-    source_project_dir = source_root if (source_root / "project.json").exists() else None
-    if source_project_dir is None:
-        candidates = [
-            child for child in source_root.iterdir()
-            if child.is_dir() and (child / "project.json").exists()
-        ]
-        if len(candidates) == 1:
-            source_project_dir = candidates[0]
-        else:
-            return {
-                "ok": False,
-                "error": (
-                    "Source path must contain project.json directly or have exactly one "
-                    "child project directory containing project.json"
-                ),
-            }
-
-    if (root / "project.json").exists() and source_project_dir != root:
-        return {
-            "ok": False,
-            "error": (
-                "Store root is currently a single-project layout. Use that project as the store root "
-                "or switch MAESTRO_STORE to a parent directory for multi-project mode."
-            ),
-        }
-
-    source_meta = load_json(source_project_dir / "project.json")
-    if not isinstance(source_meta, dict):
-        source_meta = {}
-
-    resolved_name = (
-        (project_name or str(source_meta.get("name", "")).strip() or source_project_dir.name).strip()
+    return project_lifecycle.onboard_project_store(
+        store_root,
+        source_path,
+        load_json_fn=load_json,
+        save_json_fn=save_json,
+        slugify_fn=slugify,
+        now_iso_fn=_now_iso,
+        sync_fleet_registry_fn=lambda root: sync_fleet_registry(root, dry_run=dry_run),
+        find_registry_project_fn=_find_registry_project,
+        save_fleet_registry_fn=save_fleet_registry,
+        resolve_node_identity_fn=resolve_node_identity,
+        register_project_agent_fn=register_project_agent,
+        build_ingest_command_fn=lambda root, entry, input_root_override, dpi: build_ingest_command(
+            root,
+            entry,
+            input_root_override=input_root_override,
+            dpi=dpi,
+        ),
+        build_ingest_preflight_fn=lambda root, entry, input_root_override: build_ingest_preflight(
+            root,
+            entry,
+            input_root_override=input_root_override,
+        ),
+        resolve_network_urls_fn=resolve_network_urls,
+        quote_path_fn=_quote_path,
+        registry_version=REGISTRY_VERSION,
+        default_web_port=DEFAULT_WEB_PORT,
+        default_input_placeholder=DEFAULT_INPUT_PLACEHOLDER,
+        project_name=project_name,
+        project_slug=project_slug,
+        project_dir_name=project_dir_name,
+        ingest_input_root=ingest_input_root,
+        superintendent=superintendent,
+        assignee=assignee,
+        register_agent=register_agent,
+        move_source=move_source,
+        home_dir=home_dir,
+        agent_model=agent_model,
+        dry_run=dry_run,
     )
-    resolved_slug = slugify(
-        (project_slug or str(source_meta.get("slug", "")).strip() or resolved_name)
-    )
-    resolved_dir_name = (project_dir_name or resolved_slug).strip() or resolved_slug
-
-    if source_project_dir == root:
-        destination_dir = root
-        relocation_mode = "in_place"
-    else:
-        destination_dir = (root / resolved_dir_name).resolve()
-        relocation_mode = "move" if move_source else "copy"
-
-    if not root.exists() and not dry_run:
-        root.mkdir(parents=True, exist_ok=True)
-
-    if destination_dir.exists() and source_project_dir != destination_dir:
-        return {
-            "ok": False,
-            "error": f"Destination already exists: {destination_dir}",
-        }
-
-    if source_project_dir != destination_dir and not dry_run:
-        destination_dir.parent.mkdir(parents=True, exist_ok=True)
-        if move_source:
-            shutil.move(str(source_project_dir), str(destination_dir))
-        else:
-            shutil.copytree(source_project_dir, destination_dir)
-
-    if not dry_run:
-        destination_project = load_json(destination_dir / "project.json")
-        if not isinstance(destination_project, dict):
-            destination_project = {}
-        destination_project["name"] = resolved_name
-        destination_project["slug"] = resolved_slug
-        save_json(destination_dir / "project.json", destination_project)
-
-    registry = sync_fleet_registry(root, dry_run=dry_run)
-    entry = _find_registry_project(registry, resolved_slug)
-
-    if entry is None:
-        entry = {
-            "project_slug": resolved_slug,
-            "project_name": resolved_name,
-            "project_dir_name": destination_dir.name,
-            "project_store_path": str(destination_dir),
-            "maestro_agent_id": f"maestro-project-{resolved_slug}",
-            "ingest_input_root": "",
-            "superintendent": "Unknown",
-            "assignee": "Unassigned",
-            "status": "active",
-            "last_ingest_at": "",
-            "last_index_at": "",
-            "last_updated": _now_iso(),
-            "telegram_bot_username": "",
-            "telegram_bot_display_name": "",
-            "last_conversation_at": "",
-        }
-        registry.setdefault("projects", []).append(entry)
-        entry_changed = True
-    else:
-        entry_changed = False
-
-    if ingest_input_root:
-        resolved_ingest = str(Path(ingest_input_root).expanduser().resolve())
-        if entry.get("ingest_input_root") != resolved_ingest:
-            entry["ingest_input_root"] = resolved_ingest
-            entry_changed = True
-    if superintendent:
-        clean_super = superintendent.strip() or "Unknown"
-        if entry.get("superintendent") != clean_super:
-            entry["superintendent"] = clean_super
-            entry_changed = True
-    if assignee:
-        clean_assignee = assignee.strip() or "Unassigned"
-        if entry.get("assignee") != clean_assignee:
-            entry["assignee"] = clean_assignee
-            entry_changed = True
-    if entry.get("status") in ("archived", "setup"):
-        entry["status"] = "active"
-        entry_changed = True
-    if entry.get("project_name") != resolved_name:
-        entry["project_name"] = resolved_name
-        entry_changed = True
-    if entry.get("project_slug") != resolved_slug:
-        entry["project_slug"] = resolved_slug
-        entry_changed = True
-    if entry.get("project_store_path") != str(destination_dir):
-        entry["project_store_path"] = str(destination_dir)
-        entry_changed = True
-    if entry.get("project_dir_name") != destination_dir.name:
-        entry["project_dir_name"] = destination_dir.name
-        entry_changed = True
-    display_name, source, handle = resolve_node_identity(entry)
-    if entry.get("node_display_name") != display_name:
-        entry["node_display_name"] = display_name
-        entry_changed = True
-    if entry.get("node_identity_source") != source:
-        entry["node_identity_source"] = source
-        entry_changed = True
-    if entry.get("node_handle") != handle:
-        entry["node_handle"] = handle
-        entry_changed = True
-
-    if entry_changed and not dry_run:
-        save_fleet_registry(root, {
-            "version": REGISTRY_VERSION,
-            "updated_at": _now_iso(),
-            "store_root": str(root),
-            "projects": sorted(registry.get("projects", []), key=lambda x: x.get("project_name", "").lower()),
-        })
-
-    registration = None
-    if register_agent:
-        registration = register_project_agent(
-            store_root=root,
-            project_slug=resolved_slug,
-            project_name=resolved_name,
-            project_store_path=str(destination_dir),
-            home_dir=home_dir,
-            dry_run=dry_run,
-            model=agent_model,
-        )
-
-    ingest = build_ingest_command(
-        root,
-        entry,
-        input_root_override=ingest_input_root,
-        dpi=200,
-    )
-    preflight = build_ingest_preflight(
-        root,
-        entry,
-        input_root_override=ingest_input_root,
-    )
-    network = resolve_network_urls(web_port=DEFAULT_WEB_PORT)
-
-    return {
-        "ok": True,
-        "dry_run": dry_run,
-        "source_project_path": str(source_project_dir),
-        "destination_project_path": str(destination_dir),
-        "relocation_mode": relocation_mode,
-        "final_registry_entry": entry,
-        "agent_registration": registration,
-        "start_command": f"maestro start --store {_quote_path(root)}",
-        "command_center_url": network["recommended_url"],
-        "ingest_preflight_payload": {
-            "project_slug": resolved_slug,
-            "input_path": ingest.get("resolved_input_root") or DEFAULT_INPUT_PLACEHOLDER,
-            "command": ingest.get("command"),
-            "ready": preflight.get("ready", False),
-            "checks": preflight.get("checks", []),
-        },
-    }
 
 
 def move_project_store(
@@ -820,52 +571,19 @@ def move_project_store(
     new_dir_name: str,
     dry_run: bool = True,
 ) -> dict[str, Any]:
-    root = Path(store_root).resolve()
-    registry = sync_fleet_registry(root)
-    entry = _find_registry_project(registry, project_slug)
-    if not entry:
-        return {"ok": False, "error": f"Project '{project_slug}' is not registered"}
-
-    src = Path(str(entry.get("project_store_path", ""))).expanduser().resolve()
-    dst = (root / new_dir_name.strip()).resolve()
-
-    checks = [
-        {"name": "source_exists", "ok": src.exists() and src.is_dir(), "detail": str(src)},
-        {"name": "destination_available", "ok": not dst.exists(), "detail": str(dst)},
-        {"name": "destination_under_store_root", "ok": dst.parent == root, "detail": str(dst)},
-    ]
-    ready = all(item["ok"] for item in checks)
-    mv_command = f"mv {_quote_path(src)} {_quote_path(dst)}"
-
-    if ready and not dry_run:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(src), str(dst))
-        registry = sync_fleet_registry(root)
-        entry = _find_registry_project(registry, project_slug) or entry
-
-    return {
-        "ok": ready,
-        "dry_run": dry_run,
-        "checks": checks,
-        "command": mv_command,
-        "source": str(src),
-        "destination": str(dst),
-        "project": entry,
-    }
+    return project_lifecycle.move_project_store(
+        store_root,
+        project_slug,
+        new_dir_name,
+        sync_fleet_registry_fn=sync_fleet_registry,
+        find_registry_project_fn=_find_registry_project,
+        quote_path_fn=_quote_path,
+        dry_run=dry_run,
+    )
 
 
 def _default_model_from_agents(agent_list: list[dict[str, Any]]) -> str:
-    for agent in agent_list:
-        if not isinstance(agent, dict):
-            continue
-        if agent.get("id") == "maestro-company" and isinstance(agent.get("model"), str):
-            return str(agent["model"])
-    for agent in agent_list:
-        if not isinstance(agent, dict):
-            continue
-        if isinstance(agent.get("model"), str) and agent.get("model").strip():
-            return str(agent["model"]).strip()
-    return "google/gemini-3-pro-preview"
+    return project_lifecycle.default_model_from_agents(agent_list)
 
 
 def register_project_agent(
@@ -877,185 +595,55 @@ def register_project_agent(
     dry_run: bool = False,
     model: str | None = None,
 ) -> dict[str, Any]:
-    config, config_path = _load_openclaw_config(home_dir=home_dir)
-    if not config_path.exists():
-        return {
-            "ok": False,
-            "error": f"OpenClaw config not found: {config_path}",
-            "agent_id": f"maestro-project-{project_slug}",
-        }
-
-    if not isinstance(config.get("agents"), dict):
-        config["agents"] = {}
-    if not isinstance(config["agents"].get("list"), list):
-        config["agents"]["list"] = []
-    agent_list = config["agents"]["list"]
-
-    company_agent = _resolve_company_agent(config)
-    company_workspace = str(company_agent.get("workspace", "")).strip()
-    workspace_root = (
-        Path(company_workspace).expanduser().resolve()
-        if company_workspace
-        else openclaw_workspace_root(
-            home_dir=home_dir,
-            default_profile=(DEFAULT_FLEET_OPENCLAW_PROFILE if resolve_profile(home_dir=home_dir) == PROFILE_FLEET else ""),
-        ).resolve()
+    return project_lifecycle.register_project_agent(
+        store_root,
+        project_slug,
+        project_name,
+        project_store_path,
+        load_openclaw_config_fn=_load_openclaw_config,
+        resolve_company_agent_fn=_resolve_company_agent,
+        openclaw_workspace_root_fn=openclaw_workspace_root,
+        resolve_profile_fn=resolve_profile,
+        ensure_telegram_account_bindings_fn=ensure_telegram_account_bindings,
+        save_json_fn=save_json,
+        default_fleet_openclaw_profile=DEFAULT_FLEET_OPENCLAW_PROFILE,
+        profile_fleet=PROFILE_FLEET,
+        home_dir=home_dir,
+        dry_run=dry_run,
+        model=model,
     )
-    project_workspace = workspace_root / "projects" / project_slug
-    project_agent_id = f"maestro-project-{project_slug}"
-
-    selected_model = model.strip() if isinstance(model, str) and model.strip() else _default_model_from_agents(agent_list)
-
-    desired_agent = {
-        "id": project_agent_id,
-        "name": f"Maestro ({project_name})",
-        "default": False,
-        "model": selected_model,
-        "workspace": str(project_workspace),
-    }
-
-    existing = next(
-        (item for item in agent_list if isinstance(item, dict) and item.get("id") == project_agent_id),
-        None,
-    )
-    changed = False
-    if existing is None:
-        agent_list.append(desired_agent)
-        changed = True
-    else:
-        for key, value in desired_agent.items():
-            if existing.get(key) != value:
-                existing[key] = value
-                changed = True
-
-    binding_changes = ensure_telegram_account_bindings(config)
-    if binding_changes:
-        changed = True
-
-    if not dry_run:
-        if changed:
-            save_json(config_path, config)
-        project_workspace.mkdir(parents=True, exist_ok=True)
-        env_path = project_workspace / ".env"
-        desired_env_line = f"MAESTRO_STORE={project_store_path}\n"
-        role_line = "MAESTRO_AGENT_ROLE=project\n"
-        if not env_path.exists():
-            env_path.write_text(desired_env_line + role_line, encoding="utf-8")
-        else:
-            current_env = env_path.read_text(encoding="utf-8")
-            append = ""
-            if "MAESTRO_STORE=" not in current_env:
-                append += desired_env_line
-            if "MAESTRO_AGENT_ROLE=" not in current_env:
-                append += role_line
-            if append:
-                with env_path.open("a", encoding="utf-8") as handle:
-                    handle.write(append)
-
-    return {
-        "ok": True,
-        "changed": changed,
-        "dry_run": dry_run,
-        "config_path": str(config_path),
-        "agent_id": project_agent_id,
-        "workspace": str(project_workspace),
-        "model": selected_model,
-        "binding_changes": binding_changes,
-    }
 
 
 def _service_status(
     command_runner: CommandRunner | None = None,
     home_dir: Path | None = None,
 ) -> dict[str, Any]:
-    runner = command_runner or _default_runner
-    config, config_path = _load_openclaw_config(home_dir=home_dir)
-    agent = _resolve_company_agent(config)
-
-    tailscale_installed = shutil.which("tailscale") is not None
-    tailscale_connected = False
-    tailscale_ip = None
-    if tailscale_installed:
-        ok, out = runner(["tailscale", "ip", "-4"], timeout=5)
-        if ok:
-            tailscale_ip = _parse_tailscale_ipv4(out)
-            tailscale_connected = bool(tailscale_ip)
-
-    openclaw_installed = shutil.which("openclaw") is not None
-    openclaw_running = False
-    pairing_required = False
-    status_output = ""
-    if openclaw_installed:
-        gw_ok, gw_out = runner(["openclaw", "gateway", "status", "--json"], timeout=8)
-        gw_status = _parse_json_from_output(gw_out)
-        if gw_status:
-            openclaw_running = _gateway_status_running(gw_status)
-            status_output = gw_out
-
-        ok, out = runner(["openclaw", "status"], timeout=6)
-        if not status_output:
-            status_output = out
-        lowered = out.lower()
-        if not gw_status:
-            openclaw_running = (ok and "running" in lowered) or ("gateway service" in lowered and "running" in lowered)
-        pairing_required = "pairing required" in lowered
-
-    gateway_auth = _gateway_auth_health(config)
-    device_pairing = _pending_device_pairing(
-        runner=runner,
-        openclaw_installed=openclaw_installed,
-        pairing_required=pairing_required,
+    return project_awareness.service_status(
+        command_runner=command_runner,
+        default_runner_fn=_default_runner,
+        load_openclaw_config_fn=_load_openclaw_config,
+        resolve_company_agent_fn=_resolve_company_agent,
+        parse_tailscale_ipv4_fn=_parse_tailscale_ipv4,
+        parse_json_from_output_fn=_parse_json_from_output,
+        gateway_status_running_fn=_gateway_status_running,
+        gateway_auth_health_fn=_gateway_auth_health,
+        pending_device_pairing_fn=_pending_device_pairing,
+        telegram_configured_fn=_telegram_configured,
+        telegram_binding_health_fn=telegram_binding_health,
+        home_dir=home_dir,
     )
-
-    return {
-        "config_path": str(config_path),
-        "tailscale": {
-            "installed": tailscale_installed,
-            "connected": tailscale_connected,
-            "ip": tailscale_ip or "",
-        },
-        "openclaw": {
-            "installed": openclaw_installed,
-            "running": openclaw_running,
-            "pairing_required": pairing_required,
-            "gateway_auth": gateway_auth,
-            "device_pairing": device_pairing,
-            "status_snippet": status_output[:240],
-        },
-        "telegram": {
-            "configured": _telegram_configured(config),
-            "routing": telegram_binding_health(config),
-        },
-        "company_agent": {
-            "configured": bool(agent),
-            "id": str(agent.get("id", "")),
-            "name": str(agent.get("name", "")),
-            "workspace": str(agent.get("workspace", "")),
-        },
-    }
 
 
 def build_project_onboarding_status(
     store_root: Path,
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    current_registry = registry if isinstance(registry, dict) else sync_fleet_registry(store_root)
-    projects = current_registry.get("projects", []) if isinstance(current_registry.get("projects"), list) else []
-    active_count = len([
-        item for item in projects
-        if isinstance(item, dict) and str(item.get("status", "active")).strip().lower() != "archived"
-    ])
-    free_remaining = max(0, FREE_PROJECT_SLOTS - active_count)
-    next_node_badge = "+"
-    return {
-        "project_create_command": "maestro-fleet project create",
-        "free_project_slots_total": FREE_PROJECT_SLOTS,
-        "free_project_slots_remaining": free_remaining,
-        "active_project_count": active_count,
-        "next_node_badge": next_node_badge,
-        "purchase_disabled": True,
-        "disabled_reason": "Fleet purchase flow is disabled. Use `maestro-fleet project create`.",
-    }
+    return project_awareness.build_project_onboarding_status(
+        store_root,
+        sync_fleet_registry_fn=sync_fleet_registry,
+        free_project_slots=FREE_PROJECT_SLOTS,
+        registry=registry,
+    )
 
 
 def build_purchase_status(
@@ -1063,7 +651,11 @@ def build_purchase_status(
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Backward-compatible alias for older callers."""
-    return build_project_onboarding_status(store_root, registry=registry)
+    return project_awareness.build_purchase_status(
+        store_root,
+        build_project_onboarding_status_fn=build_project_onboarding_status,
+        registry=registry,
+    )
 
 
 def build_awareness_state(
@@ -1073,123 +665,20 @@ def build_awareness_state(
     command_runner: CommandRunner | None = None,
     home_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Build a machine-specific, runtime-specific awareness state contract."""
-    root = Path(store_root).resolve()
-    registry = sync_fleet_registry(root)
-    services = _service_status(command_runner=command_runner, home_dir=home_dir)
-    network = resolve_network_urls(web_port=web_port, command_runner=command_runner)
-    onboarding = build_project_onboarding_status(root, registry=registry)
-    directives_summary = summarize_system_directives(root)
-
-    fleet_projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
-    project_count = len([p for p in fleet_projects if isinstance(p, dict) and p.get("status") != "archived"])
-    slug_counts: dict[str, int] = {}
-    for item in fleet_projects:
-        if not isinstance(item, dict):
-            continue
-        slug = str(item.get("project_slug", "")).strip()
-        if not slug:
-            continue
-        slug_counts[slug] = slug_counts.get(slug, 0) + 1
-    duplicate_project_slugs = sorted(slug for slug, count in slug_counts.items() if count > 1)
-
-    stale_projects: list[dict[str, Any]] = []
-    for item in fleet_projects:
-        if not isinstance(item, dict):
-            continue
-        dt = _parse_iso(item.get("last_updated")) or _parse_iso(item.get("last_ingest_at"))
-        if not dt:
-            continue
-        age_hours = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 3600
-        if age_hours > 72:
-            stale_projects.append({
-                "project_slug": item.get("project_slug", ""),
-                "project_name": item.get("project_name", ""),
-                "last_updated": item.get("last_updated", ""),
-                "age_hours": round(age_hours, 1),
-            })
-
-    degraded_reasons: list[str] = []
-    if not services["tailscale"]["connected"]:
-        degraded_reasons.append("Tailscale not connected")
-    if not services["openclaw"]["running"]:
-        degraded_reasons.append("OpenClaw gateway not running")
-    gateway_auth = services["openclaw"].get("gateway_auth", {}) if isinstance(services["openclaw"], dict) else {}
-    if not bool(gateway_auth.get("tokens_aligned")):
-        degraded_reasons.append("Gateway auth token mismatch or missing")
-    device_pairing = services["openclaw"].get("device_pairing", {}) if isinstance(services["openclaw"], dict) else {}
-    if bool(device_pairing.get("required")):
-        degraded_reasons.append("CLI device pairing approval required")
-    if not services["telegram"]["configured"]:
-        degraded_reasons.append("Telegram not configured")
-    telegram_routing = services.get("telegram", {}).get("routing", {}) if isinstance(services.get("telegram"), dict) else {}
-    if not bool(telegram_routing.get("fully_bound", True)):
-        degraded_reasons.append("Telegram routing bindings missing")
-    if not services["company_agent"]["configured"]:
-        degraded_reasons.append("Commander agent not configured")
-    if not root.exists():
-        degraded_reasons.append("Knowledge store root missing")
-    if project_count == 0:
-        degraded_reasons.append("No project nodes discovered")
-    if duplicate_project_slugs:
-        degraded_reasons.append(
-            "Duplicate project slug registrations: " + ", ".join(duplicate_project_slugs)
-        )
-
-    posture = "healthy" if not degraded_reasons else "degraded"
-    current_action = ""
-    if isinstance(command_center_state, dict):
-        orchestrator = command_center_state.get("orchestrator")
-        if isinstance(orchestrator, dict):
-            current_action = str(orchestrator.get("currentAction", "")).strip()
-
-    return {
-        "generated_at": _now_iso(),
-        "posture": posture,
-        "degraded_reasons": degraded_reasons,
-        "network": network,
-        "paths": {
-            "store_root": str(root),
-            "registry_path": str(fleet_registry_path(root)),
-            "workspace_root": str(services["company_agent"].get("workspace", "")).strip(),
-        },
-        "services": services,
-        "commander": {
-            "display_name": "The Commander",
-            "agent_id": "maestro-company",
-            "chat_transport": "openclaw_agent_invoke",
-        },
-        "fleet": {
-            "project_count": project_count,
-            "duplicate_project_slugs": duplicate_project_slugs,
-            "stale_projects": stale_projects,
-            "registry": registry,
-            "current_action": current_action,
-            "directives": directives_summary,
-        },
-        "commands": {
-            "update": "maestro update",
-            "doctor": "maestro doctor --fix",
-            "serve": f"maestro serve --port {web_port} --store {_quote_path(root)}",
-            "start": f"maestro start --port {web_port} --store {_quote_path(root)}",
-            "project_create": "maestro-fleet project create",
-        },
-        "onboarding": onboarding,
-        "purchase": onboarding,
-        "available_actions": [
-            "sync_registry",
-            "list_system_directives",
-            "upsert_system_directive",
-            "archive_system_directive",
-            "create_project_node",
-            "onboard_project_store",
-            "ingest_command",
-            "preflight_ingest",
-            "index_command",
-            "move_project_store",
-            "register_project_agent",
-            "doctor_fix",
-            "conversation_read",
-            "conversation_send",
-        ],
-    }
+    return project_awareness.build_awareness_state(
+        store_root,
+        sync_fleet_registry_fn=sync_fleet_registry,
+        service_status_fn=_service_status,
+        resolve_network_urls_fn=resolve_network_urls,
+        build_project_onboarding_status_fn=build_project_onboarding_status,
+        summarize_system_directives_fn=summarize_system_directives,
+        parse_iso_fn=_parse_iso,
+        now_iso_fn=_now_iso,
+        fleet_registry_path_fn=fleet_registry_path,
+        quote_path_fn=_quote_path,
+        default_web_port=DEFAULT_WEB_PORT,
+        command_center_state=command_center_state,
+        web_port=web_port,
+        command_runner=command_runner,
+        home_dir=home_dir,
+    )

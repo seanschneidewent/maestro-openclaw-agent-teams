@@ -20,7 +20,7 @@ Refactor the Fleet codebase so that:
 | --- | ---: | --- |
 | `maestro/fleet_deploy.py` | 1619 | still mixes deploy flow, gateway lifecycle, server supervision, Windows tasking, commissioning |
 | `maestro/server.py` | 1586 | still mixes API endpoints with workspace routes and some command-center wrappers |
-| `maestro/control_plane_core.py` | 1196 | still mixes awareness, Telegram health, and project lifecycle |
+| `maestro/control_plane_core.py` | 684 | now mostly compatibility wrappers plus remaining control-plane helpers |
 | `maestro/cli.py` | 1040 | parser definitions and Fleet command dispatch live together |
 | `maestro/doctor.py` | 541 | now mostly orchestration, but still worth reducing further into a report-only adapter |
 
@@ -197,8 +197,7 @@ Move from `maestro/control_plane_core.py`:
 - `onboard_project_store`
 - `move_project_store`
 - `register_project_agent`
-- `_workspace_routes`
-- `project_control_payload`
+- `_default_model_from_agents`
 
 Also review `maestro/purchase.py`:
 
@@ -209,13 +208,9 @@ Status:
 
 - done for `maestro/fleet/projects/registry.py`
 - done for `maestro/fleet/projects/ingest_commands.py`
-- `control_plane_core.py` still owns lifecycle/orchestration functions:
-  - `create_project_node`
-  - `onboard_project_store`
-  - `move_project_store`
-  - `register_project_agent`
-  - `build_awareness_state`
-- this is the next logical split, but it is a larger behavioral seam than the registry/ingest extraction
+- done for `maestro/fleet/projects/lifecycle.py`
+- done for `maestro/fleet/projects/awareness.py`
+- `control_plane_core.py` is now primarily the compatibility/control-plane wrapper layer
 
 ### Phase 4: Extract Command Center State Assembly
 
