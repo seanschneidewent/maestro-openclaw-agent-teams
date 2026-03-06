@@ -376,6 +376,23 @@ install_node_tarball_macos() {
   return 0
 }
 
+install_tailscale_pkg_macos() {
+  local pkg_url="${MAESTRO_TAILSCALE_PKG_URL:-https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg}"
+  local tmp_pkg
+  tmp_pkg="$(mktemp "${TMPDIR:-/tmp}/tailscale.XXXXXX.pkg")" || return 1
+  if ! curl -fsSL "$pkg_url" -o "$tmp_pkg"; then
+    rm -f "$tmp_pkg"
+    return 1
+  fi
+  if ! run_privileged installer -pkg "$tmp_pkg" -target /; then
+    rm -f "$tmp_pkg"
+    return 1
+  fi
+  rm -f "$tmp_pkg"
+  open -a Tailscale >/dev/null 2>&1 || true
+  return 0
+}
+
 ensure_node_npm() {
   refresh_path_for_brew
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
@@ -484,9 +501,10 @@ ensure_tailscale_if_required() {
     fi
 
     if is_macos; then
-      ensure_homebrew
-      brew install --cask tailscale
-      open -a Tailscale >/dev/null 2>&1 || true
+      if [[ "$AUTO_APPROVE" == "1" ]]; then
+        fatal "Tailscale is missing. Install the Tailscale app from https://tailscale.com/download/mac and rerun."
+      fi
+      install_tailscale_pkg_macos || fatal "Tailscale install failed."
     elif is_linux; then
       run_privileged sh -c "curl -fsSL https://tailscale.com/install.sh | sh"
     else
