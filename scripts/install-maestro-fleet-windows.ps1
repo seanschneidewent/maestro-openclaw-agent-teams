@@ -584,6 +584,15 @@ function Validate-Install() {
   Write-Log "maestro-fleet CLI installed."
 }
 
+function Ensure-FleetCliPath() {
+  $venvScripts = Join-Path $venvDir "Scripts"
+  if (-not (Test-Path $venvScripts)) {
+    Fail "Fleet virtualenv Scripts directory missing at $venvScripts"
+  }
+  Ensure-PathEntry $venvScripts
+  Write-Log "Added Fleet CLI to user PATH: $venvScripts"
+}
+
 function Run-DeployIfEnabled([string[]]$scriptArgs) {
   $maestroExe = Join-Path $venvDir "Scripts\maestro-fleet.exe"
   if (-not $script:autoDeploy) {
@@ -622,6 +631,7 @@ Ensure-TailscaleIfRequired
 Ensure-VirtualEnv
 Install-FleetPackages
 Validate-Install
+Ensure-FleetCliPath
 
 if ($script:autoDeploy -and (-not $script:autoApprove)) {
   if (Prompt-YesNo "Run maestro-fleet deploy now?" $true) {
