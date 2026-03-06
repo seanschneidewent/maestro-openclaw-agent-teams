@@ -363,7 +363,7 @@ install_node_tarball_macos() {
     fi
     mkdir -p "$tool_root"
     rm -rf "$node_dir"
-    if ! tar -xzf "$tmp_tgz" -C "$tool_root"; then
+    if ! env LC_ALL=C LANG=C tar -xzf "$tmp_tgz" -C "$tool_root"; then
       rm -f "$tmp_tgz"
       return 1
     fi
