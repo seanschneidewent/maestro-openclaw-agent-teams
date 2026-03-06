@@ -28,7 +28,6 @@ from .config import (
     get_store_path,
     load_dotenv,
 )
-from .license import LicenseError, validate_project_key, verify_knowledge_store
 from .loader import load_project, resolve_page
 from .prompts import HIGHLIGHT_PROMPT
 from .utils import (
@@ -84,23 +83,12 @@ def _derive_schedule_variance_days(current_update: dict[str, Any]) -> int:
     return min(delays) if delays else 0
 
 
-# ── License Enforcement ───────────────────────────────────────────────────────
+# ── Project Access Guard ──────────────────────────────────────────────────────
 
 def requires_license(func):
-    """
-    Decorator to enforce project license on tool methods.
-    
-    Checks self.licensed flag before executing.
-    If not licensed, returns an error message instead of executing the tool.
-    """
+    """Compatibility decorator retained after project-license removal."""
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        if not getattr(self, "licensed", False):
-            return (
-                f"[X] License required to use {func.__name__}.\n"
-                f"Set MAESTRO_LICENSE_KEY environment variable with a valid project license.\n"
-                f"Generate a test key with: maestro license generate-project"
-            )
         return func(self, *args, **kwargs)
     return wrapper
 
@@ -111,7 +99,8 @@ class MaestroTools:
 
     Loads a project once and provides all query/workspace/highlight methods.
     
-    License enforcement: validates MAESTRO_LICENSE_KEY on init.
+    Project access is direct. Fleet project maestros do not require a
+    separate project license to use tools.
     """
 
     def __init__(
@@ -125,7 +114,7 @@ class MaestroTools:
         self._project_name = project_name
         self._workspace_root = workspace_root
         self._project: dict[str, Any] | None = None
-        self.licensed = False
+        self.licensed = True
         
         # Load environment variables
         if workspace_root:
@@ -138,52 +127,6 @@ class MaestroTools:
                 "Company Maestro is control-plane only. "
                 "Project knowledge tools are disabled in this workspace."
             )
-
-        # Validate license (unless explicitly skipped for testing)
-        if not skip_license_check:
-            self._validate_license()
-    
-    def _validate_license(self) -> None:
-        """
-        Validate project license from MAESTRO_LICENSE_KEY environment variable.
-        
-        Sets self.licensed = True if valid, False otherwise.
-        Prints warning if license is invalid but doesn't raise.
-        """
-        license_key = os.environ.get("MAESTRO_LICENSE_KEY")
-        
-        if not license_key:
-            print("[!] No MAESTRO_LICENSE_KEY found in environment")
-            print("    Tools will be disabled. Set a valid project license to enable.")
-            self.licensed = False
-            return
-        
-        # We need project_slug to validate - derive from project metadata
-        try:
-            project = self.project
-            project_slug = project.get("slug")
-            if not project_slug:
-                # Try to derive from project name
-                project_name = project.get("name", "")
-                from .utils import slugify_underscore
-                project_slug = slugify_underscore(project_name)
-            
-            # Validate the license key
-            validate_project_key(license_key, project_slug, str(self._store_path))
-            
-            # Verify knowledge store stamp matches
-            verify_knowledge_store(str(self._store_path), license_key, project_slug)
-            
-            self.licensed = True
-            
-        except LicenseError as e:
-            print(f"[X] License validation failed: {e}")
-            print(f"    Tools will be disabled.")
-            self.licensed = False
-        except Exception as e:
-            print(f"[!] Could not validate license: {e}")
-            print(f"    Tools will be disabled.")
-            self.licensed = False
 
     @property
     def project(self) -> dict[str, Any]:

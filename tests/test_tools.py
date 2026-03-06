@@ -112,7 +112,6 @@ def mock_store(tmp_path):
 @pytest.fixture
 def tools(mock_store):
     t = MaestroTools(store_path=mock_store)
-    t.licensed = True  # Bypass license check for tool functionality tests
     return t
 
 

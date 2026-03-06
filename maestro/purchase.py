@@ -7,7 +7,6 @@ import hashlib
 import json
 import re
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,12 +24,6 @@ from .control_plane import (
 )
 from .fleet_constants import FLEET_PROFILE
 from .install_state import resolve_fleet_store_root
-from .license import (
-    LicenseError,
-    generate_project_key,
-    stamp_knowledge_store,
-    validate_project_key,
-)
 from .openclaw_guard import ensure_openclaw_override_allowed
 from .openclaw_profile import (
     openclaw_config_path,
@@ -201,95 +194,12 @@ def _project_exists(registry: dict[str, Any], slug: str) -> bool:
     return False
 
 
-def _billing_state_path(home_dir: Path | None = None) -> Path:
-    home = (home_dir or Path.home()).resolve()
-    return home / ".maestro" / "billing.json"
-
-
-def _load_billing_state(home_dir: Path | None = None) -> dict[str, Any]:
-    payload = load_json(_billing_state_path(home_dir), default={})
-    return payload if isinstance(payload, dict) else {}
-
-
-def _save_billing_state(state: dict[str, Any], home_dir: Path | None = None):
-    save_json(_billing_state_path(home_dir), state)
-
-
 def _company_name(company_agent: dict[str, Any]) -> str:
     raw = str(company_agent.get("name", "")).strip()
     if raw.startswith("Maestro (") and raw.endswith(")"):
         inner = raw[len("Maestro ("):-1].strip()
         return inner or "Company"
     return raw or "Company"
-
-
-def _derive_company_id(company_agent: dict[str, Any]) -> str:
-    seed = _company_name(company_agent).encode("utf-8")
-    return f"CMP{hashlib.sha1(seed).hexdigest()[:8].upper()}"
-
-
-def _derive_project_id(project_slug: str) -> str:
-    return f"PRJ{hashlib.sha1(project_slug.encode('utf-8')).hexdigest()[:8].upper()}"
-
-
-def _ensure_card_on_file(*, non_interactive: bool, dry_run: bool) -> tuple[dict[str, Any], bool]:
-    state = _load_billing_state()
-    if state.get("card_on_file") is True:
-        return state, True
-
-    if non_interactive:
-        return state, False
-
-    console.print(Panel(
-        "No billing card found for this Commander workspace.\n"
-        "Add a card to purchase and activate additional project nodes.",
-        title="Billing",
-        border_style="yellow",
-    ))
-    should_add = Confirm.ask("Add card now?", default=True)
-    if not should_add:
-        return state, False
-
-    attempts = 0
-    max_attempts = 5
-    cardholder = ""
-    last4 = ""
-    expiry = ""
-    while attempts < max_attempts:
-        attempts += 1
-        cardholder = Prompt.ask("Cardholder name").strip()
-        last4 = Prompt.ask("Card last 4 digits").strip()
-        expiry = Prompt.ask("Card expiry (MM/YY)").strip()
-
-        if len(last4) != 4 or not last4.isdigit():
-            console.print("[red]Card last 4 must be exactly four digits.[/]")
-            retry = Confirm.ask("Try card entry again?", default=True)
-            if retry:
-                continue
-            return state, False
-
-        if not re.match(r"^(0[1-9]|1[0-2])/[0-9]{2}$", expiry):
-            console.print("[red]Expiry must look like MM/YY (example: 08/29).[/]")
-            retry = Confirm.ask("Try card entry again?", default=True)
-            if retry:
-                continue
-            return state, False
-        break
-    else:
-        console.print("[red]Too many invalid attempts while setting billing card.[/]")
-        return state, False
-
-    updated = {
-        **state,
-        "card_on_file": True,
-        "cardholder": cardholder or "Unknown",
-        "card_last4": last4,
-        "card_expiry": expiry,
-        "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-    if not dry_run:
-        _save_billing_state(updated)
-    return updated, True
 
 
 def _update_openclaw_for_project(
@@ -483,13 +393,11 @@ def run_purchase(
     api_key: str | None = None,
     telegram_token: str | None = None,
     pairing_code: str | None = None,
-    maestro_license_key: str | None = None,
     store_override: str | None = None,
     dry_run: bool = False,
     json_output: bool = False,
     non_interactive: bool = False,
     skip_remote_validation: bool = False,
-    local_license_mode: bool = False,
     allow_openclaw_override: bool = False,
 ) -> int:
     _, config_path = _load_openclaw_config()
@@ -621,31 +529,7 @@ def run_purchase(
         else:
             console.print(f"[green]Telegram verified: @{bot_username}[/]")
 
-    # Fleet mode is always local/offline licensing with no payment gating.
-    local_mode = True
-    selected_license = maestro_license_key.strip() if isinstance(maestro_license_key, str) else ""
-    license_result: dict[str, Any] | None = None
-    license_stamp: dict[str, Any] | None = None
     planned_store_path = (store_root / project_slug).resolve()
-    # Manual override kept for internal/dev fallback.
-    if not selected_license:
-        company_id = _derive_company_id(company)
-        project_id = _derive_project_id(project_slug)
-        selected_license = generate_project_key(
-            company_id=company_id,
-            project_id=project_id,
-            project_slug=project_slug,
-            knowledge_store_path=str(planned_store_path),
-        )
-    try:
-        license_result = validate_project_key(
-            selected_license,
-            project_slug=project_slug,
-            knowledge_store_path=str(planned_store_path),
-        )
-    except LicenseError as exc:
-        console.print(f"[red]License validation failed: {exc}[/]")
-        return 1
 
     result = create_project_node(
         store_root=store_root,
@@ -693,15 +577,6 @@ def run_purchase(
         project_store_path=project_store_path,
         dry_run=dry_run,
     )
-    if license_result and selected_license and not dry_run:
-        try:
-            license_stamp = stamp_knowledge_store(
-                str(project_store_path),
-                selected_license,
-                project_slug,
-            )
-        except LicenseError as exc:
-            console.print(f"[yellow]Project created, but license stamping failed: {exc}[/]")
     gateway_restart = _restart_openclaw_gateway(dry_run=dry_run)
     if gateway_restart.get("ok"):
         console.print("[green]OpenClaw gateway restarted with project bot config.[/]")
@@ -729,10 +604,6 @@ def run_purchase(
         "project_store_path": str(project_store_path),
         "model": selected_model,
         "provider_env_key": provider_env_key,
-        "maestro_license_required": True,
-        "maestro_license_activated": bool(license_result),
-        "maestro_license_mode": "local" if local_mode else "standard",
-        "maestro_license_stamped": bool(license_stamp),
         "openclaw_update": openclaw_update,
         "gateway_restart": gateway_restart,
         "telegram_pairing": pairing_result,
@@ -752,8 +623,6 @@ def run_purchase(
             f"Assignee: {assignee}",
             f"Store: {project_store_path}",
             f"Model: {selected_model}",
-            f"Maestro License: {'Activated' if bool(license_result) else 'Not activated'}",
-            "License Mode: Local/Offline",
             f"Gateway Reload: {'OK' if gateway_restart.get('ok') else 'Needs manual restart'}",
             (
                 f"Telegram Pairing: {'Approved' if pairing_result.get('approved') else 'Pending'}"
@@ -782,18 +651,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-key")
     parser.add_argument("--telegram-token")
     parser.add_argument("--pairing-code", help="Optional Telegram pairing code to auto-approve")
-    parser.add_argument(
-        "--maestro-license-key",
-        "--project-license-key",
-        dest="maestro_license_key",
-        help=argparse.SUPPRESS,
-    )
     parser.add_argument("--store", help="Override fleet store root")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--skip-remote-validation", action="store_true")
-    parser.add_argument("--local", "--offline", dest="local_license_mode", action="store_true")
     parser.add_argument("--allow-openclaw-override", action="store_true")
     return parser
 

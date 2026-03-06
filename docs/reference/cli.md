@@ -18,7 +18,6 @@
 - `maestro-fleet enable [--dry-run] [--no-restart]`
 - `maestro-fleet status`
 - `maestro-fleet project create [flags...]`
-- `maestro-fleet license generate --project-name "..."`
 - `maestro-fleet deploy [--company-name ... --project-name ... --assignee ... --project-telegram-token ...]`
 - `maestro-fleet command-center [--open]`
 - `maestro-fleet ingest <folder> [--project-name "..."] [--dpi N] [--store ...]`

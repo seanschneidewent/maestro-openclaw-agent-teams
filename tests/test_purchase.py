@@ -108,7 +108,6 @@ def test_run_purchase_non_interactive_dry_run(monkeypatch, tmp_path: Path):
         lambda: (config, config_path),
     )
     monkeypatch.setattr(purchase, "resolve_fleet_store_root", lambda _: store_root)
-    monkeypatch.setattr(purchase, "_load_billing_state", lambda: {"card_on_file": True, "card_last4": "4242"})
 
     code = purchase.run_purchase(
         project_name="Alpha Build",
@@ -141,8 +140,6 @@ def test_run_purchase_has_no_payment_gate_after_free_slot(monkeypatch, tmp_path:
         lambda: (config, config_path),
     )
     monkeypatch.setattr(purchase, "resolve_fleet_store_root", lambda _: store_root)
-    monkeypatch.setattr(purchase, "_load_billing_state", lambda: {"card_on_file": False})
-
     code = purchase.run_purchase(
         project_name="Second Project",
         assignee="Sarah",
@@ -154,7 +151,7 @@ def test_run_purchase_has_no_payment_gate_after_free_slot(monkeypatch, tmp_path:
     assert code == 0
 
 
-def test_run_purchase_auto_activates_maestro_license(monkeypatch, tmp_path: Path):
+def test_run_purchase_allows_multiple_projects_without_license_activation(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     workspace = home / ".openclaw" / "workspace-maestro"
     config_path = home / ".openclaw" / "openclaw.json"
@@ -172,8 +169,6 @@ def test_run_purchase_auto_activates_maestro_license(monkeypatch, tmp_path: Path
         lambda: (config, config_path),
     )
     monkeypatch.setattr(purchase, "resolve_fleet_store_root", lambda _: store_root)
-    monkeypatch.setattr(purchase, "_load_billing_state", lambda: {"card_on_file": True, "card_last4": "4242"})
-
     code = purchase.run_purchase(
         project_name="Second Project",
         assignee="Sarah",
@@ -183,67 +178,6 @@ def test_run_purchase_auto_activates_maestro_license(monkeypatch, tmp_path: Path
         skip_remote_validation=True,
     )
     assert code == 0
-
-
-def test_run_purchase_local_mode_bypasses_card_requirement(monkeypatch, tmp_path: Path):
-    home = tmp_path / "home"
-    workspace = home / ".openclaw" / "workspace-maestro"
-    config_path = home / ".openclaw" / "openclaw.json"
-    config = _base_config(workspace)
-    _write_json(config_path, config)
-
-    store_root = tmp_path / "store-root"
-    existing = store_root / "existing-project"
-    existing.mkdir(parents=True, exist_ok=True)
-    _write_json(existing / "project.json", {"name": "Existing Project", "slug": "existing-project"})
-
-    monkeypatch.setattr(
-        purchase,
-        "_load_openclaw_config",
-        lambda: (config, config_path),
-    )
-    monkeypatch.setattr(purchase, "resolve_fleet_store_root", lambda _: store_root)
-    monkeypatch.setattr(purchase, "_load_billing_state", lambda: {"card_on_file": False})
-
-    code = purchase.run_purchase(
-        project_name="Second Project",
-        assignee="Sarah",
-        telegram_token="123456:ABCDEF",
-        non_interactive=True,
-        dry_run=True,
-        skip_remote_validation=True,
-        local_license_mode=True,
-    )
-    assert code == 0
-
-
-def test_card_on_file_retry_loop(monkeypatch, tmp_path: Path):
-    # First attempt invalid expiry, second attempt valid.
-    answers = iter([
-        "Sean",
-        "1234",
-        "1234",  # invalid MM/YY
-        "Sean",
-        "1234",
-        "12/34",  # valid MM/YY pattern
-    ])
-
-    monkeypatch.setattr(purchase, "_load_billing_state", lambda: {"card_on_file": False})
-    saved_payload = {}
-
-    def _capture_save(state):
-        saved_payload.update(state)
-
-    monkeypatch.setattr(purchase, "_save_billing_state", _capture_save)
-    monkeypatch.setattr(purchase.Prompt, "ask", lambda *args, **kwargs: next(answers))
-
-    confirm_answers = iter([True, True])  # add card now, retry after invalid expiry
-    monkeypatch.setattr(purchase.Confirm, "ask", lambda *args, **kwargs: next(confirm_answers))
-
-    state, ok = purchase._ensure_card_on_file(non_interactive=False, dry_run=False)
-    assert ok is True
-    assert state["card_on_file"] is True
-    assert saved_payload["card_expiry"] == "12/34"
 
 
 def test_run_purchase_preserves_registered_project_agent(monkeypatch, tmp_path: Path):

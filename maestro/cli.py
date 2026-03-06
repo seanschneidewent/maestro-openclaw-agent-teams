@@ -265,18 +265,11 @@ def _add_fleet_project_create_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--api-key")
     parser.add_argument("--telegram-token")
     parser.add_argument("--pairing-code")
-    parser.add_argument(
-        "--maestro-license-key",
-        "--project-license-key",
-        dest="maestro_license_key",
-        help=argparse.SUPPRESS,
-    )
     parser.add_argument("--store")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--skip-remote-validation", action="store_true")
-    parser.add_argument("--local", "--offline", dest="local_license_mode", action="store_true")
     parser.add_argument("--allow-openclaw-override", action="store_true")
 
 
@@ -287,16 +280,6 @@ def _add_fleet_project_set_telegram_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--store")
     parser.add_argument("--skip-remote-validation", action="store_true")
     parser.add_argument("--allow-openclaw-override", action="store_true")
-
-
-def _add_fleet_license_generate_flags(parser: argparse.ArgumentParser):
-    parser.add_argument("--project-name", required=True)
-    parser.add_argument("--project-slug")
-    parser.add_argument("--store")
-    parser.add_argument("--company-id")
-    parser.add_argument("--project-id")
-    parser.add_argument("--expiry-days", type=int, default=365)
-    parser.add_argument("--json", action="store_true")
 
 
 def _add_fleet_deploy_flags(parser: argparse.ArgumentParser):
@@ -324,7 +307,6 @@ def _add_fleet_deploy_flags(parser: argparse.ArgumentParser):
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--non-interactive", action="store_true")
     parser.add_argument("--skip-remote-validation", action="store_true")
-    parser.add_argument("--local", "--offline", dest="local_license_mode", action="store_true")
     parser.add_argument("--require-tailscale", action="store_true")
     parser.add_argument("--allow-openclaw-override", action="store_true")
     parser.add_argument("--no-start", action="store_true")
@@ -363,10 +345,7 @@ def _add_fleet_parser(subparsers: argparse._SubParsersAction):
     purchase = fleet_sub.add_parser("purchase", help=argparse.SUPPRESS)
     _add_fleet_project_create_flags(purchase)
 
-    license_cmd = fleet_sub.add_parser("license", help="Fleet local license operations")
-    license_sub = license_cmd.add_subparsers(dest="fleet_license_command", required=True)
-    license_generate = license_sub.add_parser("generate", help="Generate a 1-year local Fleet project key")
-    _add_fleet_license_generate_flags(license_generate)
+    fleet_sub.add_parser("license", help=argparse.SUPPRESS)
 
     commander = fleet_sub.add_parser("commander", help="Commander lifecycle operations")
     commander_sub = commander.add_subparsers(dest="fleet_commander_command", required=True)
@@ -562,9 +541,8 @@ def _run_fleet(args: argparse.Namespace):
     from .fleet_deploy import run_deploy
     from .fleet_models import run_set_commander_model, run_set_project_model, run_set_project_telegram
     from .install_state import resolve_fleet_store_root
-    from .license import generate_project_key, validate_project_key
     from .doctor import run_doctor
-    from .purchase import _derive_company_id, _derive_project_id, _load_openclaw_config, _resolve_company_agent, run_purchase
+    from .purchase import run_purchase
     from .update import run_update
     from .openclaw_profile import DEFAULT_FLEET_OPENCLAW_PROFILE, ensure_openclaw_profile_env
     from .utils import slugify
@@ -643,7 +621,6 @@ def _run_fleet(args: argparse.Namespace):
             host=str(args.host),
             non_interactive=bool(args.non_interactive),
             skip_remote_validation=bool(args.skip_remote_validation),
-            local_license_mode=bool(args.local_license_mode),
             require_tailscale=bool(args.require_tailscale),
             allow_openclaw_override=bool(args.allow_openclaw_override),
             start_services=not bool(args.no_start),
@@ -684,13 +661,11 @@ def _run_fleet(args: argparse.Namespace):
                 api_key=args.api_key,
                 telegram_token=args.telegram_token,
                 pairing_code=args.pairing_code,
-                maestro_license_key=args.maestro_license_key,
                 store_override=args.store,
                 dry_run=bool(args.dry_run),
                 json_output=bool(args.json),
                 non_interactive=bool(args.non_interactive),
                 skip_remote_validation=bool(args.skip_remote_validation),
-                local_license_mode=True,
                 allow_openclaw_override=bool(args.allow_openclaw_override),
             )
             if code != 0:
@@ -723,59 +698,10 @@ def _run_fleet(args: argparse.Namespace):
         raise SystemExit(f"Unknown fleet project command: {args.fleet_project_command}")
 
     if command == "license":
-        if str(args.fleet_license_command or "").strip() == "generate":
-            project_name = str(args.project_name or "").strip()
-            project_slug = str(args.project_slug or "").strip() or slugify(project_name)
-            if not project_slug:
-                print("Project slug is required.")
-                sys.exit(1)
-            if int(args.expiry_days) <= 0:
-                print("--expiry-days must be a positive integer.")
-                sys.exit(1)
-
-            store_root = resolve_fleet_store_root(args.store)
-            project_store = (store_root / project_slug).resolve()
-            config, _ = _load_openclaw_config()
-            company = _resolve_company_agent(config)
-            company_id = str(args.company_id or "").strip() or _derive_company_id(company)
-            project_id = str(args.project_id or "").strip() or _derive_project_id(project_slug)
-
-            key = generate_project_key(
-                company_id=company_id,
-                project_id=project_id,
-                project_slug=project_slug,
-                knowledge_store_path=str(project_store),
-                expiry_days=int(args.expiry_days),
-            )
-            validated = validate_project_key(
-                key,
-                project_slug=project_slug,
-                knowledge_store_path=str(project_store),
-            )
-            if bool(args.json):
-                print(json.dumps({
-                    "ok": True,
-                    "project_name": project_name,
-                    "project_slug": project_slug,
-                    "project_store_path": str(project_store),
-                    "company_id": company_id,
-                    "project_id": project_id,
-                    "license_key": key,
-                    "issued_at": validated.get("issued_at"),
-                    "expires_at": validated.get("expires_at"),
-                }, indent=2))
-                return
-            print("Fleet project license generated")
-            print(f"- Project: {project_name or project_slug} ({project_slug})")
-            print(f"- Store: {project_store}")
-            print(f"- Company ID: {company_id}")
-            print(f"- Project ID: {project_id}")
-            print(f"- Issued: {validated.get('issued_at')}")
-            print(f"- Expires: {validated.get('expires_at')}")
-            print("")
-            print(key)
-            return
-        raise SystemExit(f"Unknown fleet license command: {args.fleet_license_command}")
+        print("`maestro fleet license` is disabled.")
+        print("Fleet project maestro creation no longer uses license generation or activation.")
+        print("Use: maestro fleet project create")
+        sys.exit(1)
 
     raise SystemExit(f"Unknown fleet command: {command}")
 

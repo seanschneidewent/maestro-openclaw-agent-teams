@@ -321,10 +321,10 @@ class TestKnowledgeStoreStamping:
 
 
 class TestLicenseDecorator:
-    """Test @requires_license decorator on MaestroTools."""
+    """Legacy project-license module should not gate MaestroTools anymore."""
 
-    def test_tools_without_license(self):
-        """Tools should be disabled without a valid license."""
+    def test_tools_work_without_project_license(self):
+        """Project tools should remain usable without MAESTRO_LICENSE_KEY."""
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a minimal project structure
             store_path = Path(tmpdir) / "knowledge_store"
@@ -350,19 +350,17 @@ class TestLicenseDecorator:
             
             try:
                 tools = MaestroTools(store_path=str(store_path))
-                assert tools.licensed is False
+                assert tools.licensed is True
                 
-                # Tool methods should return error message
                 result = tools.search("test")
-                assert isinstance(result, str)
-                assert "License required" in result
+                assert result == "No results for 'test'"
                 
             finally:
                 if old_key:
                     os.environ["MAESTRO_LICENSE_KEY"] = old_key
 
-    def test_tools_with_valid_license(self):
-        """Tools should work with a valid license."""
+    def test_tools_ignore_project_license_when_present(self):
+        """Legacy project-license keys should not change tool availability."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = Path(tmpdir) / "knowledge_store"
             store_path.mkdir()
@@ -397,10 +395,8 @@ class TestLicenseDecorator:
                 tools = MaestroTools(store_path=str(store_path))
                 assert tools.licensed is True
                 
-                # Tool methods should work (even if they return "no results")
                 result = tools.search("test")
-                # Should not return license error
-                assert not isinstance(result, str) or "License required" not in result
+                assert result == "No results for 'test'"
                 
             finally:
                 if old_key:
@@ -409,7 +405,7 @@ class TestLicenseDecorator:
                     del os.environ["MAESTRO_LICENSE_KEY"]
 
     def test_skip_license_check_for_testing(self):
-        """Should be able to skip license check for testing."""
+        """Legacy skip flag remains a harmless compatibility no-op."""
         with tempfile.TemporaryDirectory() as tmpdir:
             store_path = Path(tmpdir) / "knowledge_store"
             store_path.mkdir()

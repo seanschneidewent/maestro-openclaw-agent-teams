@@ -33,8 +33,6 @@ from .utils import load_json, save_json, slugify
 REGISTRY_VERSION = 1
 DEFAULT_WEB_PORT = 3000
 DEFAULT_INPUT_PLACEHOLDER = "<ABS_PATH_TO_PLAN_PDFS>"
-FREE_PROJECT_SLOTS = 1
-
 CommandRunner = Callable[[list[str], int], tuple[bool, str]]
 PLACEHOLDER_MARKERS = ("<PASTE_", "PASTE_", "YOUR_KEY_HERE", "CHANGEME")
 
@@ -641,7 +639,6 @@ def build_project_onboarding_status(
     return project_awareness.build_project_onboarding_status(
         store_root,
         sync_fleet_registry_fn=sync_fleet_registry,
-        free_project_slots=FREE_PROJECT_SLOTS,
         registry=registry,
     )
 

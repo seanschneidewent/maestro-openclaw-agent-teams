@@ -114,7 +114,6 @@ def build_project_onboarding_status(
     store_root: Path,
     *,
     sync_fleet_registry_fn: SyncFleetRegistryFn,
-    free_project_slots: int,
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current_registry = registry if isinstance(registry, dict) else sync_fleet_registry_fn(store_root)
@@ -123,16 +122,14 @@ def build_project_onboarding_status(
         item for item in projects
         if isinstance(item, dict) and str(item.get("status", "active")).strip().lower() != "archived"
     ])
-    free_remaining = max(0, free_project_slots - active_count)
     next_node_badge = "+"
     return {
         "project_create_command": "maestro-fleet project create",
-        "free_project_slots_total": free_project_slots,
-        "free_project_slots_remaining": free_remaining,
         "active_project_count": active_count,
+        "project_creation_policy": "unrestricted",
         "next_node_badge": next_node_badge,
         "purchase_disabled": True,
-        "disabled_reason": "Fleet purchase flow is disabled. Use `maestro-fleet project create`.",
+        "disabled_reason": "Fleet purchase flow is disabled. Use `maestro-fleet project create` directly.",
     }
 
 

@@ -1196,7 +1196,6 @@ def run_deploy(
     host: str = "0.0.0.0",
     non_interactive: bool = False,
     skip_remote_validation: bool = False,
-    local_license_mode: bool = False,
     require_tailscale: bool = False,
     allow_openclaw_override: bool = False,
     start_services: bool = True,
@@ -1407,7 +1406,6 @@ def run_deploy(
             json_output=False,
             non_interactive=True,
             skip_remote_validation=bool(skip_remote_validation),
-            local_license_mode=bool(local_license_mode),
             allow_openclaw_override=bool(allow_openclaw_override),
         )
         if purchase_code != 0:
@@ -1555,7 +1553,7 @@ def run_deploy(
         f"Workspace Root: {company_cfg['workspace_root']}",
         f"Commander Model: {selected_model}",
         f"Project Model: {selected_project_model}",
-        "License Mode: local/offline",
+        "Project Provisioning: direct",
         f"Command Center: {command_center_url}",
         f"Command Center (local): {local_url}",
     ]

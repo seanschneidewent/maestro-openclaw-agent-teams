@@ -123,15 +123,9 @@ maestro-fleet deploy \
   --non-interactive
 ```
 
-## Offline / Local License Mode
+## Project Provisioning
 
-Use this when deployment must avoid remote validation/payment checks:
-
-```bash
-maestro-fleet deploy ... --local
-```
-
-`--local` (alias `--offline`) enables local Fleet key generation/activation for project provisioning.
+Fleet project maestro provisioning is direct. There is no separate Fleet license or payment step during deploy.
 
 ## OpenClaw Override Protection
 

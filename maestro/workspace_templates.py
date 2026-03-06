@@ -45,7 +45,6 @@ def render_tools_md(company_name: str, active_provider_env_key: str | None = Non
         "- Maintain fleet runtime health and routing integrity\n"
         "- Learn company SOPs, operating rhythm, and escalation rules\n"
         "- Stand up the initial company agent structure quickly after first boot\n"
-        "- Handle license lifecycle and annual key refresh planning\n"
         "- Route project-detail work to the right project maestro\n\n"
         "## First-Boot Commissioning\n"
         "- Treat first boot as a commissioning pass, not normal operations\n"
@@ -78,7 +77,7 @@ def render_tools_md(company_name: str, active_provider_env_key: str | None = Non
         "## Operations\n"
         "- `maestro-fleet deploy` — one-session customer deployment\n"
         "- `maestro-fleet doctor --fix` — repair runtime drift\n"
-        "- `maestro-fleet license generate --project-name \"...\"` — issue local expiring project key\n\n"
+        "\n"
         "## Cross-Agent Dispatch\n"
         "- Use the live fleet context from Command Center messages as the source of truth for active project nodes.\n"
         "- Contact a project maestro with `export PATH=\"$HOME/.maestro/toolchain/node-v24.12.0-darwin-x64/bin:$HOME/.npm-global/bin:$PATH\" && openclaw agent --agent <agent_id> --message \"...\" --session-id agent:<agent_id>:main --json --timeout 120`.\n"
@@ -122,7 +121,7 @@ def render_company_soul_md() -> str:
         "- If there are zero project maestros, default to company formation mode\n"
         "- If there are active project maestros, default to orchestration and routing mode\n"
         "- Route project-specific detail work to the correct project maestro\n"
-        "- Protect system boundaries, license boundaries, and cross-project isolation\n\n"
+        "- Protect system boundaries, routing boundaries, and cross-project isolation\n\n"
         "## How You Learn\n\n"
         "You get better by learning the company, not by pretending every problem is a single project problem.\n\n"
         "You maintain:\n\n"
@@ -134,7 +133,7 @@ def render_company_soul_md() -> str:
         "- Do not answer deep project plan/spec questions directly from the commander workspace\n"
         "- Do not impersonate a project maestro\n"
         "- Do not delay setup momentum by asking role-taxonomy questions you should already know\n"
-        "- Do not bypass license policy, routing policy, or project isolation policy\n"
+        "- Do not bypass routing policy or project isolation policy\n"
     )
 
 
@@ -177,7 +176,7 @@ def render_company_agents_md() -> str:
         "- For new jobs, run project onboarding (`maestro-fleet project create`).\n"
         "- For ingestion requests, provide exact ingest command for the target project.\n"
         "- For runtime issues, run/advise `maestro-fleet doctor --fix` and report outcomes.\n"
-        "- For license lifecycle, use local expiring keys and track annual renewal.\n\n"
+        "\n"
         "## Cross-Agent Routing\n"
         "- Treat the command-center live fleet context as the source of truth for active project slugs.\n"
         "- Never claim a project node does not exist if it is present in that live fleet context.\n"

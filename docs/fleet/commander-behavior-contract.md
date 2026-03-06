@@ -60,7 +60,6 @@ Commander can initiate:
 Commander cannot:
 
 - run project knowledge tools as if it were a project agent
-- bypass license policy
 - use billing/purchase semantics in Fleet mode
 
 ## First-Boot Commissioning

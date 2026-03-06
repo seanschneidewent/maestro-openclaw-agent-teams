@@ -42,7 +42,7 @@ export default function PurchaseCommandModal({ awareness, onClose }) {
         <div className="border border-white/10 bg-black/40 p-4 mb-4">
           <div className="text-[10px] uppercase tracking-widest text-slate-500 mb-2">Next Node Slot</div>
           <div className="font-mono text-lg text-[#00e5ff]">{badge}</div>
-          <div className="text-xs text-slate-400 mt-2">Project onboarding in Fleet mode is local/offline only.</div>
+          <div className="text-xs text-slate-400 mt-2">Project onboarding in Fleet mode is direct and unrestricted.</div>
         </div>
 
         <div className="border border-white/10 bg-black/40 p-4 mb-4">
@@ -59,7 +59,7 @@ export default function PurchaseCommandModal({ awareness, onClose }) {
 
         <div className="border border-white/10 bg-black/40 p-4 text-xs text-slate-400 leading-relaxed">
           This command provisions a dedicated OpenClaw project agent, captures project name and assignee,
-          issues a local Fleet license key with expiry, and outputs the exact ingest command.
+          configures routing, and outputs the exact ingest command.
         </div>
       </div>
     </div>

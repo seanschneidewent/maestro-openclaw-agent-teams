@@ -8,8 +8,4 @@ Use:
 maestro-fleet project create
 ```
 
-For local expiring key generation:
-
-```bash
-maestro-fleet license generate --project-name "Example Project"
-```
+Fleet project maestro creation is direct and does not require a separate license step.

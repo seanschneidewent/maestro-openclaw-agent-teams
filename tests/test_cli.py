@@ -84,22 +84,14 @@ def test_fleet_commander_set_model_parser():
     assert args.model == "openai/gpt-5.2"
 
 
-def test_fleet_license_generate_parser():
+def test_fleet_license_command_is_disabled(capsys):
     parser = build_parser()
-    args = parser.parse_args([
-        "fleet",
-        "license",
-        "generate",
-        "--project-name",
-        "Tower A",
-        "--expiry-days",
-        "365",
-    ])
-    assert args.mode == "fleet"
-    assert args.fleet_command == "license"
-    assert args.fleet_license_command == "generate"
-    assert args.project_name == "Tower A"
-    assert args.expiry_days == 365
+    args = parser.parse_args(["fleet", "license"])
+    with pytest.raises(SystemExit) as exc:
+        _run_fleet(args)
+    assert int(exc.value.code) == 1
+    captured = capsys.readouterr()
+    assert "no longer uses license generation" in captured.out
 
 
 def test_fleet_purchase_command_is_disabled(capsys):
@@ -141,7 +133,6 @@ def test_fleet_deploy_parser():
         "PAIR-1234",
         "--project-telegram-token",
         "123:abc",
-        "--local",
         "--non-interactive",
     ])
     assert args.mode == "fleet"
@@ -153,7 +144,6 @@ def test_fleet_deploy_parser():
     assert args.gemini_api_key.startswith("AIza")
     assert args.project_name == "Tower A"
     assert args.provision_initial_project is False
-    assert args.local_license_mode is True
     assert args.non_interactive is True
 
 
