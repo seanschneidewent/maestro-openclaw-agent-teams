@@ -1,0 +1,9 @@
+{
+  "rewrites": [
+    { "source": "/checkout/success", "destination": "/index.html" },
+    { "source": "/checkout/cancel", "destination": "/index.html" },
+    { "source": "/privacy", "destination": "/index.html" },
+    { "source": "/terms", "destination": "/index.html" },
+    { "source": "/refund", "destination": "/index.html" }
+  ]
+}

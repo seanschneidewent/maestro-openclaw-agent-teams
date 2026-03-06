@@ -6,12 +6,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "stripe:links": "bash ./scripts/create_stripe_payment_links.sh"
   },
   "dependencies": {
     "lucide-react": "^0.564.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "stripe": "^20.4.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.18",
