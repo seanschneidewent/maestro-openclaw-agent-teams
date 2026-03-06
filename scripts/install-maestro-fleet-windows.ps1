@@ -15,6 +15,7 @@ $script:pythonExe = ""
 $script:autoApprove = $false
 $script:requireTailscale = $false
 $script:autoDeploy = $true
+$script:portablePythonRoot = ""
 
 function Write-Log([string]$message) {
   Write-Host "[maestro-fleet-install] $message"
@@ -170,12 +171,51 @@ function Add-ExistingPathEntries([string[]]$entries) {
   }
 }
 
+function Resolve-PortablePythonRoot() {
+  if (-not [string]::IsNullOrWhiteSpace($script:portablePythonRoot)) {
+    return $script:portablePythonRoot
+  }
+
+  $candidates = @()
+  if (-not [string]::IsNullOrWhiteSpace($env:MAESTRO_WINDOWS_PYTHON_HOME)) {
+    $candidates += [string]$env:MAESTRO_WINDOWS_PYTHON_HOME
+  }
+  if (-not [string]::IsNullOrWhiteSpace($env:PUBLIC)) {
+    $candidates += (Join-Path $env:PUBLIC "maestro-python")
+  }
+  if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) {
+    $candidates += (Join-Path $env:ProgramData "maestro-python")
+  }
+  $candidates += "C:\maestro-python"
+
+  foreach ($candidate in $candidates) {
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+      continue
+    }
+    try {
+      Ensure-Directory $candidate
+      $probe = Join-Path $candidate ".write-test"
+      Set-Content -Path $probe -Value "ok" -Force
+      Remove-Item $probe -Force -ErrorAction SilentlyContinue
+      $script:portablePythonRoot = $candidate
+      return $script:portablePythonRoot
+    }
+    catch {
+    }
+  }
+
+  Fail "Unable to find a writable directory for the Windows Python bootstrap."
+}
+
 function Refresh-InstalledToolPaths() {
+  $portableRoot = Resolve-PortablePythonRoot
   Add-ExistingPathEntries @(
     (Join-Path $HOME "AppData\Local\Programs\Python\Launcher"),
     (Join-Path $HOME "AppData\Local\Programs\Python\Python313"),
     (Join-Path $HOME "AppData\Local\Programs\Python\Python312"),
     (Join-Path $HOME "AppData\Local\Programs\Python\Python311"),
+    (Join-Path $portableRoot "python\tools"),
+    (Join-Path $portableRoot "python\scripts"),
     "C:\Python313",
     "C:\Python312",
     "C:\Python311",
@@ -189,8 +229,10 @@ function Refresh-InstalledToolPaths() {
 
 function Resolve-PythonHostCommand() {
   Refresh-InstalledToolPaths
+  $portableRoot = Resolve-PortablePythonRoot
 
   $candidates = @(
+    @((Join-Path $portableRoot "python\tools\python.exe")),
     @("py", "-3.13"),
     @("py", "-3.12"),
     @("py", "-3.11"),
@@ -255,6 +297,7 @@ function Remove-StalePythonRegistrations() {
 
   foreach ($path in @(
     (Join-Path $HOME "AppData\Local\Programs\Python"),
+    (Join-Path (Resolve-PortablePythonRoot) "python"),
     "C:\Python312",
     "C:\Program Files\Python312"
   )) {
@@ -265,6 +308,28 @@ function Remove-StalePythonRegistrations() {
       catch {
       }
     }
+  }
+}
+
+function Invoke-NugetPythonInstall([string]$label) {
+  $version = if ($env:MAESTRO_WINDOWS_PYTHON_VERSION) { [string]$env:MAESTRO_WINDOWS_PYTHON_VERSION } else { "3.12.10" }
+  $root = Resolve-PortablePythonRoot
+  $nuget = Join-Path $root "nuget.exe"
+  $packageDir = Join-Path $root "python"
+
+  if (Test-Path $packageDir) {
+    Remove-Item -Recurse -Force $packageDir -ErrorAction SilentlyContinue
+  }
+
+  if (-not (Test-Path $nuget)) {
+    Write-Log ("Downloading NuGet CLI for " + $label + ".")
+    Invoke-WebRequest -UseBasicParsing -Uri "https://aka.ms/nugetclidl" -OutFile $nuget
+  }
+
+  Write-Log ("Installing " + $label + " via the official NuGet package.")
+  & $nuget install python -Version $version -ExcludeVersion -OutputDirectory $root -DirectDownload -NonInteractive
+  if ($LASTEXITCODE -ne 0) {
+    Fail ("NuGet Python install failed for version " + $version)
   }
 }
 
@@ -286,8 +351,13 @@ function Invoke-DirectPythonInstall([string]$label) {
       "PrependPath=1",
       "Include_launcher=1",
       "Include_pip=1",
+      "Include_lib=1",
+      "Include_exe=1",
+      "Include_dev=1",
+      "Include_tcltk=1",
+      "Include_tools=1",
       "Include_test=0",
-      "SimpleInstall=1"
+      "SimpleInstall=0"
     )
     Write-Log ("Installing " + $label + " via direct installer.")
     $process = Start-Process -FilePath $tmpInstaller -ArgumentList $args -Wait -NoNewWindow -PassThru
@@ -309,22 +379,34 @@ function Ensure-Python() {
       Fail "Python 3.11+ is required."
     }
     try {
-      Invoke-DirectPythonInstall "Python 3.12"
+      Invoke-NugetPythonInstall "Python 3.12"
     }
     catch {
-      Write-Warn "Direct Python installer failed. Trying winget fallback."
+      Write-Warn "NuGet Python install failed. Trying direct python.org installer."
       try {
-        Invoke-WingetInstall "Python.Python.3.12" "Python 3.12"
+        Invoke-DirectPythonInstall "Python 3.12"
       }
       catch {
-        Write-Warn "winget Python install failed. Attempting stale-registration cleanup and direct reinstall."
-        Remove-StalePythonRegistrations
-        Invoke-DirectPythonInstall "Python 3.12"
+        Write-Warn "Direct Python installer failed. Trying winget fallback."
+        try {
+          Invoke-WingetInstall "Python.Python.3.12" "Python 3.12"
+        }
+        catch {
+          Write-Warn "Python bootstrap fallback failed. Attempting stale-registration cleanup and NuGet reinstall."
+          Remove-StalePythonRegistrations
+          Invoke-NugetPythonInstall "Python 3.12"
+        }
       }
     }
     Start-Sleep -Seconds 2
     if (-not (Resolve-PythonHostCommand)) {
-      Fail "Python 3.12 install did not produce a usable launcher."
+      Write-Warn "Python bootstrap did not produce a usable launcher. Cleaning up stale installs and retrying with NuGet."
+      Remove-StalePythonRegistrations
+      Invoke-NugetPythonInstall "Python 3.12"
+      Start-Sleep -Seconds 2
+      if (-not (Resolve-PythonHostCommand)) {
+        Fail "Python 3.12 install did not produce a usable launcher."
+      }
     }
   }
   if ($script:pythonHostCommand.Count -eq 1) {
