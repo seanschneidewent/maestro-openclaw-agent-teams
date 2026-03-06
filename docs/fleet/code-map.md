@@ -48,6 +48,15 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 1. `maestro/purchase.py` (project provisioning path reused by Fleet)
 2. `docs/fleet/project-create.md`
 
+## Project Registry + Ingest
+
+1. `maestro/fleet/projects/registry.py`
+   - registry file pathing, normalization, project discovery sync, node identity resolution
+2. `maestro/fleet/projects/ingest_commands.py`
+   - ingest preflight, ingest/index command builders, project control payload assembly
+3. `maestro/control_plane_core.py`
+   - still owns lifecycle and awareness orchestration, but no longer owns registry or ingest command internals
+
 ## Runtime + Health
 
 1. `maestro/doctor.py`
@@ -75,7 +84,7 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 ## Current Hotspots
 
 - `maestro/fleet_deploy.py` — deploy + gateway + server + Windows tasking
-- `maestro/control_plane_core.py` — registry + awareness + project lifecycle
+- `maestro/control_plane_core.py` — awareness + project lifecycle
 - `maestro/server.py` — still owns HTTP surface and workspace routes, but no longer carries most command-center internals
 - `maestro/cli.py` — parser + Fleet command dispatch
 
@@ -89,6 +98,8 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 - `maestro/fleet/doctor/repairs.py` — doctor mutation-side repairs
 - `maestro/fleet/command_center/state.py` — command-center state assembly and node indexing
 - `maestro/fleet/command_center/routing.py` — command-center node/project routing
+- `maestro/fleet/projects/registry.py` — project registry ownership and node identity normalization
+- `maestro/fleet/projects/ingest_commands.py` — project ingest/index command ownership
 
 ## Tests To Run For Fleet Changes
 

@@ -7,7 +7,6 @@ filesystem-driven so The Commander can reason from live state.
 from __future__ import annotations
 
 import json
-import shlex
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -15,6 +14,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .command_center import build_project_snapshot, discover_project_dirs
+from .fleet.projects import ingest_commands as project_ingest_commands
+from .fleet.projects import registry as project_registry
 from .fleet.shared import subprocesses as fleet_subprocesses
 from .openclaw_profile import (
     DEFAULT_FLEET_OPENCLAW_PROFILE,
@@ -359,278 +360,64 @@ def resolve_network_urls(
 
 
 def fleet_registry_path(store_root: Path) -> Path:
-    return Path(store_root).resolve() / ".command_center" / "fleet_registry.json"
+    return project_registry.fleet_registry_path(store_root)
 
 
 def _default_registry(store_root: Path) -> dict[str, Any]:
-    return {
-        "version": REGISTRY_VERSION,
-        "updated_at": "",
-        "store_root": str(Path(store_root).resolve()),
-        "projects": [],
-    }
+    return project_registry.default_registry(store_root)
 
 
 def _clean_registry_text(value: Any) -> str:
-    if not isinstance(value, str):
-        return ""
-    return value.strip()
+    return project_registry.clean_registry_text(value)
 
 
 def _normalize_bot_username(value: Any) -> str:
-    username = _clean_registry_text(value)
-    if not username:
-        return ""
-    if not username.startswith("@"):
-        username = f"@{username.lstrip('@')}"
-    return username
+    return project_registry.normalize_bot_username(value)
 
 
 def resolve_node_identity(entry: dict[str, Any]) -> tuple[str, str, str]:
-    """Resolve node identity fields using locked fallback order.
-
-    Returns tuple: (node_display_name, node_identity_source, node_handle)
-    """
-    username = _normalize_bot_username(entry.get("telegram_bot_username"))
-    display = _clean_registry_text(entry.get("telegram_bot_display_name"))
-    assignee = _clean_registry_text(entry.get("assignee"))
-    project_name = _clean_registry_text(entry.get("project_name"))
-    slug = _clean_registry_text(entry.get("project_slug"))
-
-    if username:
-        return username, "telegram_bot", username
-    if display:
-        return display, "telegram_bot", ""
-    if assignee and assignee.lower() != "unassigned":
-        return assignee, "assignee", ""
-    if project_name:
-        return project_name, "project", ""
-    return slug or "Project Node", "project", ""
+    return project_registry.resolve_node_identity(entry)
 
 
 def load_fleet_registry(store_root: Path) -> dict[str, Any]:
-    root = Path(store_root).resolve()
-    default_registry = _default_registry(root)
-    path = fleet_registry_path(root)
-    payload = load_json(path, default=default_registry)
-    if not isinstance(payload, dict):
-        return default_registry
-
-    projects = payload.get("projects")
-    if not isinstance(projects, list):
-        projects = []
-
-    normalized: list[dict[str, Any]] = []
-    for item in projects:
-        if not isinstance(item, dict):
-            continue
-        slug = item.get("project_slug")
-        if not isinstance(slug, str) or not slug.strip():
-            continue
-        name = item.get("project_name")
-        dir_name = item.get("project_dir_name")
-        store_path = item.get("project_store_path")
-        normalized_entry = {
-            "project_slug": slug.strip(),
-            "project_name": name.strip() if isinstance(name, str) and name.strip() else slug.strip(),
-            "project_dir_name": dir_name.strip() if isinstance(dir_name, str) and dir_name.strip() else slug.strip(),
-            "project_store_path": (
-                store_path.strip()
-                if isinstance(store_path, str) and store_path.strip()
-                else str(root / (dir_name if isinstance(dir_name, str) and dir_name.strip() else slug.strip()))
-            ),
-            "maestro_agent_id": (
-                item.get("maestro_agent_id")
-                if isinstance(item.get("maestro_agent_id"), str) and item.get("maestro_agent_id").strip()
-                else f"maestro-project-{slug.strip()}"
-            ),
-            "ingest_input_root": (
-                item.get("ingest_input_root").strip()
-                if isinstance(item.get("ingest_input_root"), str) and item.get("ingest_input_root").strip()
-                else ""
-            ),
-            "superintendent": (
-                item.get("superintendent").strip()
-                if isinstance(item.get("superintendent"), str) and item.get("superintendent").strip()
-                else "Unknown"
-            ),
-            "assignee": (
-                item.get("assignee").strip()
-                if isinstance(item.get("assignee"), str) and item.get("assignee").strip()
-                else "Unassigned"
-            ),
-            "status": (
-                item.get("status").strip()
-                if isinstance(item.get("status"), str) and item.get("status").strip()
-                else "active"
-            ),
-            "last_ingest_at": (
-                item.get("last_ingest_at").strip()
-                if isinstance(item.get("last_ingest_at"), str) and item.get("last_ingest_at").strip()
-                else ""
-            ),
-            "last_index_at": (
-                item.get("last_index_at").strip()
-                if isinstance(item.get("last_index_at"), str) and item.get("last_index_at").strip()
-                else ""
-            ),
-            "last_updated": (
-                item.get("last_updated").strip()
-                if isinstance(item.get("last_updated"), str) and item.get("last_updated").strip()
-                else ""
-            ),
-            "telegram_bot_username": _normalize_bot_username(item.get("telegram_bot_username")),
-            "telegram_bot_display_name": _clean_registry_text(item.get("telegram_bot_display_name")),
-            "last_conversation_at": _clean_registry_text(item.get("last_conversation_at")),
-        }
-        display_name, source, handle = resolve_node_identity(normalized_entry)
-        normalized_entry["node_display_name"] = display_name
-        normalized_entry["node_identity_source"] = source
-        normalized_entry["node_handle"] = handle
-        normalized.append(normalized_entry)
-
-    return {
-        "version": int(payload.get("version", REGISTRY_VERSION)),
-        "updated_at": payload.get("updated_at", ""),
-        "store_root": str(root),
-        "projects": sorted(normalized, key=lambda x: x["project_name"].lower()),
-    }
+    return project_registry.load_fleet_registry(store_root, load_json_fn=load_json)
 
 
 def _registries_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    left_core = {
-        "version": int(left.get("version", REGISTRY_VERSION)),
-        "store_root": str(left.get("store_root", "")),
-        "projects": left.get("projects", []),
-    }
-    right_core = {
-        "version": int(right.get("version", REGISTRY_VERSION)),
-        "store_root": str(right.get("store_root", "")),
-        "projects": right.get("projects", []),
-    }
-    return json.dumps(left_core, sort_keys=True) == json.dumps(right_core, sort_keys=True)
+    return project_registry.registries_equal(left, right)
 
 
 def save_fleet_registry(store_root: Path, registry: dict[str, Any]):
-    path = fleet_registry_path(store_root)
-    save_json(path, registry)
+    project_registry.save_fleet_registry(store_root, registry, save_json_fn=save_json)
 
 
 def sync_fleet_registry(store_root: Path, dry_run: bool = False) -> dict[str, Any]:
-    """Sync registry with discovered projects under the current store root."""
-    root = Path(store_root).resolve()
-    existing = load_fleet_registry(root)
-    existing_by_slug = {
-        item["project_slug"]: item for item in existing.get("projects", []) if isinstance(item, dict)
-    }
-
-    synced: list[dict[str, Any]] = []
-    seen_slugs: set[str] = set()
-    for project_dir in discover_project_dirs(root):
-        snapshot = build_project_snapshot(project_dir)
-        slug = str(snapshot.get("slug", "")).strip()
-        if not slug:
-            continue
-
-        project_data = load_json(project_dir / "project.json")
-        if not isinstance(project_data, dict):
-            project_data = {}
-
-        existing_entry = existing_by_slug.get(slug, {})
-        entry = {
-            "project_slug": slug,
-            "project_name": str(snapshot.get("name", "")).strip() or str(existing_entry.get("project_name", slug)),
-            "project_dir_name": project_dir.name,
-            "project_store_path": str(project_dir.resolve()),
-            "maestro_agent_id": str(existing_entry.get("maestro_agent_id", f"maestro-project-{slug}")),
-            "ingest_input_root": str(existing_entry.get("ingest_input_root", "")).strip(),
-            "superintendent": str(existing_entry.get("superintendent", "Unknown")).strip() or "Unknown",
-            "assignee": str(existing_entry.get("assignee", "Unassigned")).strip() or "Unassigned",
-            "status": str(snapshot.get("status", existing_entry.get("status", "active"))),
-            "last_ingest_at": (
-                str(project_data.get("ingested_at", "")).strip()
-                or str(existing_entry.get("last_ingest_at", "")).strip()
-            ),
-            "last_index_at": _project_index_timestamp(project_dir)
-            or str(existing_entry.get("last_index_at", "")).strip(),
-            "last_updated": (
-                str(snapshot.get("last_updated", "")).strip()
-                or str(existing_entry.get("last_updated", "")).strip()
-            ),
-            "telegram_bot_username": _normalize_bot_username(existing_entry.get("telegram_bot_username")),
-            "telegram_bot_display_name": _clean_registry_text(existing_entry.get("telegram_bot_display_name")),
-            "last_conversation_at": _clean_registry_text(existing_entry.get("last_conversation_at")),
-        }
-        display_name, source, handle = resolve_node_identity(entry)
-        entry["node_display_name"] = display_name
-        entry["node_identity_source"] = source
-        entry["node_handle"] = handle
-        synced.append(entry)
-        seen_slugs.add(slug)
-
-    for slug, item in existing_by_slug.items():
-        if slug in seen_slugs:
-            continue
-        archived = dict(item)
-        archived["status"] = "archived"
-        display_name, source, handle = resolve_node_identity(archived)
-        archived["node_display_name"] = display_name
-        archived["node_identity_source"] = source
-        archived["node_handle"] = handle
-        synced.append(archived)
-
-    synced.sort(key=lambda x: x.get("project_name", "").lower())
-    core_registry = {
-        "version": REGISTRY_VERSION,
-        "store_root": str(root),
-        "projects": synced,
-    }
-    changed = not _registries_equal(existing, core_registry)
-    registry = {
-        "version": REGISTRY_VERSION,
-        "updated_at": _now_iso() if changed else str(existing.get("updated_at", "")),
-        "store_root": str(root),
-        "projects": synced,
-    }
-    if not registry["updated_at"]:
-        registry["updated_at"] = _now_iso()
-
-    if not dry_run and changed:
-        save_fleet_registry(root, registry)
-
-    return registry
+    return project_registry.sync_fleet_registry(
+        store_root,
+        discover_project_dirs_fn=discover_project_dirs,
+        build_project_snapshot_fn=build_project_snapshot,
+        load_json_fn=load_json,
+        save_json_fn=save_json,
+        project_index_timestamp_fn=_project_index_timestamp,
+        now_iso_fn=_now_iso,
+        dry_run=dry_run,
+    )
 
 
 def _find_registry_project(registry: dict[str, Any], project_slug: str) -> dict[str, Any] | None:
-    needle = project_slug.strip().lower()
-    for item in registry.get("projects", []):
-        if not isinstance(item, dict):
-            continue
-        slug = str(item.get("project_slug", "")).strip().lower()
-        if slug == needle:
-            return item
-    return None
+    return project_registry.find_registry_project(registry, project_slug)
 
 
 def _quote_path(path: str | Path) -> str:
-    return shlex.quote(str(path))
+    return project_ingest_commands.quote_path(path)
 
 
 def _workspace_routes(project_slug: str, project_entry: dict[str, Any] | None = None) -> dict[str, str]:
-    entry = project_entry if isinstance(project_entry, dict) else {}
-    agent_id = str(entry.get("maestro_agent_id", "")).strip() or f"maestro-project-{project_slug}"
-    return {
-        "project_slug": project_slug,
-        "agent_id": agent_id,
-        "project_workspace_url": f"/{project_slug}/",
-        "agent_workspace_url": f"/agents/{agent_id}/workspace/",
-    }
+    return project_ingest_commands.workspace_routes(project_slug, project_entry)
 
 
 def _resolve_input_root(path: str | None) -> Path | None:
-    if not isinstance(path, str) or not path.strip():
-        return None
-    return Path(path).expanduser().resolve()
+    return project_ingest_commands.resolve_input_root(path)
 
 
 def build_ingest_preflight(
@@ -638,61 +425,7 @@ def build_ingest_preflight(
     project_entry: dict[str, Any],
     input_root_override: str | None = None,
 ) -> dict[str, Any]:
-    root = Path(store_root).resolve()
-    checks: list[dict[str, Any]] = []
-
-    project_store_path = Path(str(project_entry.get("project_store_path", ""))).expanduser()
-    if not project_store_path.is_absolute():
-        project_store_path = (root / project_store_path).resolve()
-
-    checks.append({
-        "name": "store_root_exists",
-        "ok": root.exists() and root.is_dir(),
-        "detail": str(root),
-    })
-    checks.append({
-        "name": "project_store_exists",
-        "ok": project_store_path.exists() and project_store_path.is_dir(),
-        "detail": str(project_store_path),
-    })
-
-    input_root_raw = input_root_override or str(project_entry.get("ingest_input_root", "")).strip()
-    input_root = _resolve_input_root(input_root_raw)
-    checks.append({
-        "name": "ingest_input_configured",
-        "ok": bool(input_root),
-        "detail": str(input_root) if input_root else "Set ingest input path for this project",
-    })
-
-    pdf_count = 0
-    if input_root:
-        input_exists = input_root.exists()
-        input_is_dir = input_root.is_dir()
-        if input_exists and input_is_dir:
-            pdf_count = len(list(input_root.rglob("*.pdf")))
-        checks.append({
-            "name": "ingest_input_exists",
-            "ok": input_exists,
-            "detail": str(input_root),
-        })
-        checks.append({
-            "name": "ingest_input_is_dir",
-            "ok": input_is_dir,
-            "detail": str(input_root),
-        })
-        checks.append({
-            "name": "ingest_input_has_pdfs",
-            "ok": pdf_count > 0,
-            "detail": f"{pdf_count} pdf(s) discovered",
-        })
-
-    ready = all(bool(item.get("ok")) for item in checks)
-    return {
-        "ready": ready,
-        "checks": checks,
-        "resolved_input_root": str(input_root) if input_root else "",
-        "pdf_count": pdf_count,
-    }
+    return project_ingest_commands.build_ingest_preflight(store_root, project_entry, input_root_override=input_root_override)
 
 
 def build_ingest_command(
@@ -701,36 +434,16 @@ def build_ingest_command(
     input_root_override: str | None = None,
     dpi: int = 200,
 ) -> dict[str, Any]:
-    root = Path(store_root).resolve()
-    project_name = str(project_entry.get("project_name", project_entry.get("project_slug", ""))).strip()
-    project_store_path = str(project_entry.get("project_store_path", "")).strip()
-    input_root_raw = input_root_override or str(project_entry.get("ingest_input_root", "")).strip()
-    resolved_input = _resolve_input_root(input_root_raw)
-
-    if resolved_input:
-        input_token = _quote_path(resolved_input)
-        needs_input_path = False
-    else:
-        input_token = DEFAULT_INPUT_PLACEHOLDER
-        needs_input_path = True
-
-    store_token = _quote_path(Path(project_store_path).resolve()) if project_store_path else _quote_path(root)
-    command = (
-        f"maestro ingest {input_token} "
-        f"--project-name {_quote_path(project_name)} "
-        f"--store {store_token} "
-        f"--dpi {int(dpi)}"
+    return project_ingest_commands.build_ingest_command(
+        store_root,
+        project_entry,
+        input_root_override=input_root_override,
+        dpi=dpi,
     )
-    return {
-        "command": command,
-        "needs_input_path": needs_input_path,
-        "resolved_input_root": str(resolved_input) if resolved_input else "",
-    }
 
 
 def build_index_command(project_entry: dict[str, Any]) -> str:
-    project_store_path = str(project_entry.get("project_store_path", "")).strip()
-    return f"maestro index {_quote_path(project_store_path)}"
+    return project_ingest_commands.build_index_command(project_entry)
 
 
 def project_control_payload(
@@ -739,22 +452,15 @@ def project_control_payload(
     input_root_override: str | None = None,
     dpi: int = 200,
 ) -> dict[str, Any]:
-    registry = sync_fleet_registry(store_root)
-    entry = _find_registry_project(registry, project_slug)
-    if not entry:
-        return {"ok": False, "error": f"Project '{project_slug}' is not registered", "project_slug": project_slug}
-
-    ingest = build_ingest_command(store_root, entry, input_root_override=input_root_override, dpi=dpi)
-    preflight = build_ingest_preflight(store_root, entry, input_root_override=input_root_override)
-    return {
-        "ok": True,
-        "project": entry,
-        "workspace": _workspace_routes(project_slug, entry),
-        "ingest": ingest,
-        "preflight": preflight,
-        "index_command": build_index_command(entry),
-        "start_command": f"maestro start --store {_quote_path(Path(store_root).resolve())}",
-    }
+    return project_ingest_commands.project_control_payload(
+        store_root,
+        project_slug,
+        sync_fleet_registry_fn=sync_fleet_registry,
+        find_registry_project_fn=_find_registry_project,
+        workspace_routes_fn=_workspace_routes,
+        input_root_override=input_root_override,
+        dpi=dpi,
+    )
 
 
 def create_project_node(
