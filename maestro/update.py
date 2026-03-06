@@ -488,6 +488,28 @@ def _sync_workspace_assets(
         if profile == PROFILE_FLEET
         else {}
     )
+    stale_company_markers = {
+        "SOUL.md": (
+            "license boundaries",
+            "do not bypass license policy",
+        ),
+        "IDENTITY.md": (),
+        "USER.md": (),
+        "AGENTS.md": (
+            "for license lifecycle",
+        ),
+        "TOOLS.md": (
+            "handle license lifecycle",
+            "maestro-fleet license generate",
+        ),
+    }
+
+    def _should_refresh_company_generated_file(filename: str, current_content: str) -> bool:
+        if profile != PROFILE_FLEET or not current_content.strip():
+            return False
+        markers = stale_company_markers.get(filename, ())
+        lowered = current_content.lower()
+        return any(marker in lowered for marker in markers)
 
     for filename, desired_content in desired_identity_files.items():
         dst = workspace / filename
@@ -506,6 +528,9 @@ def _sync_workspace_assets(
         elif template_content and current_content.strip() == template_content.strip():
             needs_write = True
             change_label = f"Updated generic {filename} for Commander role"
+        elif _should_refresh_company_generated_file(filename, current_content):
+            needs_write = True
+            change_label = f"Updated stale {filename} for Commander role"
 
         if needs_write:
             if not dry_run:
@@ -513,16 +538,26 @@ def _sync_workspace_assets(
             changes.append(change_label)
 
     agents_md = workspace / "AGENTS.md"
+    current_agents = agents_md.read_text(encoding="utf-8") if agents_md.exists() else ""
     if not agents_md.exists():
         if not dry_run:
             agents_md.write_text(desired_agents, encoding="utf-8")
         changes.append("Added missing AGENTS.md")
+    elif _should_refresh_company_generated_file("AGENTS.md", current_agents):
+        if not dry_run:
+            agents_md.write_text(desired_agents, encoding="utf-8")
+        changes.append("Updated stale AGENTS.md for Commander role")
 
     tools_md = workspace / "TOOLS.md"
+    current_tools = tools_md.read_text(encoding="utf-8") if tools_md.exists() else ""
     if not tools_md.exists():
         if not dry_run:
             tools_md.write_text(desired_tools, encoding="utf-8")
         changes.append("Added missing TOOLS.md")
+    elif _should_refresh_company_generated_file("TOOLS.md", current_tools):
+        if not dry_run:
+            tools_md.write_text(desired_tools, encoding="utf-8")
+        changes.append("Updated stale TOOLS.md for Commander role")
 
     env_file = workspace / ".env"
     if not env_file.exists():

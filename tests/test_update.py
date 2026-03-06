@@ -255,6 +255,100 @@ def test_update_replaces_generic_identity_assets_for_fleet(tmp_path: Path):
     assert "Company Leadership" in (workspace / "USER.md").read_text(encoding="utf-8")
 
 
+def test_update_replaces_stale_commander_agents_and_tools(tmp_path: Path):
+    home = tmp_path / "home"
+    openclaw_dir = home / ".openclaw"
+    workspace = openclaw_dir / "workspace-maestro"
+    template_dir = _make_template_dir(tmp_path)
+
+    config = {
+        "agents": {
+            "list": [
+                {
+                    "id": "maestro-company",
+                    "name": "The Commander",
+                    "default": True,
+                    "model": "openai/gpt-5.2",
+                    "workspace": str(workspace),
+                }
+            ]
+        },
+        "channels": {"telegram": _default_telegram()},
+        "bindings": _default_bindings(),
+    }
+    _write_json(openclaw_dir / "openclaw.json", config)
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "AGENTS.md").write_text(
+        "# AGENTS.md\n- For license lifecycle, use local expiring keys and track annual renewal.\n",
+        encoding="utf-8",
+    )
+    (workspace / "TOOLS.md").write_text(
+        "# TOOLS.md\n- Handle license lifecycle and annual key refresh planning\n"
+        "- `maestro-fleet license generate --project-name \"...\"` — issue local expiring project key\n",
+        encoding="utf-8",
+    )
+
+    summary, code = perform_update(
+        restart_gateway=False,
+        home_dir=home,
+        template_dir=template_dir,
+        command_runner=lambda cmd: (False, ""),
+    )
+
+    assert code == 0
+    assert summary.workspace_changed
+    assert "Updated stale AGENTS.md for Commander role" in summary.changes
+    assert "Updated stale TOOLS.md for Commander role" in summary.changes
+    assert "license lifecycle" not in (workspace / "AGENTS.md").read_text(encoding="utf-8").lower()
+    assert "maestro-fleet license generate" not in (workspace / "TOOLS.md").read_text(encoding="utf-8").lower()
+
+
+def test_update_replaces_stale_commander_soul(tmp_path: Path):
+    home = tmp_path / "home"
+    openclaw_dir = home / ".openclaw"
+    workspace = openclaw_dir / "workspace-maestro"
+    template_dir = _make_template_dir(tmp_path)
+
+    config = {
+        "agents": {
+            "list": [
+                {
+                    "id": "maestro-company",
+                    "name": "The Commander",
+                    "default": True,
+                    "model": "openai/gpt-5.2",
+                    "workspace": str(workspace),
+                }
+            ]
+        },
+        "channels": {"telegram": _default_telegram()},
+        "bindings": _default_bindings(),
+    }
+    _write_json(openclaw_dir / "openclaw.json", config)
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "SOUL.md").write_text(
+        "# SOUL.md\n- Protect system boundaries, license boundaries, and cross-project isolation\n"
+        "- Do not bypass license policy, routing policy, or project isolation policy\n",
+        encoding="utf-8",
+    )
+
+    summary, code = perform_update(
+        restart_gateway=False,
+        home_dir=home,
+        template_dir=template_dir,
+        command_runner=lambda cmd: (False, ""),
+    )
+
+    assert code == 0
+    assert summary.workspace_changed
+    assert "Updated stale SOUL.md for Commander role" in summary.changes
+    soul = (workspace / "SOUL.md").read_text(encoding="utf-8").lower()
+    assert "license boundaries" not in soul
+    assert "do not bypass license policy" not in soul
+
+
 def test_ensure_frontend_artifacts_dry_run(monkeypatch):
     monkeypatch.setattr("maestro.update._frontend_dist_available", lambda *_args, **_kwargs: False)
     changes, warnings = _ensure_frontend_artifacts("solo", dry_run=True)
