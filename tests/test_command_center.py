@@ -510,6 +510,44 @@ class TestCommandCenterAPI:
         assert f"slug={slug}" in captured["message"]
         assert "USER REQUEST: status report" in captured["message"]
 
+    def test_node_send_endpoint_marks_zero_project_fleet_as_company_formation(self, tmp_path: Path, monkeypatch):
+        empty_store = tmp_path / "empty-store"
+        empty_store.mkdir(parents=True, exist_ok=True)
+        server.store_path = empty_store
+        server.projects = {}
+        server.command_center_state = {}
+        server.control_plane_state = {}
+        server.fleet_registry = {"version": 1, "projects": []}
+        server._refresh_command_center_state()
+        server._refresh_control_plane_state()
+        captured: dict[str, str] = {}
+
+        monkeypatch.setattr(
+            server,
+            "send_agent_message",
+            lambda **kwargs: captured.update({"message": kwargs["message"]}) or {
+                "ok": True,
+                "conversation": {
+                    "ok": True,
+                    "agent_id": kwargs["agent_id"],
+                    "project_slug": kwargs.get("project_slug", ""),
+                    "session_id": "agent-session",
+                    "messages": [],
+                },
+                "result": {"ok": True},
+            },
+        )
+
+        payload = asyncio.run(server.api_command_center_node_send(
+            "commander",
+            {"message": "let's get set up", "source": "command_center_ui"},
+        ))
+        assert payload["ok"] is True
+        assert "active_project_nodes=none" in captured["message"]
+        assert "operating_phase=company_formation" in captured["message"]
+        assert "commander_state=already_live_do_not_reask_setup_role" in captured["message"]
+        assert "rule=do_not_ask_whether_the_commander_should_be_set_up" in captured["message"]
+
     def test_registry_identity_overlays_assignee_in_state_and_detail(self, single_project_store: Path):
         slug = build_project_snapshot(single_project_store)["slug"]
         _write_json(

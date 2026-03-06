@@ -391,9 +391,15 @@ def send_node_message(
             "LIVE FLEET CONTEXT FROM COMMAND CENTER",
             f"store_root={Path(store_path).resolve()}",
             "commander_node_slug=commander",
+            "commander_identity=the_commander_company_orchestrator",
         ]
         if not active_slugs:
             segments.append("active_project_nodes=none")
+            segments.extend([
+                "operating_phase=company_formation",
+                "commander_state=already_live_do_not_reask_setup_role",
+                "next_priority=learn_company_sops_and_provision_initial_agents",
+            ])
         else:
             project_segments: list[str] = []
             for project_slug in active_slugs:
@@ -419,11 +425,16 @@ def send_node_message(
                     f"slug={project_slug}|agent_id={agent_id}|name={project_name}|status={status}"
                 )
             segments.append(f"active_project_nodes={';'.join(project_segments)}")
+            segments.extend([
+                "operating_phase=fleet_operations",
+                "next_priority=coordinate_existing_project_maestros",
+            ])
 
         segments.extend([
             "rule=answer_project_node_existence_from_live_list",
             "rule=never_claim_zero_projects_when_live_list_non_empty",
             "rule=report_project_maestro_replies_after_dispatch",
+            "rule=do_not_ask_whether_the_commander_should_be_set_up",
         ])
         return " || ".join(segments).strip()
 

@@ -29,6 +29,9 @@ from .openclaw_profile import (
     prepend_openclaw_profile_shell,
 )
 from .workspace_templates import (
+    render_company_identity_md,
+    render_company_soul_md,
+    render_company_user_md,
     provider_env_key_for_model,
     render_company_agents_md,
     render_personal_agents_md,
@@ -476,6 +479,38 @@ def _sync_workspace_assets(
         if profile == PROFILE_FLEET
         else render_personal_tools_md(active_provider_env_key=active_provider_env_key)
     )
+    desired_identity_files = (
+        {
+            "SOUL.md": render_company_soul_md(),
+            "IDENTITY.md": render_company_identity_md(),
+            "USER.md": render_company_user_md(),
+        }
+        if profile == PROFILE_FLEET
+        else {}
+    )
+
+    for filename, desired_content in desired_identity_files.items():
+        dst = workspace / filename
+        current_content = dst.read_text(encoding="utf-8") if dst.exists() else ""
+        template_content = ""
+        if template_root is not None:
+            src = template_root / filename
+            if src.exists():
+                template_content = src.read_text(encoding="utf-8")
+
+        needs_write = False
+        change_label = ""
+        if not dst.exists():
+            needs_write = True
+            change_label = f"Added missing {filename}"
+        elif template_content and current_content.strip() == template_content.strip():
+            needs_write = True
+            change_label = f"Updated generic {filename} for Commander role"
+
+        if needs_write:
+            if not dry_run:
+                dst.write_text(desired_content, encoding="utf-8")
+            changes.append(change_label)
 
     agents_md = workspace / "AGENTS.md"
     if not agents_md.exists():

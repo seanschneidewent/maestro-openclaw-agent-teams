@@ -5,6 +5,9 @@ from __future__ import annotations
 from maestro.workspace_templates import (
     provider_env_key_for_model,
     render_company_agents_md,
+    render_company_identity_md,
+    render_company_soul_md,
+    render_company_user_md,
     render_tools_md,
     render_workspace_env,
 )
@@ -75,6 +78,21 @@ def test_render_workspace_env_includes_model_auth_method_when_set():
 def test_render_company_agents_md_has_control_plane_boundary():
     content = render_company_agents_md()
     assert "The Commander control-plane orchestrator" in content
+    assert "Do not ask whether the Commander should be set up." in content
+    assert "company formation mode" in content
     assert "Do not inspect or enumerate project plan files under `knowledge_store/`" in content
     assert "Routing Rules" in content
     assert "project-detail questions" in content
+
+
+def test_render_company_identity_files_describe_company_setup_role():
+    soul = render_company_soul_md()
+    identity = render_company_identity_md()
+    user = render_company_user_md()
+
+    assert "You are **The Commander**" in soul
+    assert "Do not ask whether the commander should be set up." in soul
+    assert "I am The Commander for this company." in identity
+    assert "company-level Maestro orchestrator" in identity
+    assert "Company Leadership" in user
+    assert "Specialty teams desired" in user

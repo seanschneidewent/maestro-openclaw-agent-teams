@@ -211,6 +211,50 @@ def test_update_dry_run_does_not_write_files(tmp_path: Path):
     assert any("dry-run" in c for c in summary.changes)
 
 
+def test_update_replaces_generic_identity_assets_for_fleet(tmp_path: Path):
+    home = tmp_path / "home"
+    openclaw_dir = home / ".openclaw"
+    workspace = openclaw_dir / "workspace-maestro"
+    template_dir = _make_template_dir(tmp_path)
+
+    config = {
+        "agents": {
+            "list": [
+                {
+                    "id": "maestro-company",
+                    "name": "The Commander",
+                    "default": True,
+                    "model": "openai/gpt-5.2",
+                    "workspace": str(workspace),
+                }
+            ]
+        },
+        "channels": {"telegram": _default_telegram()},
+        "bindings": _default_bindings(),
+    }
+    _write_json(openclaw_dir / "openclaw.json", config)
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    for filename in ("SOUL.md", "IDENTITY.md", "USER.md"):
+        (workspace / filename).write_text((template_dir / filename).read_text(encoding="utf-8"), encoding="utf-8")
+
+    summary, code = perform_update(
+        restart_gateway=False,
+        home_dir=home,
+        template_dir=template_dir,
+        command_runner=lambda cmd: (False, ""),
+    )
+
+    assert code == 0
+    assert summary.workspace_changed
+    assert "Updated generic SOUL.md for Commander role" in summary.changes
+    assert "Updated generic IDENTITY.md for Commander role" in summary.changes
+    assert "Updated generic USER.md for Commander role" in summary.changes
+    assert "The Commander" in (workspace / "SOUL.md").read_text(encoding="utf-8")
+    assert "company-level Maestro orchestrator" in (workspace / "IDENTITY.md").read_text(encoding="utf-8")
+    assert "Company Leadership" in (workspace / "USER.md").read_text(encoding="utf-8")
+
+
 def test_ensure_frontend_artifacts_dry_run(monkeypatch):
     monkeypatch.setattr("maestro.update._frontend_dist_available", lambda *_args, **_kwargs: False)
     changes, warnings = _ensure_frontend_artifacts("solo", dry_run=True)
