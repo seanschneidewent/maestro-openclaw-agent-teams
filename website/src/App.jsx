@@ -315,7 +315,7 @@ function buildPolicyContent() {
       {
         heading: 'Commercial terms',
         paragraphs: [
-          'Payments are processed by Stripe through hosted checkout. Additional project-specific terms, support expectations, and service limitations may be documented in follow-up agreements, onboarding materials, or direct written communication.',
+          'Commercial terms are finalized during consultation and onboarding. Invoices are issued after scope confirmation using the billing platform selected for the engagement, such as Stripe Invoicing or QuickBooks.',
           'To the maximum extent permitted by law, liability is limited to amounts paid for the applicable service period unless a separate written agreement states otherwise.',
         ],
       },
@@ -371,8 +371,6 @@ function renderStandalonePage(pathname, primaryContactHref) {
 
 export default function App() {
   const calendlyUrl = cleanText(import.meta.env.VITE_CALENDLY_URL);
-  const setupPaymentLink = cleanText(import.meta.env.VITE_STRIPE_SETUP_PAYMENT_LINK);
-  const monthlyPaymentLink = cleanText(import.meta.env.VITE_STRIPE_MONTHLY_PAYMENT_LINK);
   const setupPriceLabel = cleanText(import.meta.env.VITE_STRIPE_SETUP_PRICE_LABEL) || '$1,500';
   const monthlyPriceLabel = cleanText(import.meta.env.VITE_STRIPE_MONTHLY_PRICE_LABEL) || '$400 / month';
   const contactEmail = cleanText(import.meta.env.VITE_CONTACT_EMAIL);
@@ -918,6 +916,9 @@ export default function App() {
               first project agents, ingest your plans, and make sure everything is running before we leave. You are
               operational the same day.
             </p>
+            <p className="mt-5 text-sm font-medium leading-relaxed text-zinc-400">
+              The website flow is consultation-first. Billing is handled after scope confirmation and onboarding.
+            </p>
           </div>
 
           <div className="mx-auto grid max-w-4xl gap-8 md:grid-cols-2">
@@ -931,7 +932,7 @@ export default function App() {
                 <div className="mb-2 flex items-baseline gap-1">
                   <span className="text-5xl font-extrabold tracking-tighter text-zinc-950 tabular-nums">{setupPriceLabel}</span>
                 </div>
-                <p className="mb-8 font-medium text-zinc-500">Full fleet deployment and configuration</p>
+                <p className="mb-8 font-medium text-zinc-500">Full fleet deployment and configuration, invoiced after consultation</p>
                 <div className="space-y-4">
                   {[
                     'Remote session and full system setup on your machine',
@@ -948,10 +949,10 @@ export default function App() {
                   ))}
                 </div>
                 <CtaLink
-                  href={setupPaymentLink}
+                  href={primaryContactHref}
                   className="mt-10 inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_25px_rgba(6,182,212,0.4)]"
                 >
-                  Reserve deployment
+                  Book consultation
                   <ArrowUpRight className="h-4 w-4 text-cyan-400" />
                 </CtaLink>
               </div>
@@ -967,7 +968,7 @@ export default function App() {
                 <div className="mb-2 flex items-baseline gap-1">
                   <span className="text-5xl font-extrabold tracking-tighter text-zinc-950 tabular-nums">{monthlyPriceLabel}</span>
                 </div>
-                <p className="mb-8 font-medium text-zinc-500">Ongoing maintenance and support</p>
+                <p className="mb-8 font-medium text-zinc-500">Ongoing maintenance and support, available after setup</p>
                 <div className="space-y-4">
                   {[
                     'Fleet health monitoring and proactive maintenance',
@@ -984,10 +985,10 @@ export default function App() {
                   ))}
                 </div>
                 <CtaLink
-                  href={monthlyPaymentLink}
+                  href={primaryContactHref}
                   className="mt-10 inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-200/60 bg-white px-6 py-3.5 text-sm font-semibold text-zinc-800 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-cyan-50/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.18)]"
                 >
-                  Start monthly coverage
+                  Discuss monthly coverage
                   <ArrowUpRight className="h-4 w-4 text-cyan-600" />
                 </CtaLink>
               </div>

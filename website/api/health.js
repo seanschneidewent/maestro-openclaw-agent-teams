@@ -15,6 +15,11 @@ export default {
         stripeMonthlyPriceId: Boolean(optionalEnv('STRIPE_MONTHLY_PRICE_ID')),
         kitApiKey: Boolean(optionalEnv('KIT_API_KEY')),
         kitCustomerTagId: Boolean(optionalEnv('KIT_TAG_CUSTOMER')),
+        qboRealmId: Boolean(optionalEnv('QBO_REALM_ID')),
+        qboClientId: Boolean(optionalEnv('QBO_CLIENT_ID')),
+        qboClientSecret: Boolean(optionalEnv('QBO_CLIENT_SECRET')),
+        qboRefreshToken: Boolean(optionalEnv('QBO_REFRESH_TOKEN')),
+        invoicingApiToken: Boolean(optionalEnv('INVOICING_API_TOKEN')),
       },
     });
   },
