@@ -98,11 +98,48 @@ function Invoke-WingetInstall([string]$packageId, [string]$label) {
   if (-not $winget) {
     Fail "$label is required and winget.exe is unavailable."
   }
+  $installArgs = @(
+    "install",
+    "--id", $packageId,
+    "--exact",
+    "--accept-package-agreements",
+    "--accept-source-agreements",
+    "--disable-interactivity",
+    "--silent"
+  )
+
   Write-Log "Installing $label via winget."
-  & $winget.Source install --id $packageId --exact --accept-package-agreements --accept-source-agreements --disable-interactivity --silent
-  if ($LASTEXITCODE -ne 0) {
-    Fail "winget install failed for $packageId"
+  $installOutput = & $winget.Source @installArgs 2>&1
+  $installCode = $LASTEXITCODE
+  if ($installCode -eq 0) {
+    return
   }
+
+  $outputText = [string]($installOutput | Out-String)
+  $outputText = $outputText.Trim()
+  $normalized = $outputText.ToLowerInvariant()
+  $staleRegistrationDetected = (
+    $normalized.Contains("found an existing package already installed") -and
+    (
+      $normalized.Contains("no available upgrade found") -or
+      $normalized.Contains("no newer package versions are available")
+    )
+  )
+
+  if ($staleRegistrationDetected) {
+    Write-Warn "$label appears registered in winget but is not currently usable. Attempting uninstall and reinstall."
+    & $winget.Source uninstall --id $packageId --exact --source winget --disable-interactivity --silent 2>&1 | Out-Null
+    Start-Sleep -Seconds 2
+    $retryOutput = & $winget.Source @installArgs 2>&1
+    $retryCode = $LASTEXITCODE
+    if ($retryCode -eq 0) {
+      return
+    }
+    $outputText = [string]($retryOutput | Out-String)
+    $outputText = $outputText.Trim()
+  }
+
+  Fail ("winget install failed for {0}`n{1}" -f $packageId, $outputText)
 }
 
 function Test-PythonCommand([string[]]$commandParts) {
