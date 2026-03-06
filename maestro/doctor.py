@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -37,6 +38,17 @@ from .workspace_templates import (
 PROVIDER_ENV_KEYS = ("OPENAI_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY")
 _ENV_TRUE = {"1", "true", "yes", "on"}
 DEFAULT_FLEET_GATEWAY_PORT = 18789
+
+
+def _safe_print(message: str) -> None:
+    text = str(message)
+    stream = sys.stdout
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        safe = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+        print(safe)
 
 def _is_placeholder(value: str | None) -> bool:
     if not value:
@@ -522,20 +534,20 @@ def run_doctor(
         home_dir=home_dir,
     )
     if json_output:
-        print(json.dumps(report, indent=2))
+        _safe_print(json.dumps(report, indent=2))
     else:
-        print("Maestro doctor summary")
-        print(f"- Profile: {report.get('profile', 'solo')}")
-        print(f"- Fix mode: {'on' if report.get('fix_mode') else 'off'}")
-        print(f"- Store root: {report.get('store_root', '')}")
-        print(f"- Recommended URL: {report.get('recommended_url', '')}")
+        _safe_print("Maestro doctor summary")
+        _safe_print(f"- Profile: {report.get('profile', 'solo')}")
+        _safe_print(f"- Fix mode: {'on' if report.get('fix_mode') else 'off'}")
+        _safe_print(f"- Store root: {report.get('store_root', '')}")
+        _safe_print(f"- Recommended URL: {report.get('recommended_url', '')}")
         if report.get("profile") == PROFILE_SOLO:
-            print(f"- Field access required: {'yes' if report.get('field_access_required') else 'no'}")
+            _safe_print(f"- Field access required: {'yes' if report.get('field_access_required') else 'no'}")
         for check in report.get("checks", []):
             if not isinstance(check, dict):
                 continue
             marker = "[OK]" if check.get("ok") else "[WARN]" if check.get("warning") else "[FAIL]"
             suffix = " (fixed)" if check.get("fixed") else ""
-            print(f"- {marker} {check.get('name', 'unknown')}: {check.get('detail', '')}{suffix}")
+            _safe_print(f"- {marker} {check.get('name', 'unknown')}: {check.get('detail', '')}{suffix}")
 
     return 0 if bool(report.get("ok")) else 1
