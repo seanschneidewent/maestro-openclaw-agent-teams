@@ -122,29 +122,77 @@ function Test-PythonCommand([string[]]$commandParts) {
   }
 }
 
-function Ensure-Python() {
+function Add-ExistingPathEntries([string[]]$entries) {
+  foreach ($entry in $entries) {
+    if ([string]::IsNullOrWhiteSpace($entry)) {
+      continue
+    }
+    if (Test-Path $entry) {
+      Ensure-PathEntry $entry
+    }
+  }
+}
+
+function Refresh-InstalledToolPaths() {
+  Add-ExistingPathEntries @(
+    (Join-Path $HOME "AppData\Local\Programs\Python\Launcher"),
+    (Join-Path $HOME "AppData\Local\Programs\Python\Python313"),
+    (Join-Path $HOME "AppData\Local\Programs\Python\Python312"),
+    (Join-Path $HOME "AppData\Local\Programs\Python\Python311"),
+    "C:\Python313",
+    "C:\Python312",
+    "C:\Python311",
+    "C:\Program Files\Python313",
+    "C:\Program Files\Python312",
+    "C:\Program Files\Python311",
+    "C:\Program Files\nodejs",
+    "C:\Program Files\Tailscale"
+  )
+}
+
+function Resolve-PythonHostCommand() {
+  Refresh-InstalledToolPaths
+
   $candidates = @(
     @("py", "-3.13"),
     @("py", "-3.12"),
     @("py", "-3.11"),
-    @("python")
+    @("python"),
+    @((Join-Path $HOME "AppData\Local\Programs\Python\Launcher\py.exe"), "-3.13"),
+    @((Join-Path $HOME "AppData\Local\Programs\Python\Launcher\py.exe"), "-3.12"),
+    @((Join-Path $HOME "AppData\Local\Programs\Python\Launcher\py.exe"), "-3.11"),
+    @((Join-Path $HOME "AppData\Local\Programs\Python\Python313\python.exe")),
+    @((Join-Path $HOME "AppData\Local\Programs\Python\Python312\python.exe")),
+    @((Join-Path $HOME "AppData\Local\Programs\Python\Python311\python.exe")),
+    @("C:\Python313\python.exe"),
+    @("C:\Python312\python.exe"),
+    @("C:\Python311\python.exe"),
+    @("C:\Program Files\Python313\python.exe"),
+    @("C:\Program Files\Python312\python.exe"),
+    @("C:\Program Files\Python311\python.exe")
   )
   foreach ($candidate in $candidates) {
     if (Test-PythonCommand $candidate) {
       $script:pythonHostCommand = $candidate
-      break
+      return $true
     }
   }
+  return $false
+}
+
+function Ensure-Python() {
+  $script:pythonHostCommand = @()
+  [void](Resolve-PythonHostCommand)
   if ($script:pythonHostCommand.Count -eq 0) {
     Write-Warn "Python 3.11+ is required."
     if (-not (Prompt-YesNo "Install Python now?" $true)) {
       Fail "Python 3.11+ is required."
     }
     Invoke-WingetInstall "Python.Python.3.12" "Python 3.12"
-    if (-not (Test-PythonCommand @("py", "-3.12"))) {
+    Start-Sleep -Seconds 2
+    if (-not (Resolve-PythonHostCommand)) {
       Fail "Python 3.12 install did not produce a usable launcher."
     }
-    $script:pythonHostCommand = @("py", "-3.12")
   }
   if ($script:pythonHostCommand.Count -eq 1) {
     $script:pythonExe = (& $script:pythonHostCommand[0] -c "import sys; print(sys.executable)") | Select-Object -First 1
@@ -155,6 +203,7 @@ function Ensure-Python() {
 }
 
 function Ensure-Node() {
+  Refresh-InstalledToolPaths
   $node = Get-Command node.exe -ErrorAction SilentlyContinue
   $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
   if ($node -and $npm) {
@@ -167,6 +216,7 @@ function Ensure-Node() {
     Fail "Node.js and npm are required."
   }
   Invoke-WingetInstall "OpenJS.NodeJS.LTS" "Node.js LTS"
+  Refresh-InstalledToolPaths
   $node = Get-Command node.exe -ErrorAction SilentlyContinue
   $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
   if (-not $node -or -not $npm) {
@@ -225,6 +275,7 @@ function Get-TailscaleIPv4() {
 }
 
 function Ensure-TailscaleIfRequired() {
+  Refresh-InstalledToolPaths
   if (-not $script:requireTailscale) {
     return
   }
@@ -235,6 +286,7 @@ function Ensure-TailscaleIfRequired() {
       Fail "Tailscale is required when MAESTRO_FLEET_REQUIRE_TAILSCALE=1."
     }
     Invoke-WingetInstall "Tailscale.Tailscale" "Tailscale"
+    Refresh-InstalledToolPaths
     $tailscale = Get-Command tailscale.exe -ErrorAction SilentlyContinue
     if (-not $tailscale) {
       Fail "Tailscale install failed."
