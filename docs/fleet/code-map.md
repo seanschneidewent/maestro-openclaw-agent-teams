@@ -9,6 +9,11 @@ Use this map to quickly find where Fleet behavior is implemented.
 3. `maestro/cli.py`
 4. `maestro/fleet_deploy.py`
 
+## Refactor Guides
+
+1. `docs/fleet/architecture.md`
+2. `docs/fleet/refactor-plan.md`
+
 ## Deploy Step Ownership
 
 The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable markers:
@@ -48,6 +53,14 @@ The `run_deploy(...)` function in `maestro/fleet_deploy.py` uses searchable mark
 1. `maestro/doctor.py`
 2. `maestro/fleet_deploy.py` (`_run_doctor_for_deploy`, detached server bring-up, commissioning report)
 3. `packages/maestro-fleet/src/maestro_fleet/monitor.py`
+
+## Current Hotspots
+
+- `maestro/fleet_deploy.py` — deploy + gateway + server + Windows tasking
+- `maestro/doctor.py` — checks + repairs + gateway restart
+- `maestro/control_plane_core.py` — registry + awareness + project lifecycle
+- `maestro/server.py` — command-center state + node routing + HTTP handlers
+- `maestro/cli.py` — parser + Fleet command dispatch
 
 ## Tests To Run For Fleet Changes
 

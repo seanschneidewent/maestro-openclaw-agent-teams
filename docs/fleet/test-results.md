@@ -20,6 +20,22 @@ Execution runbook: `docs/fleet/test-runbook.md`
 | R3 | PASS | 2026-03-05 | Duplicate project drift resolved. Runtime now deduplicates same-slug project stores, `doctor` reports unique registry slugs, command center shows `2` projects, and ingest command generation targets the canonical `project_store_path`. |
 | R5 | PASS | 2026-03-05 | Interrupt/resume ingest succeeded on old machine. Partial run crossed into page `2/2`, rerun skipped completed page `1/2`, finished cleanly, and left a single canonical store (`matrix-r5-resume`) with exactly `2` page directories. |
 
+## Production One-Liner Smoke
+
+- 2026-03-06 macOS `/fleet` one-liner: PASS
+  - Host: this Mac (`/Users/seanschneidewent`)
+  - Command: literal production launcher from `https://maestro-billing-service-production.up.railway.app/fleet`
+  - Result: fresh commander-only baseline, `commander.online=true`, `0` project maestros, command center reachable at `http://127.0.0.1:3000/api/command-center/state`
+  - Important note: the local Mac had to be fully cleaned of stale OpenClaw LaunchAgents/runtimes first, including a lingering `ai.openclaw.maestro-solo` gateway on port `18789`
+  - Evidence log: `/tmp/mac-prod-oneliner-rerun.log`
+
+- 2026-03-06 Windows `/fleet.ps1` one-liner: PASS for strict prereq gate
+  - Host: `OK-COMPUTER` (`fleetlab windows`)
+  - Command: literal production launcher from `https://maestro-billing-service-production.up.railway.app/fleet.ps1`
+  - Result: installer exited cleanly with the expected hard stop because Tailscale is installed but not connected
+  - This matches the intended customer-facing behavior when `MAESTRO_FLEET_REQUIRE_TAILSCALE=1`
+  - Evidence: direct SSH smoke output captured during validation on 2026-03-06
+
 ## Windows Baseline
 
 - Fresh Windows account (`OK-COMPUTER`, user `fleetlab windows`) was bootstrapped from current source/wheels on 2026-03-05.

@@ -8,7 +8,7 @@ usage() {
 Verify production installer launcher endpoints.
 
 Usage:
-  scripts/verify-prod-installers.sh [--billing-url URL] [--expect-version X.Y.Z] [--check-fleet]
+  scripts/verify-prod-installers.sh [--billing-url URL] [--expect-version X.Y.Z] [--expect-fleet-version X.Y.Z] [--check-fleet]
 
 Checks:
   - /install, /free, /pro endpoints are reachable
@@ -16,7 +16,8 @@ Checks:
   - MAESTRO_OPENCLAW_PROFILE is maestro-solo
   - /free intent=free; /install and /pro intent=pro
   - Optional: /fleet endpoint and Fleet launcher vars
-  - Optional release version pin check against wheel URLs
+  - Optional generic installer version pin check against wheel URLs
+  - Optional Fleet launcher version pin check against wheel URLs
 EOF
 }
 
@@ -40,6 +41,12 @@ extract_var() {
   echo "$script" | sed -n "s/^export ${var_name}='\\(.*\\)'$/\\1/p" | head -n1
 }
 
+extract_pwsh_var() {
+  local var_name="$1"
+  local script="$2"
+  printf '%s\n' "$script" | sed -n 's/^\$env:'"$var_name"' = '\''\(.*\)'\''$/\1/p' | head -n1
+}
+
 assert_contains() {
   local haystack="$1"
   local needle="$2"
@@ -56,6 +63,7 @@ main() {
 
   local billing_url="$BILLING_URL_DEFAULT"
   local expect_version=""
+  local expect_fleet_version=""
   local check_fleet="0"
 
   while [[ $# -gt 0 ]]; do
@@ -66,6 +74,10 @@ main() {
         ;;
       --expect-version)
         expect_version="${2:-}"
+        shift 2
+        ;;
+      --expect-fleet-version)
+        expect_fleet_version="${2:-}"
         shift 2
         ;;
       --check-fleet)
@@ -110,7 +122,9 @@ main() {
       pro) payload="$pro_script" ;;
     esac
 
-    assert_contains "$payload" "export MAESTRO_INSTALL_AUTO='1'" "$name"
+    local auto_mode
+    auto_mode="$(extract_var "MAESTRO_INSTALL_AUTO" "$payload")"
+    [[ "$auto_mode" == "auto" ]] || fail "/$name MAESTRO_INSTALL_AUTO expected 'auto', got '$auto_mode'"
     assert_contains "$payload" "export MAESTRO_OPENCLAW_PROFILE='maestro-solo'" "$name"
     assert_contains "$payload" "install-maestro-install-macos.sh" "$name"
 
@@ -131,13 +145,17 @@ main() {
   done
 
   if [[ "$check_fleet" == "1" ]]; then
-    assert_contains "$fleet_script" "export MAESTRO_INSTALL_AUTO='1'" "fleet"
+    local fleet_auto_mode
+    local fleet_windows_auto_mode
+    fleet_auto_mode="$(extract_var "MAESTRO_INSTALL_AUTO" "$fleet_script")"
+    [[ "$fleet_auto_mode" == "auto" ]] || fail "/fleet MAESTRO_INSTALL_AUTO expected 'auto', got '$fleet_auto_mode'"
     assert_contains "$fleet_script" "export MAESTRO_FLEET_PACKAGE_SPEC='" "fleet"
     assert_contains "$fleet_script" "export MAESTRO_FLEET_REQUIRE_TAILSCALE='" "fleet"
     assert_contains "$fleet_script" "export MAESTRO_FLEET_DEPLOY='" "fleet"
     assert_contains "$fleet_script" "install-maestro-fleet.sh" "fleet"
     assert_contains "$fleet_script" "install-maestro-fleet-linux.sh" "fleet"
-    assert_contains "$fleet_windows_script" "\$env:MAESTRO_INSTALL_AUTO = '1'" "fleet.ps1"
+    fleet_windows_auto_mode="$(extract_pwsh_var "MAESTRO_INSTALL_AUTO" "$fleet_windows_script")"
+    [[ "$fleet_windows_auto_mode" == "auto" ]] || fail "/fleet.ps1 MAESTRO_INSTALL_AUTO expected 'auto', got '$fleet_windows_auto_mode'"
     assert_contains "$fleet_windows_script" "\$env:MAESTRO_FLEET_PACKAGE_SPEC = '" "fleet.ps1"
     assert_contains "$fleet_windows_script" "\$env:MAESTRO_FLEET_REQUIRE_TAILSCALE = '" "fleet.ps1"
     assert_contains "$fleet_windows_script" "\$env:MAESTRO_FLEET_DEPLOY = '" "fleet.ps1"
@@ -150,13 +168,16 @@ main() {
     assert_contains "$install_script" "$expected_marker" "install"
     assert_contains "$free_script" "$expected_marker" "free"
     assert_contains "$pro_script" "$expected_marker" "pro"
-    if [[ "$check_fleet" == "1" ]]; then
-      local fleet_tag="fleet-v${expect_version#v}"
-      local expected_fleet_marker="/releases/download/$fleet_tag/"
-      assert_contains "$fleet_script" "$expected_fleet_marker" "fleet"
-      assert_contains "$fleet_windows_script" "$expected_fleet_marker" "fleet.ps1"
-    fi
     echo "[verify-installers] release marker check passed for $tag"
+  fi
+
+  if [[ -n "$expect_fleet_version" ]]; then
+    [[ "$check_fleet" == "1" ]] || fail "--expect-fleet-version requires --check-fleet"
+    local fleet_tag="fleet-v${expect_fleet_version#v}"
+    local expected_fleet_marker="/releases/download/$fleet_tag/"
+    assert_contains "$fleet_script" "$expected_fleet_marker" "fleet"
+    assert_contains "$fleet_windows_script" "$expected_fleet_marker" "fleet.ps1"
+    echo "[verify-installers] Fleet release marker check passed for $fleet_tag"
   fi
 
   local install_sha free_sha pro_sha fleet_sha fleet_windows_sha

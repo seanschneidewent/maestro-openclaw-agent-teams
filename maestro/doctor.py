@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .control_plane import ensure_telegram_account_bindings, resolve_network_urls, sync_fleet_registry
+from .fleet.shared import subprocesses as fleet_subprocesses
 from .openclaw_profile import (
     DEFAULT_FLEET_OPENCLAW_PROFILE,
     openclaw_config_path,
@@ -461,20 +462,11 @@ def _rotate_stale_sessions(
 
 def _run_cmd(args: list[str], timeout: int = 25) -> tuple[bool, str]:
     default_profile = _default_openclaw_profile_for_runtime(Path.home().resolve())
-    profiled_args = prepend_openclaw_profile_args(args, default_profile=default_profile)
-    try:
-        result = subprocess.run(
-            profiled_args,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except Exception as exc:
-        return False, str(exc)
-    output = (result.stdout or "").strip() or (result.stderr or "").strip()
-    return result.returncode == 0, output
+    return fleet_subprocesses.run_profiled_cmd(
+        args,
+        timeout=timeout,
+        prepend_profile_args=lambda cmd: prepend_openclaw_profile_args(cmd, default_profile=default_profile),
+    )
 
 
 def _sync_gateway_auth_tokens(

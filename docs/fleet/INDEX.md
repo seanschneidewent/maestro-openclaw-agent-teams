@@ -18,7 +18,9 @@ Start here for Maestro Fleet architecture, operator flow, and code navigation.
 ## Implementation Maps
 
 1. [Fleet Code Map](code-map.md)
-2. [Fleet Enable](enable.md)
+2. [Fleet Architecture](architecture.md)
+3. [Fleet Refactor Plan](refactor-plan.md)
+4. [Fleet Enable](enable.md)
 
 ## Fast Pointers
 

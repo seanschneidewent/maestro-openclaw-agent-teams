@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .command_center import build_project_snapshot, discover_project_dirs
+from .fleet.shared import subprocesses as fleet_subprocesses
 from .openclaw_profile import (
     DEFAULT_FLEET_OPENCLAW_PROFILE,
     openclaw_config_path,
@@ -41,33 +42,15 @@ def _now_iso() -> str:
 
 def _default_runner(args: list[str], timeout: int = 6) -> tuple[bool, str]:
     default_profile = DEFAULT_FLEET_OPENCLAW_PROFILE if resolve_profile() == PROFILE_FLEET else ""
-    profiled_args = prepend_openclaw_profile_args(args, default_profile=default_profile)
-    try:
-        result = subprocess.run(
-            profiled_args,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-    except Exception as exc:
-        return False, str(exc)
-    output = (result.stdout or "").strip() or (result.stderr or "").strip()
-    return result.returncode == 0, output
+    return fleet_subprocesses.run_profiled_cmd(
+        args,
+        timeout=timeout,
+        prepend_profile_args=lambda cmd: prepend_openclaw_profile_args(cmd, default_profile=default_profile),
+    )
 
 
 def _parse_json_from_output(text: str) -> dict[str, Any]:
-    raw = str(text or "")
-    idx = raw.find("{")
-    if idx < 0:
-        return {}
-    snippet = raw[idx:].strip()
-    try:
-        payload = json.loads(snippet)
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    return fleet_subprocesses.parse_json_from_output(text)
 
 
 def _gateway_status_running(gateway_status: dict[str, Any]) -> bool:

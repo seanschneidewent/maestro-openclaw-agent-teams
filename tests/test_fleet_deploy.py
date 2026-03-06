@@ -132,6 +132,61 @@ def test_gateway_service_running_accepts_rpc_ok_when_service_reports_stopped():
     }) is True
 
 
+def test_repair_gateway_token_mismatch_evicts_current_listener_after_restart_changes_pid(monkeypatch):
+    statuses = iter(
+        [
+            (
+                True,
+                {
+                    "rpc": {"ok": False, "error": "token mismatch"},
+                    "port": {"status": "busy", "listeners": [{"pid": 1001}]},
+                },
+                '{"rpc":{"error":"token mismatch"}}',
+            ),
+            (
+                True,
+                {
+                    "rpc": {"ok": False, "error": "token mismatch"},
+                    "port": {"status": "busy", "listeners": [{"pid": 2002}]},
+                },
+                '{"rpc":{"error":"token mismatch"}}',
+            ),
+            (
+                True,
+                {
+                    "rpc": {"ok": False, "error": "token mismatch"},
+                    "port": {"status": "busy", "listeners": [{"pid": 3003}]},
+                },
+                '{"rpc":{"error":"token mismatch"}}',
+            ),
+            (
+                True,
+                {
+                    "rpc": {"ok": True},
+                    "port": {"status": "busy", "listeners": [{"pid": 4004}]},
+                },
+                '{"rpc":{"ok":true}}',
+            ),
+        ]
+    )
+    evict_calls: list[set[int] | None] = []
+
+    monkeypatch.setattr(fleet_deploy, "_gateway_status_snapshot", lambda timeout=12: next(statuses))
+    monkeypatch.setattr(fleet_deploy, "_run_cmd", lambda *args, **kwargs: (True, "ok"))
+    monkeypatch.setattr(fleet_deploy, "_fleet_gateway_port", lambda: 18789)
+
+    def _fake_evict(gateway_status, *, only_pids=None):
+        evict_calls.append(set(only_pids) if only_pids is not None else None)
+        return [pid for pid in sorted(only_pids or [])]
+
+    monkeypatch.setattr(fleet_deploy, "_evict_gateway_listener_pids", _fake_evict)
+
+    result = fleet_deploy._repair_gateway_device_token_mismatch()
+
+    assert result["repaired"] is True
+    assert evict_calls == [{1001, 3003}]
+
+
 def test_resolve_deploy_port_falls_forward_when_requested_in_use(monkeypatch):
     def _fake_port_listening(port: int, host: str = "127.0.0.1") -> bool:
         return port in {3000, 3001}
