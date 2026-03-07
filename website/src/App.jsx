@@ -20,6 +20,8 @@ import {
   Flame,
   Mountain,
   Hammer,
+  Menu,
+  X,
 } from 'lucide-react';
 
 const cleanText = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -145,6 +147,79 @@ function EmailSignupSection() {
         </div>
       </div>
     </section>
+  );
+}
+
+function MobileNav({ primaryContactHref }) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  const navLinks = [
+    { href: '#how-it-works', label: 'How It Works' },
+    { href: '#the-fleet', label: 'The Fleet' },
+    { href: '/built-for', label: 'Built For' },
+    { href: '#get-started', label: 'Pricing' },
+  ];
+
+  return (
+    <nav className="sticky top-0 z-50 border-b border-zinc-200/50 bg-white/60 backdrop-blur-2xl transition-all duration-300">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
+        <div className="group flex cursor-pointer items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-950 shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all group-hover:bg-zinc-900 group-hover:shadow-[0_0_20px_rgba(6,182,212,0.5)]">
+            <span className="font-mono text-xs font-bold tracking-wider text-cyan-400">MF</span>
+          </div>
+          <span className="font-semibold tracking-tight text-zinc-950">Maestro Fleet</span>
+        </div>
+
+        <div className="hidden items-center gap-8 text-sm font-medium text-zinc-500 md:flex">
+          {navLinks.map(({ href, label }) => (
+            <a key={label} href={href} className="transition-colors hover:text-zinc-950">{label}</a>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <CtaLink
+            href="#get-started"
+            className="hidden rounded-lg bg-zinc-950 px-5 py-2.5 text-sm font-medium text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_15px_rgba(6,182,212,0.2)] transition-all duration-300 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.4)] sm:inline-flex"
+          >
+            Get Started
+          </CtaLink>
+          <button
+            type="button"
+            onClick={() => setMobileOpen((prev) => !prev)}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-zinc-700 transition-colors hover:bg-zinc-100 md:hidden"
+            aria-label="Toggle navigation menu"
+          >
+            {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+          </button>
+        </div>
+      </div>
+
+      {mobileOpen ? (
+        <div className="border-t border-zinc-200/60 bg-white/95 backdrop-blur-xl md:hidden">
+          <div className="mx-auto max-w-6xl space-y-1 px-6 py-4">
+            {navLinks.map(({ href, label }) => (
+              <a
+                key={label}
+                href={href}
+                onClick={() => setMobileOpen(false)}
+                className="block rounded-lg px-4 py-3 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950"
+              >
+                {label}
+              </a>
+            ))}
+            <div className="pt-2">
+              <CtaLink
+                href={primaryContactHref}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-950 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_15px_rgba(6,182,212,0.2)] transition-all hover:bg-zinc-900"
+              >
+                <Calendar className="h-4 w-4 text-cyan-400" />
+                Schedule a Consultation
+              </CtaLink>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </nav>
   );
 }
 
@@ -656,30 +731,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-white font-sans text-zinc-800 antialiased selection:bg-cyan-100 selection:text-cyan-900">
-      <nav className="sticky top-0 z-50 border-b border-zinc-200/50 bg-white/60 backdrop-blur-2xl transition-all duration-300">
-        <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
-          <div className="group flex cursor-pointer items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-950 shadow-[0_0_15px_rgba(6,182,212,0.3)] transition-all group-hover:bg-zinc-900 group-hover:shadow-[0_0_20px_rgba(6,182,212,0.5)]">
-              <span className="font-mono text-xs font-bold tracking-wider text-cyan-400">MF</span>
-            </div>
-            <span className="font-semibold tracking-tight text-zinc-950">Maestro Fleet</span>
-          </div>
-
-          <div className="hidden items-center gap-8 text-sm font-medium text-zinc-500 md:flex">
-            <a href="#how-it-works" className="transition-colors hover:text-zinc-950">How It Works</a>
-            <a href="#the-fleet" className="transition-colors hover:text-zinc-950">The Fleet</a>
-            <a href="/built-for" className="transition-colors hover:text-zinc-950">Built For</a>
-            <a href="#get-started" className="transition-colors hover:text-zinc-950">Pricing</a>
-          </div>
-
-          <CtaLink
-            href="#get-started"
-            className="rounded-lg bg-zinc-950 px-5 py-2.5 text-sm font-medium text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_15px_rgba(6,182,212,0.2)] transition-all duration-300 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.4)]"
-          >
-            Get Started
-          </CtaLink>
-        </div>
-      </nav>
+      <MobileNav primaryContactHref={primaryContactHref} />
 
       <section className="relative overflow-hidden bg-white">
         <div
@@ -984,6 +1036,19 @@ export default function App() {
           </div>
         </div>
       </section>
+
+      <div className="border-t border-zinc-200/40 bg-zinc-50 py-10">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-6 sm:flex-row sm:justify-center">
+          <a
+            href="/built-for"
+            className="group inline-flex items-center gap-2 rounded-xl border border-cyan-200/60 bg-white px-7 py-3.5 text-sm font-semibold text-zinc-800 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-cyan-50/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.18)]"
+          >
+            See who it&apos;s built for
+            <ArrowRight className="h-4 w-4 text-cyan-600 transition-transform duration-300 group-hover:translate-x-1" />
+          </a>
+          <span className="text-sm text-zinc-400">GCs, MEP, civil, specialty &mdash; any contractor building from plans.</span>
+        </div>
+      </div>
 
       <section id="built-for-construction" className="border-t border-zinc-200 bg-white">
         <div className="mx-auto max-w-6xl px-6 py-24 md:py-32">
