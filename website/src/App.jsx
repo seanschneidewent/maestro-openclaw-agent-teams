@@ -16,6 +16,10 @@ import {
   Mail,
   Calendar,
   CheckCircle2,
+  Building2,
+  Flame,
+  Mountain,
+  Hammer,
 } from 'lucide-react';
 
 const cleanText = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -54,6 +58,7 @@ function CtaLink({
 function FooterLinks() {
   return (
     <div className="mt-4 flex flex-wrap items-center justify-center gap-4 text-xs font-medium text-zinc-400 md:mt-0">
+      <a href="/built-for" className="transition-colors hover:text-zinc-700">Built For</a>
       <a href="/privacy" className="transition-colors hover:text-zinc-700">Privacy</a>
       <a href="/terms" className="transition-colors hover:text-zinc-700">Terms</a>
       <a href="/refund" className="transition-colors hover:text-zinc-700">Refunds</a>
@@ -402,6 +407,192 @@ function buildPolicyContent(contactEmail) {
   };
 }
 
+function BuiltForPage({ primaryContactHref }) {
+  const contractorTypes = [
+    {
+      icon: Building2,
+      title: 'General Contractors',
+      description:
+        'You are coordinating every discipline on the job. Maestro reads every sheet in the set, answers questions across trades, and gives you a command layer across your entire portfolio. One agent per project, one Commander for the operation.',
+    },
+    {
+      icon: Flame,
+      title: 'Mechanical, Electrical & Plumbing',
+      description:
+        'Your scope lives in the mechanical, electrical, and plumbing sheets but touches every other discipline on the project. Maestro isolates your drawings, understands your specs, and answers coordination questions against the full set.',
+    },
+    {
+      icon: Mountain,
+      title: 'Civil & Site Contractors',
+      description:
+        'Grading plans, utility layouts, stormwater details, paving specs. Maestro reads civil drawings the same way it reads architectural or structural. Your field team asks questions and gets answers from the plans in seconds.',
+    },
+    {
+      icon: Hammer,
+      title: 'Specialty Contractors',
+      description:
+        'Steel, concrete, fire protection, roofing, finish carpentry, landscaping. If you build from drawings, Maestro works for you. It ingests your plan set, learns your scope, and gives your crew a way to get answers without calling the office.',
+    },
+  ];
+
+  const roles = [
+    {
+      icon: MessageSquare,
+      label: 'From the field',
+      labelColor: 'text-cyan-600',
+      iconColor: 'text-cyan-600',
+      title: 'Your field team stops waiting for answers.',
+      description:
+        'Foremen, superintendents, and crew leads text the project agent from the jobsite and get answers from the plans in seconds. Specs, details, scope clarifications, schedule questions. No phone calls. No flipping through binders. No waiting for someone in the office to look it up.',
+      items: [
+        'Ask about any detail on any sheet from the field',
+        'Get visual workspaces with annotated plan pages',
+        'Talk through the schedule in natural conversation',
+        'Works from the truck, the trailer, or the slab',
+      ],
+      checkColor: 'text-cyan-500 drop-shadow-[0_0_3px_rgba(6,182,212,0.4)]',
+      borderColor: 'border-cyan-100/80',
+      glowColor: 'bg-cyan-400/10',
+      hoverShadow: 'hover:shadow-[0_10px_30px_-15px_rgba(6,182,212,0.2)]',
+    },
+    {
+      icon: Network,
+      label: 'From the office',
+      labelColor: 'text-zinc-500',
+      iconColor: 'text-zinc-700',
+      title: 'Your office sees everything without the phone calls.',
+      description:
+        'Project managers, estimators, principals, and owners open the Command Center and see every project in the fleet. Ask the Commander which jobs need attention, compare schedule health across projects, or get a cross-project risk summary. No status meetings required.',
+      items: [
+        'Portfolio-level visibility across all active projects',
+        'Cross-project intelligence and risk surfacing',
+        'Create new project agents when you win work',
+        'One command layer for the whole operation',
+      ],
+      checkColor: 'text-zinc-300',
+      borderColor: 'border-zinc-200/80',
+      glowColor: 'bg-cyan-500/5',
+      hoverShadow: 'hover:shadow-[0_10px_30px_-15px_rgba(6,182,212,0.1)]',
+    },
+  ];
+
+  return (
+    <div className="min-h-screen bg-white text-zinc-800 antialiased selection:bg-cyan-100 selection:text-cyan-900">
+      <div className="border-b border-zinc-200/70 bg-white/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
+          <a href="/" className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-950 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
+              <span className="font-mono text-xs font-bold tracking-wider text-cyan-400">MF</span>
+            </div>
+            <span className="font-semibold tracking-tight text-zinc-950">Maestro Fleet</span>
+          </a>
+          <FooterLinks />
+        </div>
+      </div>
+
+      <main className="mx-auto max-w-6xl px-6 py-20 md:py-28">
+        <div className="mx-auto max-w-3xl text-center">
+          <p className="mb-4 text-sm font-bold uppercase tracking-widest text-cyan-600 drop-shadow-[0_0_8px_rgba(6,182,212,0.3)]">
+            Who It&apos;s For
+          </p>
+          <h1 className="mb-6 text-4xl font-bold leading-tight tracking-tight text-zinc-950 md:text-5xl">
+            Built for contractors who build from plans.
+          </h1>
+          <p className="mb-6 text-lg leading-relaxed text-zinc-700">
+            If your team reads drawings and builds from them, Maestro Fleet works for you. General contractors, mechanical
+            contractors, electrical contractors, plumbers, civil contractors, specialty subs. Any contractor running
+            projects off plan sets.
+          </p>
+          <p className="text-zinc-500">
+            The system is the same. A dedicated AI agent on every project that reads your plans, answers questions from
+            the field, and tracks your schedule. A command layer that gives your office visibility across every job.
+          </p>
+        </div>
+
+        <div className="mt-20 grid gap-6 md:grid-cols-2">
+          {contractorTypes.map(({ icon: Icon, title, description }) => (
+            <div
+              key={title}
+              className="group relative overflow-hidden rounded-2xl border border-zinc-200/80 bg-white p-8 transition-all duration-500 hover:-translate-y-1 hover:shadow-[0_20px_40px_-15px_rgba(6,182,212,0.15)]"
+            >
+              <div className="absolute inset-0 bg-gradient-to-br from-cyan-500/0 to-cyan-500/0 transition-colors duration-500 group-hover:to-cyan-500/5" />
+              <div className="relative">
+                <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl border border-cyan-100 bg-cyan-50/80 transition-all duration-500 group-hover:border-cyan-400 group-hover:bg-cyan-500 group-hover:shadow-[0_0_20px_rgba(6,182,212,0.4)]">
+                  <Icon className="h-5 w-5 text-cyan-600 transition-colors duration-500 group-hover:text-white" />
+                </div>
+                <h3 className="mb-3 text-xl font-bold tracking-tight text-zinc-950">{title}</h3>
+                <p className="text-sm leading-relaxed text-zinc-700">{description}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-24">
+          <div className="mx-auto mb-16 max-w-2xl text-center">
+            <h2 className="mb-4 text-3xl font-bold leading-tight tracking-tight text-zinc-950 md:text-4xl">
+              Two sides of the same system.
+            </h2>
+            <p className="text-lg leading-relaxed text-zinc-700">
+              Maestro Fleet connects the field and the office through a single intelligence layer. Your field crew gets
+              answers. Your office gets visibility. Nobody waits.
+            </p>
+          </div>
+
+          <div className="grid gap-8 lg:grid-cols-2">
+            {roles.map(({ icon: Icon, label, labelColor, iconColor, title, description, items, checkColor, borderColor, glowColor, hoverShadow }) => (
+              <div
+                key={label}
+                className={`relative overflow-hidden rounded-2xl border ${borderColor} bg-white p-10 shadow-[0_10px_30px_-15px_rgba(0,0,0,0.05)] transition-shadow ${hoverShadow}`}
+              >
+                <div className={`absolute -right-10 -top-10 h-40 w-40 rounded-full ${glowColor} blur-[50px]`} />
+                <div className="relative">
+                  <div className="mb-6 flex items-center gap-2.5">
+                    <Icon className={`h-5 w-5 ${iconColor}`} />
+                    <span className={`text-[11px] font-bold uppercase tracking-widest ${labelColor}`}>{label}</span>
+                  </div>
+                  <h3 className="mb-4 text-2xl font-bold tracking-tight text-zinc-950">{title}</h3>
+                  <p className="mb-8 leading-relaxed text-zinc-700">{description}</p>
+                  <div className="space-y-3">
+                    {items.map((item) => (
+                      <div key={item} className="flex items-start gap-3 text-sm font-medium text-zinc-800">
+                        <CheckCircle2 className={`mt-0.5 h-4 w-4 shrink-0 ${checkColor}`} />
+                        <span>{item}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-20 text-center">
+          <CtaLink
+            href={primaryContactHref}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-10 py-4 text-base font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_30px_rgba(6,182,212,0.4)]"
+          >
+            <Calendar className="h-4 w-4 text-cyan-400" />
+            Schedule a Consultation
+          </CtaLink>
+          <p className="mt-5 text-sm font-medium text-zinc-400">
+            We will walk through your operation and show you how the fleet maps to your projects.
+          </p>
+        </div>
+
+        <div className="mt-10 flex justify-center">
+          <a
+            href="/"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-200/60 bg-white px-7 py-3.5 text-sm font-semibold text-zinc-800 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-cyan-50/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.18)]"
+          >
+            Back to home
+            <ArrowRight className="h-4 w-4" />
+          </a>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function renderStandalonePage(pathname, primaryContactHref, contactEmail) {
   const content = buildPolicyContent(contactEmail);
 
@@ -415,6 +606,10 @@ function renderStandalonePage(pathname, primaryContactHref, contactEmail) {
 
   if (pathname === '/refund') {
     return <PolicyPage title="Refund Policy" sections={content.refund} />;
+  }
+
+  if (pathname === '/built-for') {
+    return <BuiltForPage primaryContactHref={primaryContactHref} />;
   }
 
   if (pathname === '/checkout/success') {
@@ -446,6 +641,7 @@ export default function App() {
       '/privacy': 'Maestro Fleet | Privacy Policy',
       '/terms': 'Maestro Fleet | Terms of Service',
       '/refund': 'Maestro Fleet | Refund Policy',
+      '/built-for': 'Maestro Fleet | Built for Contractors',
       '/checkout/success': 'Maestro Fleet | Checkout Complete',
       '/checkout/cancel': 'Maestro Fleet | Checkout Canceled',
     };
@@ -472,7 +668,7 @@ export default function App() {
           <div className="hidden items-center gap-8 text-sm font-medium text-zinc-500 md:flex">
             <a href="#how-it-works" className="transition-colors hover:text-zinc-950">How It Works</a>
             <a href="#the-fleet" className="transition-colors hover:text-zinc-950">The Fleet</a>
-            <a href="#built-for-construction" className="transition-colors hover:text-zinc-950">Why Maestro</a>
+            <a href="/built-for" className="transition-colors hover:text-zinc-950">Built For</a>
             <a href="#get-started" className="transition-colors hover:text-zinc-950">Pricing</a>
           </div>
 
@@ -1084,6 +1280,7 @@ export default function App() {
               Built on OpenClaw
             </a>
             <span className="text-zinc-200">·</span>
+            <a href="/built-for" className="text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-700">Built For</a>
             <a href="/privacy" className="text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-700">Privacy</a>
             <a href="/terms" className="text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-700">Terms</a>
             <a href="/refund" className="text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-700">Refunds</a>
