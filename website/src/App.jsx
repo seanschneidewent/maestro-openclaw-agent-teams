@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Search,
   Layers,
@@ -51,31 +51,6 @@ function CtaLink({
   );
 }
 
-function KitFormEmbed({ scriptUrl, uid }) {
-  const containerRef = useRef(null);
-
-  useEffect(() => {
-    if (!scriptUrl || !uid || !containerRef.current) {
-      return undefined;
-    }
-
-    const container = containerRef.current;
-    container.innerHTML = '';
-
-    const script = document.createElement('script');
-    script.async = true;
-    script.src = scriptUrl;
-    script.dataset.uid = uid;
-    container.appendChild(script);
-
-    return () => {
-      container.innerHTML = '';
-    };
-  }, [scriptUrl, uid]);
-
-  return <div ref={containerRef} className="kit-form-embed min-h-[240px]" />;
-}
-
 function FooterLinks() {
   return (
     <div className="mt-4 flex flex-wrap items-center justify-center gap-4 text-xs font-medium text-zinc-400 md:mt-0">
@@ -83,6 +58,88 @@ function FooterLinks() {
       <a href="/terms" className="transition-colors hover:text-zinc-700">Terms</a>
       <a href="/refund" className="transition-colors hover:text-zinc-700">Refunds</a>
     </div>
+  );
+}
+
+function EmailSignupSection() {
+  const [email, setEmail] = useState('');
+  const [status, setStatus] = useState('idle');
+  const [errorMessage, setErrorMessage] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    const trimmed = email.trim();
+    if (!trimmed) return;
+
+    setStatus('submitting');
+    setErrorMessage('');
+
+    try {
+      const response = await fetch('/api/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: trimmed }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Something went wrong.');
+      }
+
+      setStatus('success');
+      setEmail('');
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Unable to subscribe. Please try again.');
+      setStatus('error');
+    }
+  };
+
+  return (
+    <section className="border-t border-zinc-200 bg-zinc-50">
+      <div className="mx-auto max-w-6xl px-6 py-24 md:py-32">
+        <div className="mx-auto max-w-xl text-center">
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-cyan-200/70 bg-white px-3.5 py-1.5 text-sm font-medium text-zinc-700 shadow-[0_0_15px_rgba(6,182,212,0.08)]">
+            <Mail className="h-4 w-4 text-cyan-600" />
+            Stay updated
+          </div>
+          <h2 className="mb-4 text-3xl font-bold leading-tight tracking-tight text-zinc-950 md:text-4xl">
+            Get notified when we ship.
+          </h2>
+          <p className="mb-10 text-lg leading-relaxed text-zinc-700">
+            Product updates, deployment stories, and the occasional field note. No spam.
+          </p>
+
+          {status === 'success' ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-6 py-5">
+              <p className="font-semibold text-emerald-900">You&apos;re on the list.</p>
+              <p className="mt-1 text-sm text-emerald-700">We&apos;ll be in touch when there&apos;s something worth sharing.</p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="flex flex-col gap-3 sm:flex-row">
+              <input
+                type="email"
+                required
+                placeholder="you@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="flex-1 rounded-xl border border-zinc-200 bg-white px-5 py-3.5 text-base text-zinc-950 placeholder:text-zinc-400 shadow-sm outline-none transition-all focus:border-cyan-400 focus:shadow-[0_0_0_3px_rgba(6,182,212,0.1)]"
+              />
+              <button
+                type="submit"
+                disabled={status === 'submitting'}
+                className="rounded-xl bg-zinc-950 px-7 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_15px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.4)] disabled:opacity-50 disabled:hover:translate-y-0"
+              >
+                {status === 'submitting' ? 'Subscribing\u2026' : 'Subscribe'}
+              </button>
+            </form>
+          )}
+
+          {status === 'error' ? (
+            <p className="mt-4 text-sm font-medium text-red-600">{errorMessage}</p>
+          ) : null}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -107,7 +164,7 @@ function PageShell({ eyebrow, title, intro, children, primaryAction, secondaryAc
             {eyebrow}
           </p>
           <h1 className="mb-6 text-4xl font-bold leading-tight tracking-tight text-zinc-950 md:text-5xl">{title}</h1>
-          {intro ? <p className="mb-10 text-lg leading-relaxed text-zinc-500">{intro}</p> : null}
+          {intro ? <p className="mb-10 text-lg leading-relaxed text-zinc-700">{intro}</p> : null}
         </div>
 
         <div className="rounded-3xl border border-zinc-200/80 bg-zinc-50 p-8 shadow-[0_12px_30px_-20px_rgba(0,0,0,0.08)] md:p-10">
@@ -145,16 +202,15 @@ function PageShell({ eyebrow, title, intro, children, primaryAction, secondaryAc
 function PolicyPage({ title, sections }) {
   return (
     <PageShell
-      eyebrow="Production Readiness"
+      eyebrow="Maestro Fleet"
       title={title}
-      intro="This page is included so the live commercial flow has clear customer-facing policy coverage before launch."
       primaryAction={{ href: '/', label: 'Back to home' }}
     >
       <div className="space-y-8">
         {sections.map((section) => (
           <section key={section.heading}>
             <h2 className="mb-3 text-xl font-bold tracking-tight text-zinc-950">{section.heading}</h2>
-            <div className="space-y-3 text-sm leading-7 text-zinc-600">
+            <div className="space-y-3 text-sm leading-7 text-zinc-800">
               {section.paragraphs.map((paragraph) => (
                 <p key={paragraph}>{paragraph}</p>
               ))}
@@ -260,7 +316,7 @@ function CheckoutStatusPage({ type, primaryContactHref }) {
           </div>
         ) : null}
 
-        <div className="rounded-2xl border border-cyan-200/60 bg-cyan-50/60 p-5 text-sm leading-7 text-zinc-600">
+        <div className="rounded-2xl border border-cyan-200/60 bg-cyan-50/60 p-5 text-sm leading-7 text-zinc-800">
           <p>
             The production flow now supports a branded confirmation path plus Stripe to Kit automation through the
             Vercel webhook endpoint. If you bought monthly coverage, future subscription changes are also tracked on the
@@ -272,7 +328,10 @@ function CheckoutStatusPage({ type, primaryContactHref }) {
   );
 }
 
-function buildPolicyContent() {
+function buildPolicyContent(contactEmail) {
+  const contactLine = contactEmail
+    ? `You can reach us at ${contactEmail}.`
+    : '';
   return {
     privacy: [
       {
@@ -293,7 +352,7 @@ function buildPolicyContent() {
         heading: 'Data handling',
         paragraphs: [
           'We do not sell your personal information. We share data only with vendors required to operate the service and only to the extent needed to host the website, process payments, send email, or provide scheduling and support.',
-          'If you have questions about your data or want information updated or removed, contact us directly by email.',
+          `If you have questions about your data or want information updated or removed, contact us directly by email.${contactLine ? ` ${contactLine}` : ''}`,
         ],
       },
     ],
@@ -336,15 +395,15 @@ function buildPolicyContent() {
       {
         heading: 'How to request help',
         paragraphs: [
-          'For billing questions, cancellation requests, or refund discussions, reach out directly using the contact method provided on the website or in your onboarding communication so we can review the specific account and timeline involved.',
+          `For billing questions, cancellation requests, or refund discussions, reach out directly so we can review the specific account and timeline involved.${contactLine ? ` ${contactLine}` : ''}`,
         ],
       },
     ],
   };
 }
 
-function renderStandalonePage(pathname, primaryContactHref) {
-  const content = buildPolicyContent();
+function renderStandalonePage(pathname, primaryContactHref, contactEmail) {
+  const content = buildPolicyContent(contactEmail);
 
   if (pathname === '/privacy') {
     return <PolicyPage title="Privacy Policy" sections={content.privacy} />;
@@ -374,12 +433,7 @@ export default function App() {
   const setupPriceLabel = cleanText(import.meta.env.VITE_STRIPE_SETUP_PRICE_LABEL) || '$1,500';
   const monthlyPriceLabel = cleanText(import.meta.env.VITE_STRIPE_MONTHLY_PRICE_LABEL) || '$400 / month';
   const contactEmail = cleanText(import.meta.env.VITE_CONTACT_EMAIL);
-  const kitFormUid = cleanText(import.meta.env.VITE_KIT_FORM_UID);
-  const kitFormScriptUrl = cleanText(import.meta.env.VITE_KIT_FORM_SCRIPT_URL);
-  const kitFormShareUrl = cleanText(import.meta.env.VITE_KIT_FORM_SHARE_URL);
-
   const primaryContactHref = calendlyUrl || (contactEmail ? `mailto:${contactEmail}` : '');
-  const emailPipelineReady = Boolean(kitFormUid && kitFormScriptUrl);
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
 
   useEffect(() => {
@@ -399,7 +453,7 @@ export default function App() {
     document.title = titles[pathname] || titles['/'];
   }, [pathname]);
 
-  const standalonePage = renderStandalonePage(pathname, primaryContactHref);
+  const standalonePage = renderStandalonePage(pathname, primaryContactHref, contactEmail);
   if (standalonePage) {
     return standalonePage;
   }
@@ -455,13 +509,13 @@ export default function App() {
               talk back.
             </h1>
 
-            <p className="mb-6 max-w-2xl text-xl font-light leading-relaxed tracking-tight text-zinc-500 md:text-2xl">
+            <p className="mb-6 max-w-2xl text-xl font-light leading-relaxed tracking-tight text-zinc-700 md:text-2xl">
               You already know what needs to get built. Maestro Fleet is the operating system that makes sure nothing
               gets missed, nobody waits for answers, and every job has intelligence that keeps up with the pace of the
               work.
             </p>
 
-            <p className="mb-12 max-w-xl text-lg leading-relaxed text-zinc-400">
+            <p className="mb-12 max-w-xl text-lg leading-relaxed text-zinc-500">
               AI agents that live on your projects, read your plans, and answer questions from the field. A command
               layer that gives your office visibility across every job you&apos;re running.
             </p>
@@ -510,7 +564,7 @@ export default function App() {
             <h2 className="mb-5 text-3xl font-bold leading-tight tracking-tight text-zinc-950 md:text-4xl">
               Ask a question. See the answer on the plans. Build the schedule. Move on.
             </h2>
-            <p className="text-lg leading-relaxed text-zinc-500">
+            <p className="text-lg leading-relaxed text-zinc-700">
               Your people shouldn&apos;t have to dig through 500 pages of drawings to find the detail that matters right
               now. Maestro reads every sheet, understands the relationships between them, and gives your field team a
               way to get answers as fast as they can ask.
@@ -554,14 +608,14 @@ export default function App() {
                   <h3 className="mb-3 text-xl font-bold tracking-tight text-zinc-950 transition-colors group-hover:text-cyan-900">
                     {title}
                   </h3>
-                  <p className="text-sm leading-relaxed text-zinc-500">{copy}</p>
+                  <p className="text-sm leading-relaxed text-zinc-700">{copy}</p>
                 </div>
               </div>
             ))}
           </div>
 
           <div className="mt-16 max-w-2xl border-l-2 border-cyan-200 pl-6">
-            <p className="text-lg italic leading-relaxed text-zinc-400">
+            <p className="text-lg italic leading-relaxed text-zinc-600">
               This works for any concept your field team needs to work through. Foundation pours. Fryer hoods.
               Mechanical rough-in. Steel erection. Landscaping. Finish carpentry. Whatever the day demands.
             </p>
@@ -580,7 +634,7 @@ export default function App() {
               <br />
               Now picture every job you&apos;re running.
             </h2>
-            <p className="text-lg leading-relaxed text-zinc-500">
+            <p className="text-lg leading-relaxed text-zinc-700">
               Maestro Fleet puts a dedicated agent on every project in your portfolio and connects them all to a
               command layer your office can see. Each agent is isolated to its own job, own plans, own schedule, own
               conversations. The command layer sees across all of them.
@@ -664,7 +718,7 @@ export default function App() {
                   <Icon className="h-5 w-5 text-zinc-700" />
                 </div>
                 <h3 className="mb-2 text-lg font-bold text-zinc-950">{title}</h3>
-                <p className="text-sm leading-relaxed text-zinc-500">{copy}</p>
+                <p className="text-sm leading-relaxed text-zinc-700">{copy}</p>
               </div>
             ))}
           </div>
@@ -682,7 +736,7 @@ export default function App() {
                   <span className="text-[11px] font-bold uppercase tracking-widest text-cyan-600">From the field</span>
                 </div>
                 <h3 className="mb-4 text-2xl font-bold tracking-tight text-zinc-950">A dedicated brain for every jobsite.</h3>
-                <p className="mb-8 leading-relaxed text-zinc-500">
+                <p className="mb-8 leading-relaxed text-zinc-700">
                   Your foremen and supers get a project agent that knows their job. They text it from the field and get
                   answers from the plans in seconds. It tracks the schedule. It builds visual workspaces. It is always
                   available, and it never forgets what is in the drawings.
@@ -694,7 +748,7 @@ export default function App() {
                     'Schedule management through natural conversation',
                     'Isolated to one project, no cross-job confusion',
                   ].map((item) => (
-                    <div key={item} className="flex items-start gap-3 text-sm font-medium text-zinc-600">
+                    <div key={item} className="flex items-start gap-3 text-sm font-medium text-zinc-800">
                       <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500 drop-shadow-[0_0_3px_rgba(6,182,212,0.4)]" />
                       <span>{item}</span>
                     </div>
@@ -711,7 +765,7 @@ export default function App() {
                   <span className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">From the office</span>
                 </div>
                 <h3 className="mb-4 text-2xl font-bold tracking-tight text-zinc-950">The whole operation. One screen.</h3>
-                <p className="mb-8 leading-relaxed text-zinc-500">
+                <p className="mb-8 leading-relaxed text-zinc-700">
                   Open the Command Center and see every project in the fleet. Ask the Commander which jobs need
                   attention, compare schedule health, or get a cross-project risk summary. Create new project agents
                   when you win work. The command layer keeps leadership connected without the phone calls.
@@ -723,7 +777,7 @@ export default function App() {
                     'Fleet health monitoring and self-repair',
                     'Provision and govern project agents from one place',
                   ].map((item) => (
-                    <div key={item} className="flex items-start gap-3 text-sm font-medium text-zinc-600">
+                    <div key={item} className="flex items-start gap-3 text-sm font-medium text-zinc-800">
                       <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-zinc-300" />
                       <span>{item}</span>
                     </div>
@@ -749,7 +803,7 @@ export default function App() {
                 <br />
                 An operating system.
               </h2>
-              <p className="mb-10 text-lg leading-relaxed text-zinc-500">
+              <p className="mb-10 text-lg leading-relaxed text-zinc-700">
                 Maestro Fleet was built by people who have run construction projects. It understands plan sets,
                 disciplines, schedule logic, and the way work actually moves on a jobsite. It runs on your hardware,
                 your plans stay on your machine, and the intelligence is always available.
@@ -764,7 +818,7 @@ export default function App() {
                 ].map((item) => (
                   <div key={item} className="flex items-start gap-3">
                     <div className="mt-2.5 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-500 shadow-[0_0_8px_rgba(34,211,238,0.8)]" />
-                    <span className="leading-relaxed text-zinc-600">{item}</span>
+                    <span className="leading-relaxed text-zinc-800">{item}</span>
                   </div>
                 ))}
               </div>
@@ -846,12 +900,12 @@ export default function App() {
               <h2 className="mb-6 text-3xl font-bold leading-tight tracking-tight text-zinc-950 md:text-4xl">
                 Powered by OpenClaw.
               </h2>
-              <p className="mb-6 text-lg leading-relaxed text-zinc-600">
+              <p className="mb-6 text-lg leading-relaxed text-zinc-800">
                 Maestro Fleet is built on OpenClaw, an open-source agent runtime designed for production workloads. It
                 handles the hard problems of running persistent AI agents so Maestro can focus entirely on construction
                 intelligence.
               </p>
-              <p className="mb-8 leading-relaxed text-zinc-500">
+              <p className="mb-8 leading-relaxed text-zinc-700">
                 Every agent in your fleet runs through the OpenClaw runtime: lifecycle management, message routing,
                 persistent memory, Telegram connectivity, and local execution. It is the foundation that makes Maestro
                 possible.
@@ -896,7 +950,7 @@ export default function App() {
                 >
                   <div className="mb-4 font-mono text-xl text-emerald-500">{item.icon}</div>
                   <h3 className="mb-2 text-sm font-bold text-zinc-950">{item.title}</h3>
-                  <p className="text-xs leading-relaxed text-zinc-500">{item.desc}</p>
+                  <p className="text-xs leading-relaxed text-zinc-700">{item.desc}</p>
                 </div>
               ))}
             </div>
@@ -907,11 +961,11 @@ export default function App() {
       <section id="get-started" className="border-t border-zinc-200 bg-white">
         <div className="mx-auto max-w-6xl px-6 py-24 md:py-32">
           <div className="mx-auto mb-16 max-w-2xl text-center">
-            <p className="mb-4 text-sm font-bold uppercase tracking-widest text-blue-600">Get Started</p>
+            <p className="mb-4 text-sm font-bold uppercase tracking-widest text-cyan-600 drop-shadow-[0_0_8px_rgba(6,182,212,0.3)]">Get Started</p>
             <h2 className="mb-5 text-3xl font-bold leading-tight tracking-tight text-zinc-950 md:text-4xl">
               We deploy it. You run your projects.
             </h2>
-            <p className="text-lg leading-relaxed text-zinc-500">
+            <p className="text-lg leading-relaxed text-zinc-700">
               We remote into your machine, configure the entire fleet with you, set up your Commander, create your
               first project agents, ingest your plans, and make sure everything is running before we leave. You are
               operational the same day.
@@ -932,7 +986,7 @@ export default function App() {
                 <div className="mb-2 flex items-baseline gap-1">
                   <span className="text-5xl font-extrabold tracking-tighter text-zinc-950 tabular-nums">{setupPriceLabel}</span>
                 </div>
-                <p className="mb-8 font-medium text-zinc-500">Full fleet deployment and configuration, invoiced after consultation</p>
+                <p className="mb-8 font-medium text-zinc-700">Full fleet deployment and configuration, invoiced after consultation</p>
                 <div className="space-y-4">
                   {[
                     'Remote session and full system setup on your machine',
@@ -944,7 +998,7 @@ export default function App() {
                   ].map((item) => (
                     <div key={item} className="flex items-start gap-3 text-sm">
                       <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
-                      <span className="leading-relaxed text-zinc-600">{item}</span>
+                      <span className="leading-relaxed text-zinc-800">{item}</span>
                     </div>
                   ))}
                 </div>
@@ -968,7 +1022,7 @@ export default function App() {
                 <div className="mb-2 flex items-baseline gap-1">
                   <span className="text-5xl font-extrabold tracking-tighter text-zinc-950 tabular-nums">{monthlyPriceLabel}</span>
                 </div>
-                <p className="mb-8 font-medium text-zinc-500">Ongoing maintenance and support, available after setup</p>
+                <p className="mb-8 font-medium text-zinc-700">Ongoing maintenance and support, available after setup</p>
                 <div className="space-y-4">
                   {[
                     'Fleet health monitoring and proactive maintenance',
@@ -980,7 +1034,7 @@ export default function App() {
                   ].map((item) => (
                     <div key={item} className="flex items-start gap-3 text-sm">
                       <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-zinc-300" />
-                      <span className="leading-relaxed text-zinc-600">{item}</span>
+                      <span className="leading-relaxed text-zinc-800">{item}</span>
                     </div>
                   ))}
                 </div>
@@ -1008,60 +1062,7 @@ export default function App() {
         </div>
       </section>
 
-      <section className="border-t border-zinc-200 bg-zinc-50">
-        <div className="mx-auto max-w-6xl px-6 py-24 md:py-32">
-          <div className="grid items-start gap-10 lg:grid-cols-2">
-            <div>
-              <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-cyan-200/70 bg-white px-3.5 py-1.5 text-sm font-medium text-zinc-700 shadow-[0_0_15px_rgba(6,182,212,0.08)]">
-                <Mail className="h-4 w-4 text-cyan-600" />
-                Stay in the loop
-              </div>
-              <h2 className="mb-5 text-3xl font-bold leading-tight tracking-tight text-zinc-950 md:text-4xl">
-                Capture interest before the call and keep the list warm.
-              </h2>
-              <p className="mb-8 text-lg leading-relaxed text-zinc-500">
-                The website is still wired to Kit, so you can collect interest, run nurture for non-buyers, and keep
-                launch updates in one place without adding another system.
-              </p>
-              <div className="space-y-3">
-                {[
-                  'Website signups route into your Kit audience',
-                  'The live welcome automation continues to handle nurture',
-                  'Hosted fallback remains available if the embed is blocked',
-                ].map((item) => (
-                  <div key={item} className="flex items-start gap-3 text-sm font-medium text-zinc-600">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-cyan-500" />
-                    <span>{item}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-zinc-200/80 bg-white p-8 shadow-[0_12px_30px_-15px_rgba(6,182,212,0.12)]">
-              {emailPipelineReady ? (
-                <KitFormEmbed scriptUrl={kitFormScriptUrl} uid={kitFormUid} />
-              ) : (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-4 text-sm text-amber-800">
-                  Add `VITE_KIT_FORM_UID` and `VITE_KIT_FORM_SCRIPT_URL` in `.env.local` to enable the embedded Kit form.
-                </div>
-              )}
-
-              <div className="mt-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-xs font-medium uppercase tracking-widest text-zinc-400">
-                  {emailPipelineReady ? 'Embedded from Kit' : 'Kit embed not configured'}
-                </p>
-                <CtaLink
-                  href={kitFormShareUrl}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-200/60 bg-white px-5 py-3 text-sm font-semibold text-zinc-800 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-cyan-50/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.18)]"
-                >
-                  Open hosted form
-                  <ExternalLink className="h-4 w-4 text-cyan-600" />
-                </CtaLink>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+      <EmailSignupSection />
 
       <footer className="border-t border-zinc-200 bg-white">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between px-6 py-10 text-sm text-zinc-400 md:flex-row">
