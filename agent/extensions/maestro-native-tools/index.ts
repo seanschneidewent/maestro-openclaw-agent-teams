@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -102,12 +103,54 @@ function resolveAwarenessUrls(workspaceDir: string): {
   tailnet_url: string;
   localhost_url: string;
 } {
-  const fallbackLocal = "http://localhost:3000/workspace";
+  const readWorkspaceEnv = (key: string): string => {
+    const envPath = path.join(workspaceDir, ".env");
+    if (!fs.existsSync(envPath)) {
+      return "";
+    }
+    const content = fs.readFileSync(envPath, "utf-8");
+    const match = content.match(new RegExp(`^${key}=([^\\n]+)$`, "m"));
+    return match?.[1]?.trim() || "";
+  };
+
+  const resolveRoutePath = (): string => {
+    const role = readWorkspaceEnv("MAESTRO_AGENT_ROLE").toLowerCase();
+    if (role === "company") {
+      return "/command-center";
+    }
+    const parts = workspaceDir.split(path.sep);
+    const projectsIndex = parts.lastIndexOf("projects");
+    if (projectsIndex >= 0 && projectsIndex + 1 < parts.length) {
+      const slug = parts[projectsIndex + 1]?.trim() || "";
+      if (slug) {
+        return `/${encodeURIComponent(slug)}/`;
+      }
+    }
+    return "/workspace";
+  };
+
+  const routePath = resolveRoutePath();
+  const fallbackLocal = `http://localhost:3000${routePath}`;
   const awarenessPath = path.join(workspaceDir, "AWARENESS.md");
   if (!fs.existsSync(awarenessPath)) {
+    let tailnet = "";
+    try {
+      const output = execFileSync("tailscale", ["ip", "-4"], {
+        encoding: "utf-8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5000,
+      });
+      const ip = output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line.includes("."));
+      if (ip) {
+        tailnet = `http://${ip}:3000${routePath}`;
+      }
+    } catch {}
     return {
-      recommended_url: fallbackLocal,
-      tailnet_url: "",
+      recommended_url: tailnet || fallbackLocal,
+      tailnet_url: tailnet,
       localhost_url: fallbackLocal,
     };
   }
@@ -1110,6 +1153,39 @@ export default function register(api: {
               created: true,
               project_slug: project.slug,
               workspace,
+            };
+          })(params),
+      },
+      {
+        name: `${TOOL_PREFIX}delete_workspace`,
+        description: "Delete a workspace and all of its stored page/note state.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            workspace_slug: { type: "string" },
+          },
+          required: ["workspace_slug"],
+        },
+        execute: (_id: string, params: unknown) =>
+          withProject((project, payload) => {
+            const workspaceSlug = slugifyUnderscore(asString(payload.workspace_slug));
+            if (!workspaceSlug) {
+              throw new Error("workspace_slug is required.");
+            }
+            const workspace = loadWorkspace(project, workspaceSlug);
+            if (!workspace) {
+              throw new Error(`Workspace '${workspaceSlug}' not found.`);
+            }
+            const wsPath = workspacePath(project, workspaceSlug);
+            fs.rmSync(path.dirname(wsPath), { recursive: true, force: true });
+            return {
+              ok: true,
+              project_slug: project.slug,
+              workspace_slug: workspaceSlug,
+              deleted: true,
+              page_count: Array.isArray(workspace.pages) ? workspace.pages.length : 0,
+              note_count: Array.isArray(workspace.notes) ? workspace.notes.length : 0,
             };
           })(params),
       },

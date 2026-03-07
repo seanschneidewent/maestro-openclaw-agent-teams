@@ -1,4 +1,4 @@
-import { addSubscriberToSequence, addTagByEmail, getKitConfig, removeTagByEmail, upsertSubscriber } from '../_lib/kit.js';
+import { syncKitLifecycleByEmail, syncKitMonthlySubscriptionStatus } from '../_lib/kit-lifecycle.js';
 import { requireEnv } from '../_lib/env.js';
 import {
   classifyPurchase,
@@ -26,25 +26,10 @@ async function syncKitForCheckoutCompleted(stripe, session) {
   }
 
   const firstName = session.customer_details?.name?.split(' ')[0] ?? '';
-  const kitConfig = getKitConfig();
+  const lifecycle = purchaseType === 'setup' || purchaseType === 'monthly' ? purchaseType : 'none';
+  const kit = await syncKitLifecycleByEmail({ email, firstName, lifecycle });
 
-  await upsertSubscriber({ email, firstName });
-
-  if (kitConfig.customerTagId) {
-    await addTagByEmail(kitConfig.customerTagId, email);
-  }
-
-  if (purchaseType === 'setup') {
-    await addTagByEmail(kitConfig.setupPaidTagId, email);
-    await addSubscriberToSequence(kitConfig.setupOnboardingSequenceId, email);
-  }
-
-  if (purchaseType === 'monthly') {
-    await addTagByEmail(kitConfig.monthlyActiveTagId, email);
-    await addSubscriberToSequence(kitConfig.monthlyOnboardingSequenceId, email);
-  }
-
-  return { purchaseType, email };
+  return { purchaseType, email, kit };
 }
 
 async function syncKitForSubscriptionChange(stripe, subscription, isActive) {
@@ -67,19 +52,8 @@ async function syncKitForSubscriptionChange(stripe, subscription, isActive) {
     return { email: '', synced: false };
   }
 
-  const kitConfig = getKitConfig();
-  await upsertSubscriber({ email, firstName: '' });
-
-  if (isActive) {
-    await addTagByEmail(kitConfig.customerTagId, email);
-    await addTagByEmail(kitConfig.monthlyActiveTagId, email);
-    await removeTagByEmail(kitConfig.formerMonthlyTagId, email);
-  } else {
-    await removeTagByEmail(kitConfig.monthlyActiveTagId, email);
-    await addTagByEmail(kitConfig.formerMonthlyTagId, email);
-  }
-
-  return { email, synced: true };
+  const kit = await syncKitMonthlySubscriptionStatus({ email, isActive });
+  return { email, synced: true, kit };
 }
 
 export default {

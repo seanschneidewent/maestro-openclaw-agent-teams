@@ -112,7 +112,7 @@ maestro-fleet deploy
 maestro-fleet deploy \
   --company-name "ACME Construction" \
   --commander-model "anthropic/claude-opus-4-6" \
-  --project-model "openai/gpt-5.2" \
+  --project-model "openai/gpt-5.4" \
   --gemini-api-key "AIza..." \
   --openai-api-key "sk-..." \
   --anthropic-api-key "sk-ant-..." \

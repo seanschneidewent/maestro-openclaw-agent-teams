@@ -24,6 +24,7 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from maestro.control_plane import resolve_network_urls
+from maestro.fleet.shared.subprocesses import sanitized_subprocess_env
 from maestro.install_state import load_install_state
 from maestro.openclaw_profile import (
     openclaw_config_path,
@@ -192,7 +193,13 @@ def _fleet_status_color(status: str) -> str:
 def _safe_run(args: list[str], timeout: int = 6) -> tuple[bool, str]:
     profiled_args = prepend_openclaw_profile_args(args, default_profile="maestro-fleet")
     try:
-        result = subprocess.run(profiled_args, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            profiled_args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=sanitized_subprocess_env(),
+        )
     except Exception as exc:
         return False, str(exc)
     output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -567,6 +574,7 @@ def _start_gateway_log_stream(stop_event: threading.Event, gateway_logs: LogBuff
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=sanitized_subprocess_env(),
         )
     except Exception as exc:
         _append_gateway_event(
@@ -794,6 +802,7 @@ def run_up_tui(port: int, store: str, host: str):
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=sanitized_subprocess_env(),
         )
         logs.add(f"Starting server: {' '.join(cmd)}")
     activity_logs.add(f"Fleet monitor attached for {company_name}.")

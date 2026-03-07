@@ -18,6 +18,13 @@ def _default_runner(args: list[str], timeout: int = 6) -> tuple[bool, str]:
     return result.returncode == 0, output
 
 
+def _invoke_runner(runner: CommandRunner, args: list[str], timeout: int) -> tuple[bool, str]:
+    try:
+        return runner(args, timeout)
+    except TypeError:
+        return runner(args)  # type: ignore[misc]
+
+
 def _parse_tailscale_ipv4(output: str) -> str | None:
     for line in output.splitlines():
         ip = line.strip()
@@ -41,7 +48,7 @@ def resolve_network_urls(
 
     tailnet_ip: str | None = None
     if shutil.which("tailscale"):
-        ok, out = runner(["tailscale", "ip", "-4"], timeout=5)
+        ok, out = _invoke_runner(runner, ["tailscale", "ip", "-4"], 5)
         if ok:
             tailnet_ip = _parse_tailscale_ipv4(out)
 

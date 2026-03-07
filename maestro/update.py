@@ -12,11 +12,12 @@ import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from .control_plane import (
     ensure_telegram_account_bindings,
     resolve_node_identity,
+    resolve_network_urls,
     save_fleet_registry,
     sync_fleet_registry,
 )
@@ -29,15 +30,20 @@ from .openclaw_profile import (
     prepend_openclaw_profile_shell,
 )
 from .workspace_templates import (
+    provider_env_key_for_model,
+    render_company_agents_md,
     render_company_identity_md,
     render_company_soul_md,
     render_company_user_md,
-    provider_env_key_for_model,
-    render_company_agents_md,
     render_personal_agents_md,
     render_personal_tools_md,
+    render_project_agents_md,
+    render_project_tools_md,
     render_tools_md,
+    render_workspace_awareness_md,
     render_workspace_env,
+    should_remove_generic_project_bootstrap,
+    should_refresh_generic_project_file,
 )
 from .install_state import load_install_state, save_install_state
 
@@ -424,6 +430,17 @@ def _apply_config_migrations(
                     "streamMode": telegram.get("streamMode", "partial"),
                 }
                 changes.append(f"Added telegram account mapping for {default_account_id}")
+            if target_profile == PROFILE_FLEET:
+                default_account = accounts.get("default")
+                if (
+                    isinstance(default_account, dict)
+                    and str(default_account.get("botToken", "")).strip() == str(bot_token).strip()
+                ):
+                    accounts.pop("default", None)
+                    changes.append("Removed duplicate default telegram account for maestro-company")
+                if "botToken" in telegram:
+                    telegram.pop("botToken", None)
+                    changes.append("Removed top-level telegram botToken in favor of account bindings")
 
     binding_changes = ensure_telegram_account_bindings(migrated)
     changes.extend(binding_changes)
@@ -438,9 +455,11 @@ def _sync_workspace_assets(
     *,
     profile: str,
     company_name: str,
+    model: str | None,
     active_provider_env_key: str | None,
     provider_key: str | None,
     gemini_key: str | None,
+    command_runner: CommandRunner | None = None,
 ) -> tuple[list[str], list[str]]:
     changes: list[str] = []
     warnings: list[str] = []
@@ -588,7 +607,122 @@ def _sync_workspace_assets(
             knowledge_store.mkdir(parents=True, exist_ok=True)
         changes.append("Created workspace knowledge_store directory")
 
+    route_path = "/command-center" if profile == PROFILE_FLEET else "/workspace"
+    surface_label = "Command Center" if profile == PROFILE_FLEET else "Workspace"
+    urls = resolve_network_urls(route_path=route_path, command_runner=command_runner)
+    awareness_path = workspace / "AWARENESS.md"
+    desired_awareness = render_workspace_awareness_md(
+        model=str(model or "").strip() or "unknown",
+        preferred_url=str(urls.get("recommended_url", "")).strip(),
+        local_url=str(urls.get("localhost_url", "")).strip(),
+        tailnet_url=str(urls.get("tailnet_url") or "").strip(),
+        store_root=knowledge_store.resolve(),
+        surface_label=surface_label,
+        generated_by="maestro update",
+    )
+    current_awareness = awareness_path.read_text(encoding="utf-8") if awareness_path.exists() else ""
+    if current_awareness != desired_awareness:
+        if not dry_run:
+            awareness_path.write_text(desired_awareness, encoding="utf-8")
+        changes.append("Updated workspace AWARENESS.md")
+
     return changes, warnings
+
+
+def _read_env_value(env_path: Path, key: str) -> str:
+    if not env_path.exists():
+        return ""
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        current_key, value = line.split("=", 1)
+        if current_key.strip() == key:
+            return value.strip()
+    return ""
+
+
+def _sync_fleet_project_workspace_assets(
+    workspace: Path,
+    config: dict[str, Any],
+    *,
+    dry_run: bool,
+    command_runner: CommandRunner | None = None,
+) -> list[str]:
+    projects_root = workspace / "projects"
+    if not projects_root.exists():
+        return []
+
+    agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
+    changes: list[str] = []
+
+    for project_workspace in sorted(projects_root.iterdir()):
+        if not project_workspace.is_dir():
+            continue
+        slug = project_workspace.name
+        agent_id = f"maestro-project-{slug}"
+        agent = next(
+            (item for item in agent_list if isinstance(item, dict) and str(item.get("id", "")).strip() == agent_id),
+            {},
+        )
+        model = str(agent.get("model", "")).strip()
+        if not model:
+            metadata = load_json(project_workspace / "project_agent.json", default={})
+            if isinstance(metadata, dict):
+                model = str(metadata.get("model", "")).strip()
+        model = model or "unknown"
+
+        store_root = _read_env_value(project_workspace / ".env", "MAESTRO_STORE")
+        if not store_root:
+            store_root = str((project_workspace / "knowledge_store").resolve())
+
+        urls = resolve_network_urls(
+            route_path=f"/{slug}/",
+            command_runner=command_runner,
+        )
+        desired_awareness = render_workspace_awareness_md(
+            model=model,
+            preferred_url=str(urls.get("recommended_url", "")).strip(),
+            local_url=str(urls.get("localhost_url", "")).strip(),
+            tailnet_url=str(urls.get("tailnet_url") or "").strip(),
+            store_root=store_root,
+            surface_label="Workspace",
+            generated_by="maestro update",
+        )
+        awareness_path = project_workspace / "AWARENESS.md"
+        current_awareness = awareness_path.read_text(encoding="utf-8") if awareness_path.exists() else ""
+        if current_awareness != desired_awareness:
+            if not dry_run:
+                awareness_path.write_text(desired_awareness, encoding="utf-8")
+            changes.append(f"Updated project workspace AWARENESS.md: {slug}")
+
+        agents_path = project_workspace / "AGENTS.md"
+        current_agents = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
+        if (not agents_path.exists()) or should_refresh_generic_project_file("AGENTS.md", current_agents):
+            if not dry_run:
+                agents_path.write_text(render_project_agents_md(), encoding="utf-8")
+            changes.append(f"Updated project workspace AGENTS.md: {slug}")
+
+        tools_path = project_workspace / "TOOLS.md"
+        current_tools = tools_path.read_text(encoding="utf-8") if tools_path.exists() else ""
+        if (not tools_path.exists()) or should_refresh_generic_project_file("TOOLS.md", current_tools):
+            if not dry_run:
+                tools_path.write_text(
+                    render_project_tools_md(provider_env_key_for_model(model)),
+                    encoding="utf-8",
+                )
+            changes.append(f"Updated project workspace TOOLS.md: {slug}")
+
+        bootstrap_path = project_workspace / "BOOTSTRAP.md"
+        if bootstrap_path.exists():
+            bootstrap_content = bootstrap_path.read_text(encoding="utf-8")
+            if should_remove_generic_project_bootstrap(bootstrap_content):
+                if not dry_run:
+                    bootstrap_path.unlink()
+                changes.append(f"Removed generic project BOOTSTRAP.md: {slug}")
+
+    return changes
 
 
 def _ensure_session_dir(home_dir: Path, dry_run: bool, *, profile: str) -> bool:
@@ -788,14 +922,25 @@ def perform_update(
         dry_run=dry_run,
         profile=target_profile,
         company_name=company_name,
+        model=model,
         active_provider_env_key=provider_env_key,
         provider_key=provider_key_str,
         gemini_key=gemini_key_str,
+        command_runner=command_runner,
     )
     summary.workspace_changed = bool(workspace_changes)
     summary.changes.extend(workspace_changes)
     summary.warnings.extend(workspace_warnings)
     if target_profile == PROFILE_FLEET:
+        project_workspace_changes = _sync_fleet_project_workspace_assets(
+            workspace,
+            migrated,
+            dry_run=dry_run,
+            command_runner=command_runner,
+        )
+        if project_workspace_changes:
+            summary.workspace_changed = True
+            summary.changes.extend(project_workspace_changes)
         identity_changes = _backfill_registry_identity(workspace, migrated, dry_run=dry_run)
         if identity_changes:
             summary.workspace_changed = True

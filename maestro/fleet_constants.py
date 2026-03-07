@@ -9,13 +9,13 @@ KEY_ORDER = ("GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")
 
 MODEL_CHOICES = {
     "1": "anthropic/claude-opus-4-6",
-    "2": "openai/gpt-5.2",
+    "2": "openai/gpt-5.4",
     "3": "google/gemini-3-pro-preview",
 }
 
 MODEL_LABELS = {
     "anthropic/claude-opus-4-6": "Anthropic Claude Opus 4.6",
-    "openai/gpt-5.2": "OpenAI GPT-5.2",
+    "openai/gpt-5.4": "OpenAI GPT-5.4",
     "google/gemini-3-pro-preview": "Google Gemini 3 Pro",
 }
 
@@ -36,4 +36,3 @@ DEPLOY_STEP_TITLES = (
     "Doctor + Runtime Health",
     "Commander Commissioning",
 )
-

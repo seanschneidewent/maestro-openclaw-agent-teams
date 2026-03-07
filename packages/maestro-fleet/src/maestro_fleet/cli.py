@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from maestro.fleet.shared.subprocesses import maybe_reexec_without_disabled_malloc_stack_logging
+
 
 def _ensure_runtime_modules_on_path() -> None:
     try:
@@ -407,6 +409,9 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        maybe_reexec_without_disabled_malloc_stack_logging(module="maestro_fleet")
+
     if not str(os.environ.get("MAESTRO_OPENCLAW_PROFILE", "")).strip():
         os.environ["MAESTRO_OPENCLAW_PROFILE"] = "maestro-fleet"
 

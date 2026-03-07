@@ -22,7 +22,7 @@ def test_set_commander_model_updates_agent_and_env(monkeypatch, tmp_path: Path):
                 {
                     "id": "maestro-company",
                     "default": True,
-                    "model": "openai/gpt-5.2",
+                    "model": "openai/gpt-5.4",
                     "workspace": str(tmp_path / "workspace-company"),
                 }
             ]
@@ -61,7 +61,7 @@ def test_set_project_model_updates_target_agent(monkeypatch, tmp_path: Path):
                 {
                     "id": "maestro-project-tower-a",
                     "default": False,
-                    "model": "openai/gpt-5.2",
+                    "model": "openai/gpt-5.4",
                     "workspace": str(tmp_path / "workspace-project"),
                 },
             ]
@@ -87,7 +87,7 @@ def test_set_project_model_updates_target_agent(monkeypatch, tmp_path: Path):
 
     code = fleet_models.run_set_project_model(
         project="tower-a",
-        model="openai/gpt-5.2",
+        model="openai/gpt-5.4",
         api_key="sk-test-openai",
         skip_remote_validation=True,
     )
@@ -95,5 +95,59 @@ def test_set_project_model_updates_target_agent(monkeypatch, tmp_path: Path):
 
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     project_agent = next(item for item in saved["agents"]["list"] if item.get("id") == "maestro-project-tower-a")
-    assert project_agent["model"] == "openai/gpt-5.2"
+    assert project_agent["model"] == "openai/gpt-5.4"
     assert saved["env"]["OPENAI_API_KEY"] == "sk-test-openai"
+
+
+def test_set_project_telegram_updates_account_without_invalid_metadata_keys(monkeypatch, tmp_path: Path):
+    config_path = tmp_path / "home" / ".openclaw" / "openclaw.json"
+    config = {
+        "channels": {
+            "telegram": {
+                "enabled": True,
+                "accounts": {},
+            }
+        },
+        "bindings": [],
+    }
+    registry = {
+        "projects": [
+            {
+                "project_slug": "tower-a",
+                "project_name": "Tower A",
+                "telegram_bot_username": "",
+                "telegram_bot_display_name": "",
+            }
+        ]
+    }
+    _write_json(config_path, config)
+
+    monkeypatch.setattr(fleet_models, "_load_openclaw_config", lambda *args, **kwargs: (config, config_path))
+    monkeypatch.setattr(fleet_models, "resolve_fleet_store_root", lambda _store: tmp_path / "store")
+    monkeypatch.setattr(fleet_models, "sync_fleet_registry", lambda _store: registry)
+    monkeypatch.setattr(fleet_models, "save_fleet_registry", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        fleet_models,
+        "_validate_telegram_token",
+        lambda _token: (True, "project_level_fleet_bot", "Fleet Project Bot", "ok"),
+    )
+    monkeypatch.setattr(
+        fleet_models,
+        "ensure_openclaw_override_allowed",
+        lambda _config, allow_override=False: (True, ""),
+    )
+    monkeypatch.setattr(fleet_models, "_restart_openclaw_gateway", lambda: (True, "ok"))
+
+    code = fleet_models.run_set_project_telegram(
+        project="tower-a",
+        telegram_token="123456:ABCDEF",
+        skip_remote_validation=False,
+    )
+
+    assert code == 0
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    account = saved["channels"]["telegram"]["accounts"]["maestro-project-tower-a"]
+    assert set(account.keys()) == {"botToken", "dmPolicy", "groupPolicy", "streamMode"}
+    assert account["botToken"] == "123456:ABCDEF"
+    assert registry["projects"][0]["telegram_bot_username"] == "project_level_fleet_bot"
+    assert registry["projects"][0]["telegram_bot_display_name"] == "Fleet Project Bot"

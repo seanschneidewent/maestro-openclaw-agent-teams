@@ -1,13 +1,14 @@
 import { createQuickBooksInvoice } from '../../_lib/quickbooks.js';
 import { requireEnv } from '../../_lib/env.js';
+import { inferKitLifecycle, syncKitLifecycleByEmail } from '../../_lib/kit-lifecycle.js';
 
 function unauthorized() {
   return Response.json({ error: 'Unauthorized.' }, { status: 401 });
 }
 
 function isAuthorized(request) {
-  const expected = requireEnv('INVOICING_API_TOKEN');
-  const provided = request.headers.get('x-invoicing-token') || '';
+  const expected = requireEnv('INVOICING_API_TOKEN').trim();
+  const provided = (request.headers.get('x-invoicing-token') || '').trim();
   return provided && provided === expected;
 }
 
@@ -50,7 +51,19 @@ export default {
         sendEmail: payload.sendEmail,
       });
 
-      return Response.json({ ok: true, invoice });
+      const firstName = String(payload.customerName || '').trim().split(/\s+/)[0] || '';
+      const requestedLifecycle = typeof payload.kitLifecycle === 'string' ? payload.kitLifecycle : '';
+      const kitLifecycle = requestedLifecycle || inferKitLifecycle({
+        amount: payload.amount,
+        description: payload.description,
+      });
+      const kit = await syncKitLifecycleByEmail({
+        email: invoice.customerEmail,
+        firstName,
+        lifecycle: kitLifecycle,
+      });
+
+      return Response.json({ ok: true, invoice, kit });
     } catch (error) {
       return Response.json(
         {

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import os
+import shutil
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from .config import (
     get_store_path,
     load_dotenv,
 )
+from .control_plane import resolve_network_urls
 from .loader import load_project, resolve_page
 from .prompts import HIGHLIGHT_PROMPT
 from .utils import (
@@ -112,7 +114,7 @@ class MaestroTools:
     ):
         self._store_path = Path(store_path) if store_path else get_store_path()
         self._project_name = project_name
-        self._workspace_root = workspace_root
+        self._workspace_root = self._infer_workspace_root(workspace_root)
         self._project: dict[str, Any] | None = None
         self.licensed = True
         
@@ -122,11 +124,28 @@ class MaestroTools:
         else:
             load_dotenv()
 
-        if is_company_role(workspace_root):
+        if is_company_role(self._workspace_root):
             raise RuntimeError(
                 "Company Maestro is control-plane only. "
                 "Project knowledge tools are disabled in this workspace."
             )
+
+    def _infer_workspace_root(self, workspace_root: Path | None) -> Path | None:
+        if workspace_root:
+            return Path(workspace_root)
+
+        try:
+            resolved_store = self._store_path.resolve()
+        except Exception:
+            resolved_store = self._store_path
+
+        if resolved_store.name == "knowledge_store":
+            return resolved_store.parent
+
+        cwd = Path.cwd()
+        if (cwd / ".env").exists() or (cwd / "AWARENESS.md").exists():
+            return cwd
+        return None
 
     @property
     def project(self) -> dict[str, Any]:
@@ -161,6 +180,20 @@ class MaestroTools:
         if isinstance(project_path, str) and project_path.strip():
             return Path(project_path)
         return self._store_path / str(self.project.get("name", "default"))
+
+    def _workspace_route_path(self) -> str:
+        workspace_root = self._workspace_root
+        if workspace_root and is_company_role(workspace_root):
+            return "/command-center"
+        if workspace_root:
+            parts = workspace_root.resolve().parts
+            if "projects" in parts:
+                index = parts.index("projects")
+                if index + 1 < len(parts):
+                    slug = str(parts[index + 1]).strip()
+                    if slug:
+                        return f"/{slug}/"
+        return "/workspace"
 
     def _schedule_dir(self) -> Path:
         schedule_dir = self._project_dir() / "schedule"
@@ -384,6 +417,15 @@ class MaestroTools:
     def list_modifications(self) -> list[dict[str, Any]]:
         idx = self.project.get("index", {})
         return idx.get("modifications", []) if isinstance(idx, dict) else []
+
+    @requires_license
+    def get_access_urls(self) -> dict[str, Any]:
+        urls = resolve_network_urls(route_path=self._workspace_route_path())
+        return {
+            "recommended_url": str(urls.get("recommended_url", "")).strip(),
+            "localhost_url": str(urls.get("localhost_url", "")).strip(),
+            "tailnet_url": str(urls.get("tailnet_url") or "").strip(),
+        }
 
     @requires_license
     def check_gaps(self) -> list[dict[str, Any]] | str:
@@ -841,6 +883,23 @@ class MaestroTools:
         if not ws:
             return f"Workspace '{slug}' not found."
         return ws
+
+    @requires_license
+    def delete_workspace(self, slug: str) -> dict[str, Any] | str:
+        ws = self._load_workspace(slug)
+        if not ws:
+            return f"Workspace '{slug}' not found."
+
+        ws_path = self._workspaces_dir() / slug
+        if ws_path.exists():
+            shutil.rmtree(ws_path)
+        self._save_index()
+        return {
+            "status": "deleted",
+            "workspace": slug,
+            "page_count": len(ws.get("pages", [])),
+            "note_count": len(ws.get("notes", [])),
+        }
 
     @requires_license
     def add_workspace_page(self, slug: str, page_name: str) -> dict[str, Any] | str:

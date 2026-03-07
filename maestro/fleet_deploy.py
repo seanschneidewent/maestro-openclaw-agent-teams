@@ -46,7 +46,7 @@ from .openclaw_profile import (
     resolve_openclaw_profile,
 )
 from .profile import set_profile
-from .purchase import run_purchase
+from .fleet.projects.provisioning import run_project_create
 from .update import run_update
 from .utils import load_json, save_json, slugify
 from .workspace_templates import provider_env_key_for_model
@@ -176,7 +176,7 @@ def _prompt_model_selection(*, title: str, default_model: str, non_interactive: 
         return default_model
     model_options = [
         ("1", "anthropic/claude-opus-4-6"),
-        ("2", "openai/gpt-5.2"),
+        ("2", "openai/gpt-5.4"),
         ("3", "google/gemini-3-pro-preview"),
     ]
     default_choice = next((choice for choice, model in model_options if model == default_model), "1")
@@ -668,8 +668,6 @@ def _configure_company_openclaw(
         telegram = {}
         channels["telegram"] = telegram
     telegram["enabled"] = True
-    if not str(telegram.get("botToken", "")).strip():
-        telegram["botToken"] = telegram_token
     accounts = telegram.get("accounts")
     if not isinstance(accounts, dict):
         accounts = {}
@@ -680,6 +678,13 @@ def _configure_company_openclaw(
         "groupPolicy": "allowlist",
         "streamMode": "partial",
     }
+    default_account = accounts.get("default")
+    if (
+        isinstance(default_account, dict)
+        and str(default_account.get("botToken", "")).strip() == telegram_token
+    ):
+        accounts.pop("default", None)
+    telegram.pop("botToken", None)
     binding_changes = ensure_telegram_account_bindings(config)
 
     save_json(config_path, config)
@@ -1394,7 +1399,7 @@ def run_deploy(
             )
             return 1
 
-        purchase_code = run_purchase(
+        purchase_code = run_project_create(
             project_name=chosen_project_name,
             assignee=chosen_assignee,
             superintendent=superintendent,
@@ -1544,7 +1549,7 @@ def run_deploy(
     network = resolve_network_urls(web_port=effective_port, route_path=route)
     command_center_url = str(network.get("recommended_url", f"http://localhost:{effective_port}{route}"))
     local_url = str(network.get("localhost_url", f"http://localhost:{effective_port}{route}"))
-    tailnet_url = str(network.get("tailnet_url", "")).strip()
+    tailnet_url = str(network.get("tailnet_url") or "").strip()
 
     summary_lines = [
         f"Company: {chosen_company_name}",

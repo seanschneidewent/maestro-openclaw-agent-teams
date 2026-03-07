@@ -58,6 +58,11 @@ def test_workspace_websocket_initializes(tmp_path: Path):
             assert "page_count" in event
 
 
+def test_workspace_event_slug_ignores_index_file():
+    assert server._workspace_event_slug(("workspaces", "_index.json")) is None
+    assert server._workspace_event_slug(("workspaces", "demo-workspace", "workspace.json")) == "demo-workspace"
+
+
 def test_workspace_project_notes_route_returns_empty_payload(tmp_path: Path):
     _make_single_project_store(tmp_path, name="Solo Project")
     with _with_store(tmp_path):

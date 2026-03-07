@@ -396,6 +396,15 @@ def _project_change_context(path: Path) -> tuple[str | None, tuple[str, ...]]:
     )
 
 
+def _workspace_event_slug(project_rel_parts: tuple[str, ...]) -> str | None:
+    if len(project_rel_parts) < 2:
+        return None
+    candidate = str(project_rel_parts[1]).strip()
+    if not candidate or candidate == "_index.json":
+        return None
+    return candidate
+
+
 # ── Filesystem watcher ──────────────────────────────────────────
 
 async def watch_knowledge_store():
@@ -427,7 +436,7 @@ async def watch_knowledge_store():
                 continue
 
             if project_rel_parts and project_rel_parts[0] == "workspaces":
-                ws_slug = project_rel_parts[1] if len(project_rel_parts) > 1 else None
+                ws_slug = _workspace_event_slug(project_rel_parts)
                 await broadcast(slug, {"type": "workspace_updated", "slug": ws_slug})
                 continue
 

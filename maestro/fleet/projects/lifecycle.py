@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+NATIVE_PLUGIN_ID = "maestro-native-tools"
+
 CreateControlPayloadFn = Callable[[Path, str], dict[str, Any]]
 SyncFleetRegistryFn = Callable[[Path], dict[str, Any]]
 FindRegistryProjectFn = Callable[[dict[str, Any], str], dict[str, Any] | None]
@@ -21,6 +23,52 @@ LoadJsonFn = Callable[[Path], Any]
 SaveJsonFn = Callable[[Path, Any], None]
 NowIsoFn = Callable[[], str]
 SlugifyFn = Callable[[str], str]
+
+
+def _ensure_native_plugin_config(config: dict[str, Any]) -> bool:
+    changed = False
+
+    plugins = config.get("plugins") if isinstance(config.get("plugins"), dict) else {}
+    entries = plugins.get("entries") if isinstance(plugins.get("entries"), dict) else {}
+    entry = entries.get(NATIVE_PLUGIN_ID) if isinstance(entries.get(NATIVE_PLUGIN_ID), dict) else {}
+    if entry.get("enabled") is not True:
+        entry["enabled"] = True
+        changed = True
+    entries[NATIVE_PLUGIN_ID] = entry
+    plugins["entries"] = entries
+
+    allow = plugins.get("allow")
+    if isinstance(allow, list):
+        normalized = [str(item).strip() for item in allow if str(item).strip()]
+        if NATIVE_PLUGIN_ID not in normalized:
+            normalized.append(NATIVE_PLUGIN_ID)
+            changed = True
+        plugins["allow"] = normalized
+    else:
+        plugins["allow"] = [NATIVE_PLUGIN_ID]
+        changed = True
+
+    config["plugins"] = plugins
+    return changed
+
+
+def _native_extension_source() -> Path | None:
+    repo_root = Path(__file__).resolve().parents[3]
+    candidate = repo_root / "agent" / "extensions" / NATIVE_PLUGIN_ID
+    return candidate if candidate.exists() else None
+
+
+def _sync_native_extension(workspace_root: Path) -> bool:
+    source = _native_extension_source()
+    if source is None:
+        return False
+
+    destination = workspace_root / ".openclaw" / "extensions" / NATIVE_PLUGIN_ID
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source, destination)
+    return True
 
 
 def default_model_from_agents(agent_list: list[dict[str, Any]]) -> str:
@@ -70,6 +118,20 @@ def create_project_node(
     dir_name = (project_dir_name or slug).strip() or slug
     project_dir = root / dir_name
     now_iso = now_iso_fn()
+
+    if (root / "project.json").exists() and root != project_dir:
+        return {
+            "ok": False,
+            "error": (
+                "Store root is currently a single-project layout. "
+                "Use existing-project onboarding semantics for this store, "
+                "or switch MAESTRO_STORE to a parent directory for multi-project mode."
+            ),
+            "project_slug": slug,
+            "project_name": name,
+            "project_dir": str(project_dir.resolve()),
+            "dry_run": dry_run,
+        }
 
     created = False
     if not project_dir.exists() and not dry_run:
@@ -539,6 +601,8 @@ def register_project_agent(
     binding_changes = ensure_telegram_account_bindings_fn(config)
     if binding_changes:
         changed = True
+    if _ensure_native_plugin_config(config):
+        changed = True
 
     if not dry_run:
         if changed:
@@ -550,15 +614,28 @@ def register_project_agent(
         if not env_path.exists():
             env_path.write_text(desired_env_line + role_line, encoding="utf-8")
         else:
-            current_env = env_path.read_text(encoding="utf-8")
-            append = ""
-            if "MAESTRO_STORE=" not in current_env:
-                append += desired_env_line
-            if "MAESTRO_AGENT_ROLE=" not in current_env:
-                append += role_line
-            if append:
-                with env_path.open("a", encoding="utf-8") as handle:
-                    handle.write(append)
+            current_lines = env_path.read_text(encoding="utf-8").splitlines()
+            updated_lines: list[str] = []
+            saw_store = False
+            saw_role = False
+            for raw in current_lines:
+                line = raw.rstrip("\n")
+                if line.startswith("MAESTRO_STORE="):
+                    updated_lines.append(desired_env_line.rstrip("\n"))
+                    saw_store = True
+                    continue
+                if line.startswith("MAESTRO_AGENT_ROLE="):
+                    updated_lines.append(role_line.rstrip("\n"))
+                    saw_role = True
+                    continue
+                updated_lines.append(line)
+            if not saw_store:
+                updated_lines.append(desired_env_line.rstrip("\n"))
+            if not saw_role:
+                updated_lines.append(role_line.rstrip("\n"))
+            normalized = "\n".join(updated_lines).rstrip("\n") + "\n"
+            env_path.write_text(normalized, encoding="utf-8")
+        _sync_native_extension(project_workspace)
 
     return {
         "ok": True,

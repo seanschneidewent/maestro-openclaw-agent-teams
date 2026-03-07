@@ -28,6 +28,14 @@ from .openclaw_profile import (
 from .profile import PROFILE_FLEET, resolve_profile
 from .system_directives import summarize_system_directives
 from .utils import load_json, save_json, slugify
+from .workspace_templates import (
+    provider_env_key_for_model,
+    render_project_agents_md,
+    render_project_tools_md,
+    render_workspace_awareness_md,
+    should_remove_generic_project_bootstrap,
+    should_refresh_generic_project_file,
+)
 
 
 REGISTRY_VERSION = 1
@@ -48,6 +56,13 @@ def _default_runner(args: list[str], timeout: int = 6) -> tuple[bool, str]:
         timeout=timeout,
         prepend_profile_args=lambda cmd: prepend_openclaw_profile_args(cmd, default_profile=default_profile),
     )
+
+
+def _invoke_runner(runner: CommandRunner, args: list[str], timeout: int) -> tuple[bool, str]:
+    try:
+        return runner(args, timeout)
+    except TypeError:
+        return runner(args)  # type: ignore[misc]
 
 
 def _parse_json_from_output(text: str) -> dict[str, Any]:
@@ -314,7 +329,7 @@ def _pending_device_pairing(
         status["source"] = "status"
         return status
 
-    ok, out = runner(["openclaw", "devices", "list", "--json"], timeout=8)
+    ok, out = _invoke_runner(runner, ["openclaw", "devices", "list", "--json"], 8)
     if not ok:
         status["source"] = "devices_list_failed"
         return status
@@ -346,7 +361,7 @@ def resolve_network_urls(
 
     tailnet_ip: str | None = None
     if shutil.which("tailscale"):
-        ok, out = runner(["tailscale", "ip", "-4"], timeout=5)
+        ok, out = _invoke_runner(runner, ["tailscale", "ip", "-4"], 5)
         if ok:
             tailnet_ip = _parse_tailscale_ipv4(out)
 
@@ -593,7 +608,7 @@ def register_project_agent(
     dry_run: bool = False,
     model: str | None = None,
 ) -> dict[str, Any]:
-    return project_lifecycle.register_project_agent(
+    result = project_lifecycle.register_project_agent(
         store_root,
         project_slug,
         project_name,
@@ -610,6 +625,39 @@ def register_project_agent(
         dry_run=dry_run,
         model=model,
     )
+    if bool(result.get("ok")) and not dry_run:
+        project_workspace = Path(str(result.get("workspace", "")).strip()).expanduser()
+        if str(project_workspace):
+            urls = resolve_network_urls(route_path=f"/{project_slug}/")
+            model_value = str(result.get("model", "")).strip() or "unknown"
+            awareness = render_workspace_awareness_md(
+                model=model_value,
+                preferred_url=str(urls.get("recommended_url", "")).strip(),
+                local_url=str(urls.get("localhost_url", "")).strip(),
+                tailnet_url=str(urls.get("tailnet_url") or "").strip(),
+                store_root=project_store_path,
+                surface_label="Workspace",
+                generated_by="maestro-fleet project create",
+            )
+            project_workspace.mkdir(parents=True, exist_ok=True)
+            (project_workspace / "AWARENESS.md").write_text(awareness, encoding="utf-8")
+            agents_path = project_workspace / "AGENTS.md"
+            current_agents = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
+            if (not agents_path.exists()) or should_refresh_generic_project_file("AGENTS.md", current_agents):
+                agents_path.write_text(render_project_agents_md(), encoding="utf-8")
+            tools_path = project_workspace / "TOOLS.md"
+            current_tools = tools_path.read_text(encoding="utf-8") if tools_path.exists() else ""
+            if (not tools_path.exists()) or should_refresh_generic_project_file("TOOLS.md", current_tools):
+                tools_path.write_text(
+                    render_project_tools_md(provider_env_key_for_model(model_value)),
+                    encoding="utf-8",
+                )
+            bootstrap_path = project_workspace / "BOOTSTRAP.md"
+            if bootstrap_path.exists():
+                bootstrap_content = bootstrap_path.read_text(encoding="utf-8")
+                if should_remove_generic_project_bootstrap(bootstrap_content):
+                    bootstrap_path.unlink()
+    return result
 
 
 def _service_status(

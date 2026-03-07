@@ -83,7 +83,7 @@ def test_configure_company_openclaw_writes_schema_valid_telegram_account(monkeyp
     monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda: (config, config_path))
 
     result = fleet_deploy._configure_company_openclaw(
-        model="openai/gpt-5.2",
+        model="openai/gpt-5.4",
         api_key="sk-test-openai-key",
         telegram_token="123456:ABCDEF",
         allow_openclaw_override=False,
@@ -93,6 +93,47 @@ def test_configure_company_openclaw_writes_schema_valid_telegram_account(monkeyp
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     account = saved["channels"]["telegram"]["accounts"]["maestro-company"]
     assert set(account.keys()) == {"botToken", "dmPolicy", "groupPolicy", "streamMode"}
+    assert "botToken" not in saved["channels"]["telegram"]
+
+
+def test_configure_company_openclaw_removes_duplicate_default_telegram_account(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    workspace = home / ".openclaw" / "workspace-maestro"
+    config_path = home / ".openclaw" / "openclaw.json"
+    config = {
+        "env": {},
+        "agents": {"list": []},
+        "channels": {
+            "telegram": {
+                "enabled": True,
+                "botToken": "123456:OLD",
+                "accounts": {
+                    "default": {
+                        "botToken": "123456:ABCDEF",
+                        "dmPolicy": "pairing",
+                        "groupPolicy": "allowlist",
+                        "streamMode": "partial",
+                    }
+                },
+            }
+        },
+    }
+    _write_json(config_path, config)
+
+    monkeypatch.setattr(fleet_deploy, "_load_openclaw_config", lambda: (config, config_path))
+
+    fleet_deploy._configure_company_openclaw(
+        model="openai/gpt-5.4",
+        api_key="sk-test-openai-key",
+        telegram_token="123456:ABCDEF",
+        allow_openclaw_override=False,
+    )
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    accounts = saved["channels"]["telegram"]["accounts"]
+    assert "default" not in accounts
+    assert accounts["maestro-company"]["botToken"] == "123456:ABCDEF"
+    assert "botToken" not in saved["channels"]["telegram"]
 
 
 def test_configure_company_openclaw_blocks_unmanaged_default_agent(monkeypatch, tmp_path: Path):
@@ -101,7 +142,7 @@ def test_configure_company_openclaw_blocks_unmanaged_default_agent(monkeypatch, 
     config = {
         "agents": {
             "list": [
-                {"id": "external-agent", "default": True, "model": "openai/gpt-5.2"},
+                {"id": "external-agent", "default": True, "model": "openai/gpt-5.4"},
             ]
         }
     }
@@ -110,7 +151,7 @@ def test_configure_company_openclaw_blocks_unmanaged_default_agent(monkeypatch, 
 
     with pytest.raises(RuntimeError, match="does not look Maestro-managed"):
         fleet_deploy._configure_company_openclaw(
-            model="openai/gpt-5.2",
+            model="openai/gpt-5.4",
             api_key="sk-test-openai-key",
             telegram_token="123456:ABCDEF",
             allow_openclaw_override=False,
@@ -204,7 +245,7 @@ def test_run_deploy_uses_shifted_port_when_requested_port_busy(monkeypatch, tmp_
         "env": {},
         "agents": {
             "list": [
-                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.2"},
+                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.4"},
             ]
         },
         "channels": {"telegram": {"enabled": True, "accounts": {}}},
@@ -290,7 +331,7 @@ def test_run_deploy_uses_shifted_port_when_requested_port_busy(monkeypatch, tmp_
 
     code = fleet_deploy.run_deploy(
         company_name="TestCo",
-        model="openai/gpt-5.2",
+        model="openai/gpt-5.4",
         api_key="sk-test-openai-key",
         telegram_token="123456:ABCDEF",
         port=3000,
@@ -309,7 +350,7 @@ def test_run_deploy_reuses_existing_server_port_from_pid_state(monkeypatch, tmp_
         "env": {},
         "agents": {
             "list": [
-                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.2"},
+                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.4"},
             ]
         },
         "channels": {"telegram": {"enabled": True, "accounts": {}}},
@@ -401,7 +442,7 @@ def test_run_deploy_reuses_existing_server_port_from_pid_state(monkeypatch, tmp_
 
     code = fleet_deploy.run_deploy(
         company_name="TestCo",
-        model="openai/gpt-5.2",
+        model="openai/gpt-5.4",
         api_key="sk-test-openai-key",
         telegram_token="123456:ABCDEF",
         port=3000,
@@ -420,7 +461,7 @@ def test_run_deploy_doctor_output_with_brackets_does_not_trigger_rich_markup(mon
         "env": {},
         "agents": {
             "list": [
-                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.2"},
+                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.4"},
             ]
         },
         "channels": {"telegram": {"enabled": True, "accounts": {}}},
@@ -476,7 +517,7 @@ def test_run_deploy_doctor_output_with_brackets_does_not_trigger_rich_markup(mon
 
     code = fleet_deploy.run_deploy(
         company_name="TestCo",
-        model="openai/gpt-5.2",
+        model="openai/gpt-5.4",
         api_key="sk-test-openai-key",
         telegram_token="123456:ABCDEF",
         non_interactive=True,
@@ -653,7 +694,7 @@ def test_run_deploy_stays_commander_only_by_default(monkeypatch, tmp_path: Path)
         "env": {},
         "agents": {
             "list": [
-                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.2"},
+                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.4"},
             ]
         },
         "channels": {"telegram": {"enabled": True, "accounts": {}}},
@@ -718,16 +759,16 @@ def test_run_deploy_stays_commander_only_by_default(monkeypatch, tmp_path: Path)
         },
     )
 
-    def _fail_run_purchase(**kwargs):
+    def _fail_run_project_create(**kwargs):
         _ = kwargs
-        raise AssertionError("run_purchase should not be called")
+        raise AssertionError("run_project_create should not be called")
 
-    monkeypatch.setattr(fleet_deploy, "run_purchase", _fail_run_purchase)
+    monkeypatch.setattr(fleet_deploy, "run_project_create", _fail_run_project_create)
 
     code = fleet_deploy.run_deploy(
         company_name="TestCo",
-        model="openai/gpt-5.2",
-        project_model="openai/gpt-5.2",
+        model="openai/gpt-5.4",
+        project_model="openai/gpt-5.4",
         gemini_api_key="AIzaTestGeminiKey0000000000000000000000",
         openai_api_key="sk-test-openai-key",
         anthropic_api_key="sk-ant-test-key",
@@ -746,7 +787,7 @@ def test_run_deploy_ignores_initial_project_args_without_explicit_opt_in(monkeyp
         "env": {},
         "agents": {
             "list": [
-                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.2"},
+                {"id": "maestro-company", "default": True, "model": "openai/gpt-5.4"},
             ]
         },
         "channels": {"telegram": {"enabled": True, "accounts": {}}},
@@ -811,16 +852,16 @@ def test_run_deploy_ignores_initial_project_args_without_explicit_opt_in(monkeyp
         },
     )
 
-    def _fail_run_purchase(**kwargs):
+    def _fail_run_project_create(**kwargs):
         _ = kwargs
-        raise AssertionError("run_purchase should not be called without explicit opt-in")
+        raise AssertionError("run_project_create should not be called without explicit opt-in")
 
-    monkeypatch.setattr(fleet_deploy, "run_purchase", _fail_run_purchase)
+    monkeypatch.setattr(fleet_deploy, "run_project_create", _fail_run_project_create)
 
     code = fleet_deploy.run_deploy(
         company_name="TestCo",
-        model="openai/gpt-5.2",
-        project_model="openai/gpt-5.2",
+        model="openai/gpt-5.4",
+        project_model="openai/gpt-5.4",
         gemini_api_key="AIzaTestGeminiKey0000000000000000000000",
         openai_api_key="sk-test-openai-key",
         anthropic_api_key="sk-ant-test-key",
@@ -845,7 +886,7 @@ def test_fleet_openclaw_profile_isolated_from_shared_config(monkeypatch, tmp_pat
         {
             "agents": {
                 "list": [
-                    {"id": "main", "default": True, "model": "openai/gpt-5.2"},
+                    {"id": "main", "default": True, "model": "openai/gpt-5.4"},
                 ]
             }
         },

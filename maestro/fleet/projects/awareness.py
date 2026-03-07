@@ -26,6 +26,13 @@ QuotePathFn = Callable[[str | Path], str]
 NowIsoFn = Callable[[], str]
 
 
+def _invoke_runner(runner: CommandRunner, args: list[str], timeout: int) -> tuple[bool, str]:
+    try:
+        return runner(args, timeout)
+    except TypeError:
+        return runner(args)  # type: ignore[misc]
+
+
 def service_status(
     *,
     command_runner: CommandRunner | None,
@@ -49,7 +56,7 @@ def service_status(
     tailscale_connected = False
     tailscale_ip = None
     if tailscale_installed:
-        ok, out = runner(["tailscale", "ip", "-4"], timeout=5)
+        ok, out = _invoke_runner(runner, ["tailscale", "ip", "-4"], 5)
         if ok:
             tailscale_ip = parse_tailscale_ipv4_fn(out)
             tailscale_connected = bool(tailscale_ip)
@@ -60,14 +67,14 @@ def service_status(
     status_output = ""
     gw_status: dict[str, Any] = {}
     if openclaw_installed:
-        gw_ok, gw_out = runner(["openclaw", "gateway", "status", "--json"], timeout=8)
+        gw_ok, gw_out = _invoke_runner(runner, ["openclaw", "gateway", "status", "--json"], 8)
         _ = gw_ok
         gw_status = parse_json_from_output_fn(gw_out)
         if gw_status:
             openclaw_running = gateway_status_running_fn(gw_status)
             status_output = gw_out
 
-        ok, out = runner(["openclaw", "status"], timeout=6)
+        ok, out = _invoke_runner(runner, ["openclaw", "status"], 6)
         if not status_output:
             status_output = out
         lowered = out.lower()

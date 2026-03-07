@@ -6,7 +6,8 @@ async function kitRequest(path, { method = 'GET', body } = {}) {
   const response = await fetch(`${KIT_API_BASE}${path}`, {
     method,
     headers: {
-      Authorization: `Bearer ${requireEnv('KIT_API_KEY')}`,
+      'X-Kit-Api-Key': requireEnv('KIT_API_KEY'),
+      Accept: 'application/json',
       'Content-Type': 'application/json',
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -33,6 +34,15 @@ export function getKitConfig() {
     setupOnboardingSequenceId: optionalEnv('KIT_SEQUENCE_SETUP_CUSTOMERS'),
     monthlyOnboardingSequenceId: optionalEnv('KIT_SEQUENCE_MONTHLY_CUSTOMERS'),
   };
+}
+
+async function findSubscriberByEmail(email) {
+  if (!email) {
+    return null;
+  }
+
+  const payload = await kitRequest(`/subscribers?email_address=${encodeURIComponent(email)}`);
+  return payload?.subscribers?.[0] || null;
 }
 
 export async function upsertSubscriber({ email, firstName }) {
@@ -67,11 +77,13 @@ export async function removeTagByEmail(tagId, email) {
     return null;
   }
 
-  return kitRequest(`/tags/${tagId}/subscribers`, {
+  const subscriber = await findSubscriberByEmail(email);
+  if (!subscriber?.id) {
+    return null;
+  }
+
+  return kitRequest(`/tags/${tagId}/subscribers/${subscriber.id}`, {
     method: 'DELETE',
-    body: {
-      email_address: email,
-    },
   });
 }
 

@@ -22,7 +22,9 @@ website/dist/
 
 # Thumbnail caches
 .cache/
+output/
 
 # OS
 .DS_Store
 Thumbs.db
+.vercel

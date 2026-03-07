@@ -15,11 +15,22 @@ from .openclaw_profile import openclaw_config_path
 INSTALL_STATE_VERSION = 2
 PROFILE_SOLO = "solo"
 PROFILE_FLEET = "fleet"
+DEFAULT_DESKTOP_STORE_DIR = "knowledge_store"
 
 
 def install_state_path(home_dir: Path | None = None) -> Path:
     home = (home_dir or Path.home()).resolve()
     return home / ".maestro" / "install.json"
+
+
+def resolve_desktop_store_root(
+    home_dir: Path | None = None,
+    *,
+    dir_name: str = DEFAULT_DESKTOP_STORE_DIR,
+) -> Path:
+    """Resolve the canonical Desktop knowledge-store root."""
+    home = (home_dir or Path.home()).expanduser().resolve()
+    return (home / "Desktop" / dir_name).resolve()
 
 
 def load_install_state(home_dir: Path | None = None) -> dict[str, Any]:

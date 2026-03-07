@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "stripe:links": "bash ./scripts/create_stripe_payment_links.sh"
+    "stripe:links": "bash ./scripts/create_stripe_payment_links.sh",
+    "qbo:auth-url": "node ./scripts/quickbooks_oauth_helper.mjs auth-url",
+    "qbo:exchange-code": "node ./scripts/quickbooks_oauth_helper.mjs exchange-code"
   },
   "dependencies": {
     "lucide-react": "^0.564.0",

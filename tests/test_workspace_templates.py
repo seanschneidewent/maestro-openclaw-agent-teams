@@ -8,7 +8,10 @@ from maestro.workspace_templates import (
     render_company_identity_md,
     render_company_soul_md,
     render_company_user_md,
+    render_project_agents_md,
+    render_project_tools_md,
     render_tools_md,
+    render_workspace_awareness_md,
     render_workspace_env,
 )
 
@@ -28,6 +31,14 @@ def test_render_tools_md_includes_active_provider():
     assert "http://<tailscale-ip>:3000/command-center" in content
     assert "Commander Behavior Contract" in content
     assert "maestro-fleet project create" in content
+    assert "Existing project-store onboarding" in content
+    assert "Existing project root means `project.json` plus populated `pages/`" in content
+    assert "verify page count and pointer count before saying the project is ready" in content
+    assert "Instruction Priority" in content
+    assert "Tool Decision Rules" in content
+    assert "Verification Evidence" in content
+    assert "Stop And Ask Rules" in content
+    assert "Worked Examples" in content
 
 
 def test_render_workspace_env_for_non_gemini_primary():
@@ -78,11 +89,58 @@ def test_render_workspace_env_includes_model_auth_method_when_set():
 def test_render_company_agents_md_has_control_plane_boundary():
     content = render_company_agents_md()
     assert "The Commander control-plane orchestrator" in content
+    assert "Read `AWARENESS.md` for current model + access URLs" in content
     assert "Do not ask whether the Commander should be set up." in content
     assert "company formation mode" in content
     assert "Do not inspect or enumerate project plan files under `knowledge_store/`" in content
     assert "Routing Rules" in content
     assert "project-detail questions" in content
+    assert "existing project root, a multi-project store root, or a raw PDF folder" in content
+    assert "Do not append `/<slug>` under a path that is already the real project root" in content
+    assert "verify: resolved store path, nonzero page count, nonzero pointer count" in content
+    assert "Session Operating Protocol" in content
+    assert "Request Classification Rules" in content
+    assert "Dependency Checks" in content
+    assert "Completion Contract" in content
+    assert "Stop Conditions" in content
+    assert "High-Risk Examples" in content
+
+
+def test_render_project_agents_md_reads_awareness_first():
+    content = render_project_agents_md()
+    assert "Read `AWARENESS.md` for current model + workspace URLs" in content
+    assert "You are a project-scoped Maestro agent inside Fleet." in content
+    assert "If asked about company-wide orchestration, route to the Commander." in content
+
+
+def test_render_project_tools_md_uses_awareness_for_workspace_url():
+    content = render_project_tools_md(active_provider_env_key="OPENAI_API_KEY")
+    assert "Read `AWARENESS.md` and use the recommended workspace URL." in content
+    assert "`maestro_get_access_urls`" in content
+    assert "`OPENAI_API_KEY` — Active project model key" in content
+
+
+def test_render_personal_tools_md_returns_solo_tools_content():
+    from maestro.workspace_templates import render_personal_tools_md
+
+    content = render_personal_tools_md(active_provider_env_key="OPENAI_API_KEY")
+    assert content is not None
+    assert "# TOOLS.md — Maestro Personal" in content
+    assert "`OPENAI_API_KEY` — Active default model key" in content
+    assert "`maestro_delete_workspace`" in content
+
+
+def test_render_workspace_awareness_md_prefers_tailnet_when_available():
+    content = render_workspace_awareness_md(
+        model="openai/gpt-5.4",
+        preferred_url="http://100.64.0.1:3000/alpha-project/",
+        local_url="http://localhost:3000/alpha-project/",
+        tailnet_url="http://100.64.0.1:3000/alpha-project/",
+        store_root="/tmp/alpha-project",
+    )
+    assert "Recommended Workspace URL: `http://100.64.0.1:3000/alpha-project/`" in content
+    assert "Tailnet Workspace URL: `http://100.64.0.1:3000/alpha-project/`" in content
+    assert "Field Access Status: `ready`" in content
 
 
 def test_render_company_identity_files_describe_company_setup_role():
@@ -92,6 +150,8 @@ def test_render_company_identity_files_describe_company_setup_role():
 
     assert "You are **The Commander**" in soul
     assert "Do not ask whether the commander should be set up." in soul
+    assert "Prefer explicit checklists, classification, and verification over intuitive leaps" in soul
+    assert "Use explicit dependency checks before taking actions that mutate config, routing, or project state" in soul
     assert "I am The Commander for this company." in identity
     assert "company-level Maestro orchestrator" in identity
     assert "Company Leadership" in user

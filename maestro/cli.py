@@ -24,6 +24,7 @@ from .agent_role import is_company_role
 from .install_state import (
     load_install_state,
     record_active_project,
+    resolve_desktop_store_root,
     resolve_fleet_store_root,
     update_install_state,
 )
@@ -127,6 +128,7 @@ def _add_tools_parser(subparsers: argparse._SubParsersAction):
 
     tools_sub.add_parser("list_modifications")
     tools_sub.add_parser("check_gaps")
+    tools_sub.add_parser("get_access_urls")
     tools_sub.add_parser("get_schedule_status")
 
     lsi = tools_sub.add_parser("list_schedule_items")
@@ -178,6 +180,9 @@ def _add_tools_parser(subparsers: argparse._SubParsersAction):
 
     gw = tools_sub.add_parser("get_workspace")
     gw.add_argument("slug")
+
+    dw = tools_sub.add_parser("delete_workspace")
+    dw.add_argument("slug")
 
     ap = tools_sub.add_parser("add_page")
     ap.add_argument("slug")
@@ -417,8 +422,11 @@ def _resolve_solo_ingest_project_name(args: argparse.Namespace, default_folder_n
 def _handle_ingest(args: argparse.Namespace):
     from .ingest import ingest
 
-    resolved_store = str(resolve_fleet_store_root(args.store))
     profile = resolve_profile()
+    if profile == PROFILE_FLEET and not args.store:
+        resolved_store = str(resolve_desktop_store_root())
+    else:
+        resolved_store = str(resolve_fleet_store_root(args.store))
     folder_name = Path(args.folder).expanduser().resolve().name
 
     project_name = args.project_name
@@ -431,6 +439,8 @@ def _handle_ingest(args: argparse.Namespace):
     if profile == PROFILE_SOLO and final_name:
         active_slug = slugify(final_name)
         record_active_project(project_slug=active_slug, project_name=final_name)
+        update_install_state({"store_root": resolved_store, "fleet_store_root": resolved_store})
+    elif profile == PROFILE_FLEET:
         update_install_state({"store_root": resolved_store, "fleet_store_root": resolved_store})
 
 
@@ -542,7 +552,7 @@ def _run_fleet(args: argparse.Namespace):
     from .fleet_models import run_set_commander_model, run_set_project_model, run_set_project_telegram
     from .install_state import resolve_fleet_store_root
     from .doctor import run_doctor
-    from .purchase import run_purchase
+    from .fleet.projects.provisioning import run_project_create
     from .update import run_update
     from .openclaw_profile import DEFAULT_FLEET_OPENCLAW_PROFILE, ensure_openclaw_profile_env
     from .utils import slugify
@@ -653,7 +663,7 @@ def _run_fleet(args: argparse.Namespace):
             print("Run: maestro fleet enable")
             sys.exit(1)
         if str(args.fleet_project_command or "").strip() == "create":
-            code = run_purchase(
+            code = run_project_create(
                 project_name=args.project_name,
                 assignee=args.assignee,
                 superintendent=args.superintendent,
@@ -880,6 +890,7 @@ def _run_tools(args: argparse.Namespace):
         "find_cross_references": lambda: tools.find_cross_references(args.page_name),
         "list_modifications": lambda: tools.list_modifications(),
         "check_gaps": lambda: tools.check_gaps(),
+        "get_access_urls": lambda: tools.get_access_urls(),
         "get_schedule_status": lambda: tools.get_schedule_status(),
         "list_schedule_items": lambda: tools.list_schedule_items(getattr(args, "status", None)),
         "upsert_schedule_item": lambda: tools.upsert_schedule_item(
@@ -910,6 +921,7 @@ def _run_tools(args: argparse.Namespace):
         "create_workspace": lambda: tools.create_workspace(args.title, args.description),
         "list_workspaces": lambda: tools.list_workspaces(),
         "get_workspace": lambda: tools.get_workspace(args.slug),
+        "delete_workspace": lambda: tools.delete_workspace(args.slug),
         "add_page": lambda: tools.add_workspace_page(args.slug, args.page_name),
         "remove_page": lambda: tools.remove_workspace_page(args.slug, args.page_name),
         "select_pointers": lambda: tools.select_pointers(args.slug, args.page_name, args.pointer_ids),

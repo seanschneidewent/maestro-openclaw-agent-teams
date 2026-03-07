@@ -199,6 +199,33 @@ class TestKnowledgeQueries:
         with pytest.raises(RuntimeError, match="control-plane only"):
             MaestroTools(store_path=mock_store)
 
+    def test_get_access_urls_infers_project_workspace_from_store(self, tmp_path, monkeypatch):
+        workspace = tmp_path / "workspace-maestro" / "projects" / "alpha-project"
+        store = workspace / "knowledge_store"
+        store.mkdir(parents=True)
+        (workspace / ".env").write_text(
+            "MAESTRO_AGENT_ROLE=project\nMAESTRO_STORE=knowledge_store\n",
+            encoding="utf-8",
+        )
+
+        observed: dict[str, str] = {}
+
+        def fake_resolve_network_urls(*, route_path: str, **_: object) -> dict[str, str]:
+            observed["route_path"] = route_path
+            return {
+                "recommended_url": f"http://localhost:3000{route_path}",
+                "localhost_url": f"http://localhost:3000{route_path}",
+                "tailnet_url": "",
+            }
+
+        monkeypatch.setattr("maestro.tools.resolve_network_urls", fake_resolve_network_urls)
+
+        tool = MaestroTools(store_path=store)
+        urls = tool.get_access_urls()
+
+        assert observed["route_path"] == "/alpha-project/"
+        assert urls["recommended_url"] == "http://localhost:3000/alpha-project/"
+
 
 class TestWorkspaces:
     def test_create_workspace(self, tools):
@@ -217,6 +244,13 @@ class TestWorkspaces:
         result = tools.list_workspaces()
         assert len(result) == 1
         assert result[0]["slug"] == "ws1"
+
+    def test_delete_workspace(self, tools):
+        tools.create_workspace("Disposable", "Remove me")
+        result = tools.delete_workspace("disposable")
+        assert result["status"] == "deleted"
+        assert result["workspace"] == "disposable"
+        assert tools.list_workspaces() == []
 
     def test_add_page_to_workspace(self, tools):
         tools.create_workspace("Test", "Test workspace")

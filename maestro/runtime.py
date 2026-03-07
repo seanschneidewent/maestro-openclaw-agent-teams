@@ -222,14 +222,20 @@ def check_telegram(state: ServiceState, log: ActivityLog) -> bool:
     try:
         config = json.loads(config_file.read_text(encoding="utf-8"))
         tg = config.get("channels", {}).get("telegram", {})
-        if tg.get("enabled") and tg.get("botToken"):
+        accounts = tg.get("accounts", {})
+        has_account_token = isinstance(accounts, dict) and any(
+            isinstance(acc_data, dict) and acc_data.get("botToken") for acc_data in accounts.values()
+        )
+        if tg.get("enabled") and (tg.get("botToken") or has_account_token):
             state.telegram_connected = True
             # Try to get bot username
-            accounts = tg.get("accounts", {})
-            for acc_data in accounts.values():
-                if acc_data.get("botToken"):
-                    state.telegram_bot = "@bot"  # We don't store username in config
-                    break
+            if isinstance(accounts, dict):
+                for acc_data in accounts.values():
+                    if acc_data.get("botToken"):
+                        state.telegram_bot = "@bot"  # We don't store username in config
+                        break
+            if not state.telegram_bot:
+                state.telegram_bot = "@bot"
             return True
     except Exception:
         pass

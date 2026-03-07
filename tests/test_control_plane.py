@@ -95,6 +95,20 @@ def test_create_project_node_and_move(tmp_path: Path):
     assert (tmp_path / "beta-build-renamed").exists()
 
 
+def test_create_project_node_rejects_single_project_store_root(tmp_path: Path):
+    _make_project(tmp_path, name="Alpha Project", slug="alpha-project")
+
+    created = create_project_node(
+        store_root=tmp_path,
+        project_name="Beta Build",
+        dry_run=False,
+    )
+
+    assert created["ok"] is False
+    assert "single-project layout" in created["error"]
+    assert not (tmp_path / "beta-build").exists()
+
+
 def test_onboard_project_store_moves_preingested_data(tmp_path: Path):
     store_root = tmp_path / "store"
     store_root.mkdir(parents=True, exist_ok=True)
@@ -219,6 +233,27 @@ def test_register_project_agent_adds_telegram_binding(tmp_path: Path):
         "agentId": agent_id,
         "match": {"channel": "telegram", "accountId": agent_id},
     } in saved.get("bindings", [])
+    plugins = saved.get("plugins", {})
+    entries = plugins.get("entries", {}) if isinstance(plugins, dict) else {}
+    assert entries.get("maestro-native-tools", {}).get("enabled") is True
+    assert "maestro-native-tools" in plugins.get("allow", [])
+    awareness = (workspace / "projects" / project_slug / "AWARENESS.md").read_text(encoding="utf-8")
+    assert "Local Workspace URL: `http://localhost:3000/alpha-project/`" in awareness
+    agents_md = (workspace / "projects" / project_slug / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Read `AWARENESS.md` for current model + workspace URLs" in agents_md
+    tools_md = (workspace / "projects" / project_slug / "TOOLS.md").read_text(encoding="utf-8")
+    assert "Read `AWARENESS.md` and use the recommended workspace URL." in tools_md
+    native_plugin = (
+        workspace
+        / "projects"
+        / project_slug
+        / ".openclaw"
+        / "extensions"
+        / "maestro-native-tools"
+        / "openclaw.plugin.json"
+    )
+    assert native_plugin.exists()
+    assert not (workspace / "projects" / project_slug / "BOOTSTRAP.md").exists()
 
 
 def test_register_project_agent_prefers_fleet_profiled_config(tmp_path: Path):
@@ -293,6 +328,56 @@ def test_register_project_agent_prefers_fleet_profiled_config(tmp_path: Path):
         isinstance(item, dict) and item.get("id") == agent_id
         for item in (shared_saved.get("agents", {}).get("list", []) or [])
     )
+    awareness = (fleet_workspace / "projects" / project_slug / "AWARENESS.md").read_text(encoding="utf-8")
+    assert "Local Workspace URL: `http://localhost:3000/alpha-project/`" in awareness
+    agents_md = (fleet_workspace / "projects" / project_slug / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Read `AWARENESS.md` for current model + workspace URLs" in agents_md
+
+
+def test_register_project_agent_rewrites_existing_workspace_store_env(tmp_path: Path):
+    home = tmp_path / "home"
+    workspace = home / ".openclaw" / "workspace-maestro"
+    project_slug = "alpha-project"
+    project_workspace = workspace / "projects" / project_slug
+
+    _write_json(
+        home / ".openclaw" / "openclaw.json",
+        {
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-company",
+                        "name": "Maestro (TestCo)",
+                        "default": True,
+                        "model": "openai/gpt-5.4",
+                        "workspace": str(workspace),
+                    }
+                ]
+            },
+            "channels": {"telegram": {"enabled": True, "accounts": {}}},
+        },
+    )
+
+    project_workspace.mkdir(parents=True, exist_ok=True)
+    (project_workspace / ".env").write_text(
+        "OPENAI_API_KEY=test-key\nMAESTRO_STORE=/tmp/old-store\nMAESTRO_AGENT_ROLE=company\n",
+        encoding="utf-8",
+    )
+
+    result = register_project_agent(
+        store_root=tmp_path,
+        project_slug=project_slug,
+        project_name="Alpha Project",
+        project_store_path=str(tmp_path / "alpha-project"),
+        home_dir=home,
+        dry_run=False,
+    )
+
+    assert result["ok"] is True
+    env_text = (project_workspace / ".env").read_text(encoding="utf-8")
+    assert f"MAESTRO_STORE={tmp_path / 'alpha-project'}" in env_text
+    assert "MAESTRO_AGENT_ROLE=project" in env_text
+    assert "OPENAI_API_KEY=test-key" in env_text
 
 
 def test_server_control_plane_endpoints(tmp_path: Path, monkeypatch):

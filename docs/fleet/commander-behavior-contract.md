@@ -52,10 +52,33 @@ It should acknowledge readiness, state that company setup is the current mission
 Commander can initiate:
 
 - project onboarding (`maestro-fleet project create`)
+- existing project-store onboarding (`onboard_project_store`)
 - company-formation intake (SOPs, org structure, rollout priorities, specialist teams)
 - ingestion runbooks (generate/issue project ingest command)
 - fleet diagnostics (`maestro-fleet doctor --fix`)
 - registry and command-center operational checks
+
+## Project Store Classification
+
+When a human provides a filesystem path for project setup, Commander must classify it before acting:
+
+- existing project root: contains `project.json` and populated `pages/`
+- multi-project store root: contains one or more child project directories
+- raw PDF input folder: source files to be ingested, not a ready Maestro project
+
+Rules:
+
+- existing project root -> onboard it as-is; do not create a nested `/<slug>` under it
+- multi-project store root -> select the correct child project directory and onboard that project
+- raw PDF input folder -> create the project first, then generate ingest commands
+
+Commander should never claim an existing knowledge store is attached until it verifies:
+
+1. resolved project store path is the intended one
+2. page count is nonzero
+3. pointer count is nonzero
+4. workspace URL resolves for the expected slug
+5. project bot `MAESTRO_STORE` matches the Fleet store copy
 
 Commander cannot:
 

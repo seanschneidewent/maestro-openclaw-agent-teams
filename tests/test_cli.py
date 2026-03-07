@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import argparse
+
 import pytest
 
-from maestro.cli import _run_fleet, build_parser
+from maestro.cli import _handle_ingest, _run_fleet, build_parser
+from maestro.profile import PROFILE_FLEET
 
 
 def test_setup_parser_mode():
@@ -76,12 +79,12 @@ def test_fleet_commander_set_model_parser():
         "commander",
         "set-model",
         "--model",
-        "openai/gpt-5.2",
+        "openai/gpt-5.4",
     ])
     assert args.mode == "fleet"
     assert args.fleet_command == "commander"
     assert args.fleet_commander_command == "set-model"
-    assert args.model == "openai/gpt-5.2"
+    assert args.model == "openai/gpt-5.4"
 
 
 def test_fleet_license_command_is_disabled(capsys):
@@ -118,7 +121,7 @@ def test_fleet_deploy_parser():
         "--commander-model",
         "anthropic/claude-opus-4-6",
         "--project-model",
-        "openai/gpt-5.2",
+        "openai/gpt-5.4",
         "--gemini-api-key",
         "AIzaGeminiTestKey000000000000000000000",
         "--openai-api-key",
@@ -139,7 +142,7 @@ def test_fleet_deploy_parser():
     assert args.fleet_command == "deploy"
     assert args.company_name == "ACME"
     assert args.commander_model == "anthropic/claude-opus-4-6"
-    assert args.project_model == "openai/gpt-5.2"
+    assert args.project_model == "openai/gpt-5.4"
     assert args.commander_pairing_code == "PAIR-1234"
     assert args.gemini_api_key.startswith("AIza")
     assert args.project_name == "Tower A"
@@ -188,6 +191,42 @@ def test_doctor_parser_field_access_required_flag():
     args = parser.parse_args(["doctor", "--field-access-required"])
     assert args.mode == "doctor"
     assert args.field_access_required is True
+
+
+def test_handle_ingest_uses_desktop_store_in_fleet_mode(monkeypatch, tmp_path):
+    import maestro.cli as cli
+    import maestro.ingest as ingest_module
+
+    folder = tmp_path / "plans"
+    folder.mkdir()
+    desktop_store = tmp_path / "home" / "Desktop" / "knowledge_store"
+    captured: dict[str, object] = {}
+    updates: list[dict[str, str]] = []
+
+    def fake_ingest(folder_path: str, project_name: str | None, dpi: int, store_path: str):
+        captured["folder_path"] = folder_path
+        captured["project_name"] = project_name
+        captured["dpi"] = dpi
+        captured["store_path"] = store_path
+
+    monkeypatch.setattr(ingest_module, "ingest", fake_ingest)
+    monkeypatch.setattr(cli, "resolve_profile", lambda: PROFILE_FLEET)
+    monkeypatch.setattr(cli, "resolve_desktop_store_root", lambda: desktop_store)
+    monkeypatch.setattr(cli, "update_install_state", lambda payload: updates.append(payload) or payload)
+
+    _handle_ingest(
+        argparse.Namespace(
+            folder=str(folder),
+            project_name=None,
+            new_project_name=None,
+            dpi=200,
+            store=None,
+        )
+    )
+
+    assert captured["folder_path"] == str(folder)
+    assert captured["store_path"] == str(desktop_store)
+    assert updates == [{"store_root": str(desktop_store), "fleet_store_root": str(desktop_store)}]
 
 
 def test_tools_schedule_upsert_parser():

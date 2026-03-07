@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import maestro.purchase as purchase
+import maestro.fleet.projects.provisioning as purchase
 
 
 def _write_json(path: Path, data: dict):
@@ -90,6 +90,10 @@ def test_validate_api_key_accepts_vertex_api_key_via_aiplatform_probe(monkeypatc
     ok, detail = purchase._validate_api_key("GEMINI_API_KEY", "AQ.Afakeyvertexstyletoken")
     assert ok is True
     assert "Vertex status=200" in detail
+
+
+def test_project_model_options_include_openai_gpt_5_4():
+    assert ("2", "openai/gpt-5.4") in purchase.PROJECT_MODEL_OPTIONS
 
 
 def test_run_purchase_non_interactive_dry_run(monkeypatch, tmp_path: Path):
@@ -249,7 +253,7 @@ def test_current_command_center_url_prefers_active_fleet_port(monkeypatch, tmp_p
     monkeypatch.setattr(
         purchase,
         "resolve_network_urls",
-        lambda web_port: {"recommended_url": f"http://localhost:{web_port}/command-center"},
+        lambda web_port, route_path="/command-center": {"recommended_url": f"http://localhost:{web_port}{route_path}"},
     )
 
     assert purchase._current_command_center_url() == "http://localhost:3401/command-center"
@@ -281,7 +285,7 @@ def test_run_purchase_json_reports_active_command_center_url(monkeypatch, tmp_pa
     monkeypatch.setattr(
         purchase,
         "resolve_network_urls",
-        lambda web_port: {"recommended_url": f"http://localhost:{web_port}/command-center"},
+        lambda web_port, route_path="/command-center": {"recommended_url": f"http://localhost:{web_port}{route_path}"},
     )
     monkeypatch.setattr(purchase, "project_control_payload", lambda *args, **kwargs: {"ingest": {"command": "maestro ingest"}})
     monkeypatch.setattr(purchase, "_restart_openclaw_gateway", lambda **kwargs: {"ok": True, "detail": "ok"})

@@ -412,10 +412,6 @@ def run_set_project_telegram(
     account["dmPolicy"] = "pairing"
     account["groupPolicy"] = "allowlist"
     account["streamMode"] = "partial"
-    if username:
-        account["botUsername"] = username
-    if display_name:
-        account["botDisplayName"] = display_name
 
     binding_changes = ensure_telegram_account_bindings(config)
     save_json(config_path, config)

@@ -68,7 +68,7 @@ def test_forward_commander_set_model_args():
         "commander",
         "set-model",
         "--model",
-        "openai/gpt-5.2",
+        "openai/gpt-5.4",
         "--api-key",
         "sk-test",
     ])
@@ -96,7 +96,7 @@ def test_forward_deploy_args():
         "--commander-model",
         "anthropic/claude-opus-4-6",
         "--project-model",
-        "openai/gpt-5.2",
+        "openai/gpt-5.4",
         "--gemini-api-key",
         "AIzaGeminiTestKey000000000000000000000",
         "--openai-api-key",

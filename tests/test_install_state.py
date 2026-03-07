@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from maestro.install_state import resolve_fleet_store_root, save_install_state
+from maestro.install_state import resolve_desktop_store_root, resolve_fleet_store_root, save_install_state
 
 
 def _write_json(path: Path, data: dict):
@@ -43,3 +43,9 @@ def test_resolve_fleet_store_root_from_workspace_env(tmp_path: Path):
 
     expected = (workspace / "knowledge_store_data").resolve()
     assert resolve_fleet_store_root(home_dir=home) == expected
+
+
+def test_resolve_desktop_store_root_uses_home_desktop(tmp_path: Path):
+    home = tmp_path / "home"
+    expected = home / "Desktop" / "knowledge_store"
+    assert resolve_desktop_store_root(home_dir=home) == expected.resolve()
