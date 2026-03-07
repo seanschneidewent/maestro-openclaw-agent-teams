@@ -1034,21 +1034,18 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          <div className="mt-12 text-center">
+            <a
+              href="/built-for"
+              className="group inline-flex items-center gap-2 text-sm font-semibold text-cyan-600 transition-colors hover:text-cyan-700"
+            >
+              See who it&apos;s built for &mdash; GCs, MEP, civil, specialty, and more
+              <ArrowRight className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1" />
+            </a>
+          </div>
         </div>
       </section>
-
-      <div className="border-t border-zinc-200/40 bg-zinc-50 py-10">
-        <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 px-6 sm:flex-row sm:justify-center">
-          <a
-            href="/built-for"
-            className="group inline-flex items-center gap-2 rounded-xl border border-cyan-200/60 bg-white px-7 py-3.5 text-sm font-semibold text-zinc-800 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-cyan-50/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.18)]"
-          >
-            See who it&apos;s built for
-            <ArrowRight className="h-4 w-4 text-cyan-600 transition-transform duration-300 group-hover:translate-x-1" />
-          </a>
-          <span className="text-sm text-zinc-400">GCs, MEP, civil, specialty &mdash; any contractor building from plans.</span>
-        </div>
-      </div>
 
       <section id="built-for-construction" className="border-t border-zinc-200 bg-white">
         <div className="mx-auto max-w-6xl px-6 py-24 md:py-32">
