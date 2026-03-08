@@ -753,7 +753,20 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
           url: calendlyUrl,
           parentElement: embedRef.current,
         });
+
+        // Once the Calendly iframe loads, force it to fill the container
+        const observer = new MutationObserver(() => {
+          const iframe = embedRef.current?.querySelector('iframe');
+          if (iframe) {
+            iframe.style.height = '100%';
+            iframe.style.minHeight = '100%';
+          }
+        });
+        observer.observe(embedRef.current, { childList: true, subtree: true });
+
         setEmbedStatus('ready');
+
+        return () => observer.disconnect();
       })
       .catch(() => {
         if (!cancelled) {
@@ -834,54 +847,113 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
   }, []);
 
   return (
-    <PageShell
-      eyebrow="Schedule a consultation"
-      title="Pick a time that works."
-      intro="Book directly on the page below. When the booking is confirmed, we sync that invitee into Kit automatically."
-      wrapChildren={false}
-      contentClassName="space-y-5"
-      mainClassName="mx-auto max-w-5xl px-4 py-16 sm:px-6 sm:py-20 md:py-28"
-      primaryAction={calendlyUrl ? { href: calendlyUrl, label: 'Open Calendly in new tab', icon: <ExternalLink className="h-4 w-4" /> } : { href: '/', label: 'Back to home' }}
-      secondaryAction={contactEmail ? { href: `mailto:${contactEmail}`, label: 'Email instead' } : undefined}
-    >
-      <div className="space-y-5">
-        <div className="rounded-2xl border border-cyan-200/70 bg-white p-5 shadow-[0_0_20px_rgba(6,182,212,0.08)] sm:p-6">
-          <p className="text-sm font-medium text-zinc-700">
-            After you book, we&apos;ll add that invitee email to the Maestro follow-up list in Kit.
+    <div className="flex min-h-[100svh] flex-col bg-white text-zinc-800 antialiased selection:bg-cyan-100 selection:text-cyan-900">
+      <div className="border-b border-zinc-200/70 bg-white/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
+          <a href="/" className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-950 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
+              <span className="font-mono text-xs font-bold tracking-wider text-cyan-400">MF</span>
+            </div>
+            <span className="font-semibold tracking-tight text-zinc-950">Maestro Fleet</span>
+          </a>
+          <FooterLinks />
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-5xl px-4 pt-10 sm:px-6 md:pt-16">
+        <div className="max-w-3xl">
+          <p className="mb-4 text-sm font-bold uppercase tracking-widest text-cyan-600 drop-shadow-[0_0_8px_rgba(6,182,212,0.25)]">
+            Book a Consultation
           </p>
-
-          {syncStatus === 'syncing' ? (
-            <p className="mt-3 text-sm font-semibold text-cyan-700">Booking confirmed. Syncing your email now…</p>
-          ) : null}
-
-          {syncStatus === 'success' ? (
-            <p className="mt-3 text-sm font-semibold text-emerald-700">{syncMessage}</p>
-          ) : null}
-
-          {syncStatus === 'error' ? (
-            <p className="mt-3 text-sm font-semibold text-amber-700">{syncMessage}</p>
-          ) : null}
+          <h1 className="mb-4 text-3xl font-bold leading-tight tracking-tight text-zinc-950 sm:text-4xl md:text-5xl">
+            Pick a time that works.
+          </h1>
+          <p className="mb-6 text-base leading-relaxed text-zinc-700 sm:text-lg">
+            We&apos;ll walk through your operation and show you how the fleet maps to your projects.
+          </p>
         </div>
 
-        {embedStatus === 'missing' ? (
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 text-sm text-zinc-700 sm:p-8">
-            Scheduling is not configured yet. Use the email option below and we&apos;ll coordinate directly.
-          </div>
+        {syncStatus === 'syncing' ? (
+          <p className="mb-4 text-sm font-semibold text-cyan-700">Booking confirmed. Syncing your email now…</p>
         ) : null}
-
-        {embedStatus === 'error' ? (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 sm:p-8">
-            The embedded scheduler could not load in this browser. Use the open-in-new-tab fallback and we&apos;ll still sync the booking after confirmation from this page when possible.
-          </div>
+        {syncStatus === 'success' ? (
+          <p className="mb-4 text-sm font-semibold text-emerald-700">{syncMessage}</p>
         ) : null}
-
-        {calendlyUrl ? (
-          <div className="-mx-4 overflow-hidden rounded-[28px] border border-zinc-200/80 bg-white shadow-[0_18px_40px_-24px_rgba(0,0,0,0.14)] sm:mx-0">
-            <div ref={embedRef} className="h-[720px] w-full min-w-0 sm:h-[780px] md:h-[820px] xl:h-[860px]" />
-          </div>
+        {syncStatus === 'error' ? (
+          <p className="mb-4 text-sm font-semibold text-amber-700">{syncMessage}</p>
         ) : null}
       </div>
-    </PageShell>
+
+      {embedStatus === 'missing' ? (
+        <div className="mx-auto w-full max-w-5xl px-4 pb-16 sm:px-6">
+          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-6 text-sm text-zinc-700 sm:p-8">
+            Scheduling is not configured yet.{' '}
+            {contactEmail ? (
+              <>
+                <a href={`mailto:${contactEmail}`} className="font-semibold text-cyan-600 underline hover:text-cyan-700">
+                  Email us
+                </a>{' '}
+                and we&apos;ll coordinate directly.
+              </>
+            ) : (
+              'Check back soon.'
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {embedStatus === 'error' ? (
+        <div className="mx-auto w-full max-w-5xl px-4 pb-16 sm:px-6">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900 sm:p-8">
+            The scheduler could not load.{' '}
+            {calendlyUrl ? (
+              <a href={calendlyUrl} target="_blank" rel="noreferrer" className="font-semibold underline">
+                Open Calendly directly
+              </a>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {calendlyUrl ? (
+        <div className="flex-1">
+          <div
+            ref={embedRef}
+            className="mx-auto h-full min-h-[calc(100svh-4rem)] w-full max-w-5xl"
+          />
+        </div>
+      ) : null}
+
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-4 py-8 sm:flex-row sm:px-6">
+        {calendlyUrl ? (
+          <a
+            href={calendlyUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-7 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_24px_rgba(6,182,212,0.35)]"
+          >
+            Open in new tab
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        ) : null}
+        {contactEmail ? (
+          <a
+            href={`mailto:${contactEmail}`}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-200/60 bg-white px-7 py-3.5 text-sm font-semibold text-zinc-800 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-cyan-50/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.18)]"
+          >
+            Email instead
+            <ExternalLink className="h-4 w-4 text-cyan-600" />
+          </a>
+        ) : null}
+        <a
+          href="/"
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white px-7 py-3.5 text-sm font-semibold text-zinc-600 transition-all duration-300 hover:-translate-y-0.5 hover:border-zinc-300 hover:text-zinc-800"
+        >
+          Back to home
+          <ArrowRight className="h-4 w-4" />
+        </a>
+      </div>
+    </div>
   );
 }
 
@@ -924,7 +996,7 @@ export default function App() {
   const setupPriceLabel = cleanText(import.meta.env.VITE_STRIPE_SETUP_PRICE_LABEL) || '$1,500';
   const monthlyPriceLabel = cleanText(import.meta.env.VITE_STRIPE_MONTHLY_PRICE_LABEL) || '$400 / month';
   const contactEmail = cleanText(import.meta.env.VITE_CONTACT_EMAIL);
-  const primaryContactHref = calendlyUrl ? '/schedule' : contactEmail ? `mailto:${contactEmail}` : '';
+  const primaryContactHref = calendlyUrl ? '/schedule' : (contactEmail ? `mailto:${contactEmail}` : '');
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
 
   useEffect(() => {
@@ -938,7 +1010,7 @@ export default function App() {
       '/terms': 'Maestro Fleet | Terms of Service',
       '/refund': 'Maestro Fleet | Refund Policy',
       '/built-for': 'Maestro Fleet | Built for Contractors',
-      '/schedule': 'Maestro Fleet | Schedule a Consultation',
+      '/schedule': 'Maestro Fleet | Book a Consultation',
       '/checkout/success': 'Maestro Fleet | Checkout Complete',
       '/checkout/cancel': 'Maestro Fleet | Checkout Canceled',
     };
