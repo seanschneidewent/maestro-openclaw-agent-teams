@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Search,
   Layers,
@@ -36,6 +36,42 @@ const externalLinkProps = (href) => {
     rel: 'noreferrer',
   };
 };
+
+function loadCalendlyScript() {
+  if (typeof window === 'undefined') {
+    return Promise.resolve();
+  }
+
+  const existingStylesheet = document.querySelector('link[data-calendly-widget-style="true"]');
+  if (!existingStylesheet) {
+    const stylesheet = document.createElement('link');
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = 'https://assets.calendly.com/assets/external/widget.css';
+    stylesheet.dataset.calendlyWidgetStyle = 'true';
+    document.head.appendChild(stylesheet);
+  }
+
+  if (window.Calendly) {
+    return Promise.resolve(window.Calendly);
+  }
+
+  return new Promise((resolve, reject) => {
+    const existingScript = document.querySelector('script[data-calendly-widget="true"]');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(window.Calendly), { once: true });
+      existingScript.addEventListener('error', reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://assets.calendly.com/assets/external/widget.js';
+    script.async = true;
+    script.dataset.calendlyWidget = 'true';
+    script.onload = () => resolve(window.Calendly);
+    script.onerror = reject;
+    document.body.appendChild(script);
+  });
+}
 
 function CtaLink({
   href,
@@ -224,7 +260,17 @@ function MobileNav({ primaryContactHref }) {
   );
 }
 
-function PageShell({ eyebrow, title, intro, children, primaryAction, secondaryAction }) {
+function PageShell({
+  eyebrow,
+  title,
+  intro,
+  children,
+  primaryAction,
+  secondaryAction,
+  wrapChildren = true,
+  contentClassName = '',
+  mainClassName = 'mx-auto max-w-5xl px-6 py-20 md:py-28',
+}) {
   return (
     <div className="min-h-screen bg-white text-zinc-800 antialiased selection:bg-cyan-100 selection:text-cyan-900">
       <div className="border-b border-zinc-200/70 bg-white/80 backdrop-blur-xl">
@@ -239,7 +285,7 @@ function PageShell({ eyebrow, title, intro, children, primaryAction, secondaryAc
         </div>
       </div>
 
-      <main className="mx-auto max-w-5xl px-6 py-20 md:py-28">
+      <main className={mainClassName}>
         <div className="max-w-3xl">
           <p className="mb-4 text-sm font-bold uppercase tracking-widest text-cyan-600 drop-shadow-[0_0_8px_rgba(6,182,212,0.25)]">
             {eyebrow}
@@ -248,9 +294,20 @@ function PageShell({ eyebrow, title, intro, children, primaryAction, secondaryAc
           {intro ? <p className="mb-10 text-lg leading-relaxed text-zinc-700">{intro}</p> : null}
         </div>
 
-        <div className="rounded-3xl border border-zinc-200/80 bg-zinc-50 p-8 shadow-[0_12px_30px_-20px_rgba(0,0,0,0.08)] md:p-10">
-          {children}
-        </div>
+        {wrapChildren ? (
+          <div
+            className={[
+              'rounded-3xl border border-zinc-200/80 bg-zinc-50 p-8 shadow-[0_12px_30px_-20px_rgba(0,0,0,0.08)] md:p-10',
+              contentClassName,
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
+            {children}
+          </div>
+        ) : (
+          <div className={contentClassName}>{children}</div>
+        )}
 
         {(primaryAction || secondaryAction) ? (
           <div className="mt-10 flex flex-col gap-4 sm:flex-row">
@@ -670,7 +727,237 @@ function BuiltForPage({ primaryContactHref }) {
   );
 }
 
-function renderStandalonePage(pathname, primaryContactHref, contactEmail) {
+function SchedulePage({ calendlyUrl, contactEmail }) {
+  const embedRef = useRef(null);
+  const processedBookingKeysRef = useRef(new Set());
+  const [embedStatus, setEmbedStatus] = useState(calendlyUrl ? 'loading' : 'missing');
+  const [syncStatus, setSyncStatus] = useState('idle');
+  const [syncMessage, setSyncMessage] = useState('');
+
+  useEffect(() => {
+    if (!calendlyUrl || typeof window === 'undefined' || !embedRef.current) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    setEmbedStatus('loading');
+
+    loadCalendlyScript()
+      .then((Calendly) => {
+        if (cancelled || !embedRef.current || !Calendly?.initInlineWidget) {
+          return;
+        }
+
+        embedRef.current.innerHTML = '';
+        Calendly.initInlineWidget({
+          url: calendlyUrl,
+          parentElement: embedRef.current,
+        });
+
+        // Once the Calendly iframe loads, force it to fill the container
+        const observer = new MutationObserver(() => {
+          const iframe = embedRef.current?.querySelector('iframe');
+          if (iframe) {
+            iframe.style.height = '100%';
+            iframe.style.minHeight = '100%';
+          }
+        });
+        observer.observe(embedRef.current, { childList: true, subtree: true });
+
+        setEmbedStatus('ready');
+
+        return () => observer.disconnect();
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEmbedStatus('error');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (embedRef.current) {
+        embedRef.current.innerHTML = '';
+      }
+    };
+  }, [calendlyUrl]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleMessage = async (event) => {
+      if (event.origin !== 'https://calendly.com' || event.data?.event !== 'calendly.event_scheduled') {
+        return;
+      }
+
+      const payload = event.data?.payload && typeof event.data.payload === 'object' ? event.data.payload : {};
+      const bookingKey = payload?.invitee?.uri || payload?.event?.uri || JSON.stringify(payload);
+      const sessionStorageKey = bookingKey ? `calendly-booking:${bookingKey}` : '';
+
+      if (processedBookingKeysRef.current.has(bookingKey)) {
+        return;
+      }
+
+      if (sessionStorageKey && window.sessionStorage.getItem(sessionStorageKey) === 'done') {
+        processedBookingKeysRef.current.add(bookingKey);
+        setSyncStatus('success');
+        setSyncMessage('Booked. Your email is already synced for follow-up.');
+        return;
+      }
+
+      processedBookingKeysRef.current.add(bookingKey);
+      if (sessionStorageKey) {
+        window.sessionStorage.setItem(sessionStorageKey, 'pending');
+      }
+
+      setSyncStatus('syncing');
+      setSyncMessage('');
+
+      try {
+        const response = await fetch('/api/calendly/booked', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payload }),
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Unable to sync booking details.');
+        }
+
+        setSyncStatus('success');
+        setSyncMessage('Booked. Your email has been added for Maestro follow-up.');
+        if (sessionStorageKey) {
+          window.sessionStorage.setItem(sessionStorageKey, 'done');
+        }
+      } catch (error) {
+        if (sessionStorageKey) {
+          window.sessionStorage.removeItem(sessionStorageKey);
+        }
+        processedBookingKeysRef.current.delete(bookingKey);
+        setSyncStatus('error');
+        setSyncMessage(error instanceof Error ? error.message : 'Your booking went through, but we could not sync email automatically.');
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  return (
+    <div className="flex min-h-[100svh] flex-col bg-white text-zinc-800 antialiased selection:bg-cyan-100 selection:text-cyan-900">
+      <div className="border-b border-zinc-200/70 bg-white/80 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
+          <a href="/" className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-950 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
+              <span className="font-mono text-xs font-bold tracking-wider text-cyan-400">MF</span>
+            </div>
+            <span className="font-semibold tracking-tight text-zinc-950">Maestro Fleet</span>
+          </a>
+          <FooterLinks />
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-5xl px-4 pt-10 sm:px-6 md:pt-16">
+        <div className="max-w-3xl">
+          <p className="mb-4 text-sm font-bold uppercase tracking-widest text-cyan-600 drop-shadow-[0_0_8px_rgba(6,182,212,0.25)]">
+            Book a Consultation
+          </p>
+          <h1 className="mb-4 text-3xl font-bold leading-tight tracking-tight text-zinc-950 sm:text-4xl md:text-5xl">
+            Pick a time that works.
+          </h1>
+          <p className="mb-6 text-base leading-relaxed text-zinc-700 sm:text-lg">
+            We&apos;ll walk through your operation and show you how the fleet maps to your projects.
+          </p>
+        </div>
+
+        {syncStatus === 'syncing' ? (
+          <p className="mb-4 text-sm font-semibold text-cyan-700">Booking confirmed. Syncing your email now…</p>
+        ) : null}
+        {syncStatus === 'success' ? (
+          <p className="mb-4 text-sm font-semibold text-emerald-700">{syncMessage}</p>
+        ) : null}
+        {syncStatus === 'error' ? (
+          <p className="mb-4 text-sm font-semibold text-amber-700">{syncMessage}</p>
+        ) : null}
+      </div>
+
+      {embedStatus === 'missing' ? (
+        <div className="mx-auto w-full max-w-5xl px-4 pb-16 sm:px-6">
+          <div className="rounded-2xl border border-zinc-200 bg-zinc-50 p-6 text-sm text-zinc-700 sm:p-8">
+            Scheduling is not configured yet.{' '}
+            {contactEmail ? (
+              <>
+                <a href={`mailto:${contactEmail}`} className="font-semibold text-cyan-600 underline hover:text-cyan-700">
+                  Email us
+                </a>{' '}
+                and we&apos;ll coordinate directly.
+              </>
+            ) : (
+              'Check back soon.'
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {embedStatus === 'error' ? (
+        <div className="mx-auto w-full max-w-5xl px-4 pb-16 sm:px-6">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-sm text-amber-900 sm:p-8">
+            The scheduler could not load.{' '}
+            {calendlyUrl ? (
+              <a href={calendlyUrl} target="_blank" rel="noreferrer" className="font-semibold underline">
+                Open Calendly directly
+              </a>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {calendlyUrl ? (
+        <div className="flex-1">
+          <div
+            ref={embedRef}
+            className="mx-auto h-full min-h-[calc(100svh-4rem)] w-full max-w-5xl"
+          />
+        </div>
+      ) : null}
+
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-4 py-8 sm:flex-row sm:px-6">
+        {calendlyUrl ? (
+          <a
+            href={calendlyUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-7 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_24px_rgba(6,182,212,0.35)]"
+          >
+            Open in new tab
+            <ExternalLink className="h-4 w-4" />
+          </a>
+        ) : null}
+        {contactEmail ? (
+          <a
+            href={`mailto:${contactEmail}`}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-200/60 bg-white px-7 py-3.5 text-sm font-semibold text-zinc-800 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-cyan-50/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.18)]"
+          >
+            Email instead
+            <ExternalLink className="h-4 w-4 text-cyan-600" />
+          </a>
+        ) : null}
+        <a
+          href="/"
+          className="inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-200 bg-white px-7 py-3.5 text-sm font-semibold text-zinc-600 transition-all duration-300 hover:-translate-y-0.5 hover:border-zinc-300 hover:text-zinc-800"
+        >
+          Back to home
+          <ArrowRight className="h-4 w-4" />
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function renderStandalonePage(pathname, primaryContactHref, contactEmail, calendlyUrl) {
   const content = buildPolicyContent(contactEmail);
 
   if (pathname === '/privacy') {
@@ -689,6 +976,10 @@ function renderStandalonePage(pathname, primaryContactHref, contactEmail) {
     return <BuiltForPage primaryContactHref={primaryContactHref} />;
   }
 
+  if (pathname === '/schedule') {
+    return <SchedulePage calendlyUrl={calendlyUrl} contactEmail={contactEmail} />;
+  }
+
   if (pathname === '/checkout/success') {
     return <CheckoutStatusPage type="success" primaryContactHref={primaryContactHref} />;
   }
@@ -705,7 +996,7 @@ export default function App() {
   const setupPriceLabel = cleanText(import.meta.env.VITE_STRIPE_SETUP_PRICE_LABEL) || '$1,500';
   const monthlyPriceLabel = cleanText(import.meta.env.VITE_STRIPE_MONTHLY_PRICE_LABEL) || '$400 / month';
   const contactEmail = cleanText(import.meta.env.VITE_CONTACT_EMAIL);
-  const primaryContactHref = calendlyUrl || (contactEmail ? `mailto:${contactEmail}` : '');
+  const primaryContactHref = calendlyUrl ? '/schedule' : (contactEmail ? `mailto:${contactEmail}` : '');
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
 
   useEffect(() => {
@@ -719,6 +1010,7 @@ export default function App() {
       '/terms': 'Maestro Fleet | Terms of Service',
       '/refund': 'Maestro Fleet | Refund Policy',
       '/built-for': 'Maestro Fleet | Built for Contractors',
+      '/schedule': 'Maestro Fleet | Book a Consultation',
       '/checkout/success': 'Maestro Fleet | Checkout Complete',
       '/checkout/cancel': 'Maestro Fleet | Checkout Canceled',
     };
@@ -726,7 +1018,7 @@ export default function App() {
     document.title = titles[pathname] || titles['/'];
   }, [pathname]);
 
-  const standalonePage = renderStandalonePage(pathname, primaryContactHref, contactEmail);
+  const standalonePage = renderStandalonePage(pathname, primaryContactHref, contactEmail, calendlyUrl);
   if (standalonePage) {
     return standalonePage;
   }
