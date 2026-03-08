@@ -259,7 +259,17 @@ function MobileNav({ primaryContactHref }) {
   );
 }
 
-function PageShell({ eyebrow, title, intro, children, primaryAction, secondaryAction }) {
+function PageShell({
+  eyebrow,
+  title,
+  intro,
+  children,
+  primaryAction,
+  secondaryAction,
+  wrapChildren = true,
+  contentClassName = '',
+  mainClassName = 'mx-auto max-w-5xl px-6 py-20 md:py-28',
+}) {
   return (
     <div className="min-h-screen bg-white text-zinc-800 antialiased selection:bg-cyan-100 selection:text-cyan-900">
       <div className="border-b border-zinc-200/70 bg-white/80 backdrop-blur-xl">
@@ -274,7 +284,7 @@ function PageShell({ eyebrow, title, intro, children, primaryAction, secondaryAc
         </div>
       </div>
 
-      <main className="mx-auto max-w-5xl px-6 py-20 md:py-28">
+      <main className={mainClassName}>
         <div className="max-w-3xl">
           <p className="mb-4 text-sm font-bold uppercase tracking-widest text-cyan-600 drop-shadow-[0_0_8px_rgba(6,182,212,0.25)]">
             {eyebrow}
@@ -283,9 +293,20 @@ function PageShell({ eyebrow, title, intro, children, primaryAction, secondaryAc
           {intro ? <p className="mb-10 text-lg leading-relaxed text-zinc-700">{intro}</p> : null}
         </div>
 
-        <div className="rounded-3xl border border-zinc-200/80 bg-zinc-50 p-8 shadow-[0_12px_30px_-20px_rgba(0,0,0,0.08)] md:p-10">
-          {children}
-        </div>
+        {wrapChildren ? (
+          <div
+            className={[
+              'rounded-3xl border border-zinc-200/80 bg-zinc-50 p-8 shadow-[0_12px_30px_-20px_rgba(0,0,0,0.08)] md:p-10',
+              contentClassName,
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
+            {children}
+          </div>
+        ) : (
+          <div className={contentClassName}>{children}</div>
+        )}
 
         {(primaryAction || secondaryAction) ? (
           <div className="mt-10 flex flex-col gap-4 sm:flex-row">
@@ -815,11 +836,14 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
       eyebrow="Schedule a consultation"
       title="Pick a time that works."
       intro="Book directly on the page below. When the booking is confirmed, we sync that invitee into Kit automatically."
+      wrapChildren={false}
+      contentClassName="space-y-5"
+      mainClassName="mx-auto max-w-5xl px-4 py-16 sm:px-6 sm:py-20 md:py-28"
       primaryAction={calendlyUrl ? { href: calendlyUrl, label: 'Open Calendly in new tab', icon: <ExternalLink className="h-4 w-4" /> } : { href: '/', label: 'Back to home' }}
       secondaryAction={contactEmail ? { href: `mailto:${contactEmail}`, label: 'Email instead' } : undefined}
     >
-      <div className="space-y-6">
-        <div className="rounded-2xl border border-cyan-200/70 bg-white p-6 shadow-[0_0_20px_rgba(6,182,212,0.08)]">
+      <div className="space-y-5">
+        <div className="rounded-2xl border border-cyan-200/70 bg-white p-5 shadow-[0_0_20px_rgba(6,182,212,0.08)] sm:p-6">
           <p className="text-sm font-medium text-zinc-700">
             After you book, we&apos;ll add that invitee email to the Maestro follow-up list in Kit.
           </p>
@@ -838,20 +862,20 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
         </div>
 
         {embedStatus === 'missing' ? (
-          <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-sm text-zinc-700">
+          <div className="rounded-2xl border border-zinc-200 bg-white p-5 text-sm text-zinc-700 sm:p-8">
             Scheduling is not configured yet. Use the email option below and we&apos;ll coordinate directly.
           </div>
         ) : null}
 
         {embedStatus === 'error' ? (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-8 text-sm text-amber-900">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 sm:p-8">
             The embedded scheduler could not load in this browser. Use the open-in-new-tab fallback and we&apos;ll still sync the booking after confirmation from this page when possible.
           </div>
         ) : null}
 
         {calendlyUrl ? (
-          <div className="overflow-hidden rounded-3xl border border-zinc-200/80 bg-white shadow-[0_18px_40px_-24px_rgba(0,0,0,0.14)]">
-            <div ref={embedRef} className="min-w-[320px] h-[700px] w-full md:h-[820px] xl:h-[860px]" />
+          <div className="-mx-4 overflow-hidden rounded-[28px] border border-zinc-200/80 bg-white shadow-[0_18px_40px_-24px_rgba(0,0,0,0.14)] sm:mx-0">
+            <div ref={embedRef} className="h-[720px] w-full min-w-0 sm:h-[780px] md:h-[820px] xl:h-[860px]" />
           </div>
         ) : null}
       </div>
