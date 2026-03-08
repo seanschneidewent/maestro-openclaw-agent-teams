@@ -731,6 +731,7 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
   const embedRef = useRef(null);
   const processedBookingKeysRef = useRef(new Set());
   const [embedStatus, setEmbedStatus] = useState(calendlyUrl ? 'loading' : 'missing');
+  const [embedHeight, setEmbedHeight] = useState(null);
   const [syncStatus, setSyncStatus] = useState('idle');
   const [syncMessage, setSyncMessage] = useState('');
 
@@ -754,19 +755,7 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
           parentElement: embedRef.current,
         });
 
-        // Once the Calendly iframe loads, force it to fill the container
-        const observer = new MutationObserver(() => {
-          const iframe = embedRef.current?.querySelector('iframe');
-          if (iframe) {
-            iframe.style.height = '100%';
-            iframe.style.minHeight = '100%';
-          }
-        });
-        observer.observe(embedRef.current, { childList: true, subtree: true });
-
         setEmbedStatus('ready');
-
-        return () => observer.disconnect();
       })
       .catch(() => {
         if (!cancelled) {
@@ -782,13 +771,34 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
     };
   }, [calendlyUrl]);
 
+  // Listen for Calendly page_height events to auto-size, and booking events to sync
   useEffect(() => {
     if (typeof window === 'undefined') {
       return undefined;
     }
 
     const handleMessage = async (event) => {
-      if (event.origin !== 'https://calendly.com' || event.data?.event !== 'calendly.event_scheduled') {
+      // Accept Calendly messages
+      if (!event.data?.event || !String(event.data.event).startsWith('calendly.')) {
+        return;
+      }
+
+      // Dynamic height from Calendly
+      if (event.data.event === 'calendly.page_height') {
+        const height = parseFloat(event.data.payload?.height);
+        if (height && height > 100) {
+          setEmbedHeight(height);
+          // Also directly set iframe height to avoid Calendly's own scroll
+          const iframe = embedRef.current?.querySelector('iframe');
+          if (iframe) {
+            iframe.style.height = `${height}px`;
+          }
+        }
+        return;
+      }
+
+      // Booking confirmed
+      if (event.data.event !== 'calendly.event_scheduled') {
         return;
       }
 
@@ -847,7 +857,16 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
   }, []);
 
   return (
-    <div className="flex min-h-[100svh] flex-col bg-white text-zinc-800 antialiased selection:bg-cyan-100 selection:text-cyan-900">
+    <div className="min-h-[100svh] bg-white text-zinc-800 antialiased selection:bg-cyan-100 selection:text-cyan-900">
+      <style>{`
+        .calendly-inline-widget {
+          overflow: hidden !important;
+        }
+        .calendly-inline-widget iframe {
+          overflow: hidden !important;
+        }
+      `}</style>
+
       <div className="border-b border-zinc-200/70 bg-white/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-5">
           <a href="/" className="flex items-center gap-2.5">
@@ -916,12 +935,11 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
       ) : null}
 
       {calendlyUrl ? (
-        <div className="flex-1">
-          <div
-            ref={embedRef}
-            className="mx-auto h-full min-h-[calc(100svh-4rem)] w-full max-w-5xl"
-          />
-        </div>
+        <div
+          ref={embedRef}
+          className="mx-auto w-full max-w-5xl"
+          style={{ height: embedHeight ? `${embedHeight}px` : '1200px' }}
+        />
       ) : null}
 
       <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 px-4 py-8 sm:flex-row sm:px-6">
