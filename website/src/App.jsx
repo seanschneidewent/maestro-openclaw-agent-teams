@@ -726,14 +726,50 @@ function BuiltForPage({ primaryContactHref }) {
 }
 
 function SchedulePage({ calendlyUrl, contactEmail }) {
-  const embedRef = useRef(null);
+  const inlineEmbedRef = useRef(null);
+  const overlayEmbedRef = useRef(null);
   const processedBookingKeysRef = useRef(new Set());
   const [embedStatus, setEmbedStatus] = useState(calendlyUrl ? 'loading' : 'missing');
   const [syncStatus, setSyncStatus] = useState('idle');
   const [syncMessage, setSyncMessage] = useState('');
+  const [useOverlayScheduler, setUseOverlayScheduler] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false,
+  );
+  const [isSchedulerOpen, setIsSchedulerOpen] = useState(false);
 
   useEffect(() => {
-    if (!calendlyUrl || typeof window === 'undefined' || !embedRef.current) {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const updateMode = () => {
+      setUseOverlayScheduler(window.innerWidth < 768);
+    };
+
+    updateMode();
+    window.addEventListener('resize', updateMode);
+    return () => window.removeEventListener('resize', updateMode);
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const originalOverflow = document.body.style.overflow;
+    if (useOverlayScheduler && isSchedulerOpen) {
+      document.body.style.overflow = 'hidden';
+    }
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, [isSchedulerOpen, useOverlayScheduler]);
+
+  useEffect(() => {
+    const activeEmbedRef = useOverlayScheduler ? (isSchedulerOpen ? overlayEmbedRef : null) : inlineEmbedRef;
+
+    if (!calendlyUrl || typeof window === 'undefined' || !activeEmbedRef?.current) {
       return undefined;
     }
 
@@ -742,14 +778,14 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
 
     loadCalendlyScript()
       .then((Calendly) => {
-        if (cancelled || !embedRef.current || !Calendly?.initInlineWidget) {
+        if (cancelled || !activeEmbedRef.current || !Calendly?.initInlineWidget) {
           return;
         }
 
-        embedRef.current.innerHTML = '';
+        activeEmbedRef.current.innerHTML = '';
         Calendly.initInlineWidget({
           url: calendlyUrl,
-          parentElement: embedRef.current,
+          parentElement: activeEmbedRef.current,
         });
         setEmbedStatus('ready');
       })
@@ -761,11 +797,11 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
 
     return () => {
       cancelled = true;
-      if (embedRef.current) {
-        embedRef.current.innerHTML = '';
+      if (activeEmbedRef?.current) {
+        activeEmbedRef.current.innerHTML = '';
       }
     };
-  }, [calendlyUrl]);
+  }, [calendlyUrl, isSchedulerOpen, useOverlayScheduler]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -832,54 +868,92 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
   }, []);
 
   return (
-    <PageShell
-      eyebrow="Schedule a consultation"
-      title="Pick a time that works."
-      intro="Book directly on the page below. When the booking is confirmed, we sync that invitee into Kit automatically."
-      wrapChildren={false}
-      contentClassName="space-y-5"
-      mainClassName="mx-auto max-w-5xl px-4 py-16 sm:px-6 sm:py-20 md:py-28"
-      primaryAction={calendlyUrl ? { href: calendlyUrl, label: 'Open Calendly in new tab', icon: <ExternalLink className="h-4 w-4" /> } : { href: '/', label: 'Back to home' }}
-      secondaryAction={contactEmail ? { href: `mailto:${contactEmail}`, label: 'Email instead' } : undefined}
-    >
-      <div className="space-y-5">
-        <div className="rounded-2xl border border-cyan-200/70 bg-white p-5 shadow-[0_0_20px_rgba(6,182,212,0.08)] sm:p-6">
-          <p className="text-sm font-medium text-zinc-700">
-            After you book, we&apos;ll add that invitee email to the Maestro follow-up list in Kit.
-          </p>
+    <>
+      <PageShell
+        eyebrow="Schedule a consultation"
+        title="Pick a time that works."
+        intro="Book directly on the page below. When the booking is confirmed, we sync that invitee into Kit automatically."
+        wrapChildren={false}
+        contentClassName="space-y-5"
+        mainClassName="mx-auto max-w-5xl px-4 py-16 sm:px-6 sm:py-20 md:py-28"
+        primaryAction={calendlyUrl ? { href: calendlyUrl, label: 'Open Calendly in new tab', icon: <ExternalLink className="h-4 w-4" /> } : { href: '/', label: 'Back to home' }}
+        secondaryAction={contactEmail ? { href: `mailto:${contactEmail}`, label: 'Email instead' } : undefined}
+      >
+        <div className="space-y-5">
+          <div className="rounded-2xl border border-cyan-200/70 bg-white p-5 shadow-[0_0_20px_rgba(6,182,212,0.08)] sm:p-6">
+            <p className="text-sm font-medium text-zinc-700">
+              After you book, we&apos;ll add that invitee email to the Maestro follow-up list in Kit.
+            </p>
 
-          {syncStatus === 'syncing' ? (
-            <p className="mt-3 text-sm font-semibold text-cyan-700">Booking confirmed. Syncing your email now…</p>
+            {syncStatus === 'syncing' ? (
+              <p className="mt-3 text-sm font-semibold text-cyan-700">Booking confirmed. Syncing your email now…</p>
+            ) : null}
+
+            {syncStatus === 'success' ? (
+              <p className="mt-3 text-sm font-semibold text-emerald-700">{syncMessage}</p>
+            ) : null}
+
+            {syncStatus === 'error' ? (
+              <p className="mt-3 text-sm font-semibold text-amber-700">{syncMessage}</p>
+            ) : null}
+          </div>
+
+          {embedStatus === 'missing' ? (
+            <div className="rounded-2xl border border-zinc-200 bg-white p-5 text-sm text-zinc-700 sm:p-8">
+              Scheduling is not configured yet. Use the email option below and we&apos;ll coordinate directly.
+            </div>
           ) : null}
 
-          {syncStatus === 'success' ? (
-            <p className="mt-3 text-sm font-semibold text-emerald-700">{syncMessage}</p>
+          {embedStatus === 'error' ? (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 sm:p-8">
+              The embedded scheduler could not load in this browser. Use the open-in-new-tab fallback and we&apos;ll still sync the booking after confirmation from this page when possible.
+            </div>
           ) : null}
 
-          {syncStatus === 'error' ? (
-            <p className="mt-3 text-sm font-semibold text-amber-700">{syncMessage}</p>
+          {calendlyUrl && useOverlayScheduler ? (
+            <button
+              type="button"
+              onClick={() => setIsSchedulerOpen(true)}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-zinc-950 px-6 py-4 text-base font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:bg-zinc-900"
+            >
+              Open scheduler
+              <ArrowUpRight className="h-4 w-4 text-cyan-400" />
+            </button>
+          ) : null}
+
+          {calendlyUrl && !useOverlayScheduler ? (
+            <div className="-mx-4 overflow-hidden rounded-[28px] border border-zinc-200/80 bg-white shadow-[0_18px_40px_-24px_rgba(0,0,0,0.14)] sm:mx-0">
+              <div ref={inlineEmbedRef} className="h-[720px] w-full min-w-0 sm:h-[780px] md:h-[820px] xl:h-[860px]" />
+            </div>
           ) : null}
         </div>
+      </PageShell>
 
-        {embedStatus === 'missing' ? (
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 text-sm text-zinc-700 sm:p-8">
-            Scheduling is not configured yet. Use the email option below and we&apos;ll coordinate directly.
-          </div>
-        ) : null}
+      {calendlyUrl && useOverlayScheduler && isSchedulerOpen ? (
+        <div className="fixed inset-0 z-[100] bg-white">
+          <div className="flex h-full flex-col">
+            <div className="flex items-center justify-between border-b border-zinc-200/70 bg-white px-4 py-4 shadow-sm">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-cyan-600">Scheduler</p>
+                <p className="text-sm font-semibold text-zinc-950">Choose your consultation time</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSchedulerOpen(false)}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-full border border-zinc-200 text-zinc-700 transition-colors hover:bg-zinc-50"
+                aria-label="Close scheduler"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
 
-        {embedStatus === 'error' ? (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-900 sm:p-8">
-            The embedded scheduler could not load in this browser. Use the open-in-new-tab fallback and we&apos;ll still sync the booking after confirmation from this page when possible.
+            <div className="flex-1 overflow-hidden bg-zinc-50">
+              <div ref={overlayEmbedRef} className="h-full w-full" />
+            </div>
           </div>
-        ) : null}
-
-        {calendlyUrl ? (
-          <div className="-mx-4 overflow-hidden rounded-[28px] border border-zinc-200/80 bg-white shadow-[0_18px_40px_-24px_rgba(0,0,0,0.14)] sm:mx-0">
-            <div ref={embedRef} className="h-[720px] w-full min-w-0 sm:h-[780px] md:h-[820px] xl:h-[860px]" />
-          </div>
-        ) : null}
-      </div>
-    </PageShell>
+        </div>
+      ) : null}
+    </>
   );
 }
 
