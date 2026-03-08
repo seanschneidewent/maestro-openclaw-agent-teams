@@ -42,6 +42,15 @@ function loadCalendlyScript() {
     return Promise.resolve();
   }
 
+  const existingStylesheet = document.querySelector('link[data-calendly-widget-style="true"]');
+  if (!existingStylesheet) {
+    const stylesheet = document.createElement('link');
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = 'https://assets.calendly.com/assets/external/widget.css';
+    stylesheet.dataset.calendlyWidgetStyle = 'true';
+    document.head.appendChild(stylesheet);
+  }
+
   if (window.Calendly) {
     return Promise.resolve(window.Calendly);
   }
@@ -842,7 +851,7 @@ function SchedulePage({ calendlyUrl, contactEmail }) {
 
         {calendlyUrl ? (
           <div className="overflow-hidden rounded-3xl border border-zinc-200/80 bg-white shadow-[0_18px_40px_-24px_rgba(0,0,0,0.14)]">
-            <div ref={embedRef} className="min-h-[760px] w-full" />
+            <div ref={embedRef} className="min-w-[320px] h-[700px] w-full md:h-[820px] xl:h-[860px]" />
           </div>
         ) : null}
       </div>
