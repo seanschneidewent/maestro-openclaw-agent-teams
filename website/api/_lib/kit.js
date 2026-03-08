@@ -27,6 +27,8 @@ async function kitRequest(path, { method = 'GET', body } = {}) {
 
 export function getKitConfig() {
   return {
+    consultationBookedTagId: optionalEnv('KIT_TAG_CONSULTATION_BOOKED'),
+    consultationBookedSequenceId: optionalEnv('KIT_SEQUENCE_CONSULTATION_BOOKED'),
     customerTagId: optionalEnv('KIT_TAG_CUSTOMER'),
     setupPaidTagId: optionalEnv('KIT_TAG_SETUP_PAID'),
     monthlyActiveTagId: optionalEnv('KIT_TAG_MONTHLY_ACTIVE'),

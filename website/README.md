@@ -39,6 +39,10 @@ STRIPE_MONTHLY_PRICE_ID=price_...
 STRIPE_SETUP_PAYMENT_LINK_ID=plink_...
 STRIPE_MONTHLY_PAYMENT_LINK_ID=plink_...
 KIT_API_KEY=kit_live_...
+CALENDLY_PERSONAL_ACCESS_TOKEN=...         # works on Calendly Basic via in-site embed sync
+CALENDLY_WEBHOOK_SIGNING_KEY=...           # paid Calendly plan only
+KIT_TAG_CONSULTATION_BOOKED=...            # optional
+KIT_SEQUENCE_CONSULTATION_BOOKED=...       # optional
 KIT_TAG_CUSTOMER=...
 KIT_TAG_SETUP_PAID=...
 KIT_TAG_MONTHLY_ACTIVE=...
@@ -69,6 +73,15 @@ The project now includes:
   - Stripe webhook endpoint
   - syncs setup and monthly purchases into Kit
   - handles subscription activation and deactivation tags for the managed monthly price
+- `POST /api/calendly/webhook`
+  - Calendly webhook endpoint
+  - verifies the Calendly request signature
+  - upserts the booked invitee into Kit automatically
+  - optionally tags or enrolls the invitee using the consultation-booked env vars
+- `POST /api/calendly/booked`
+  - sync endpoint used by the in-site `/schedule` page after `calendly.event_scheduled`
+  - accepts the Calendly embed payload and fetches invitee details with your personal access token when needed
+  - upserts the booked invitee into Kit automatically
 - `POST /api/invoicing/quickbooks/invoice`
   - secured QuickBooks invoice creation endpoint
   - creates or reuses customer by email
@@ -180,6 +193,7 @@ If you use `vercel dev` locally, forward to that local URL instead.
 
 Recommended tags:
 
+- `Consultation Booked` (optional)
 - `Customer`
 - `Setup Paid`
 - `Monthly Active`
@@ -187,15 +201,50 @@ Recommended tags:
 
 Recommended sequences:
 
+- `Consultation Booked Follow-up` (optional)
 - `Setup Customer Onboarding`
 - `Monthly Coverage Onboarding`
 
-Map the IDs from Kit into the env vars above. The Stripe webhook and QuickBooks invoice endpoint add tags and optionally enroll the customer into those sequences.
+Map the IDs from Kit into the env vars above. The Calendly embed sync endpoint, Calendly webhook, Stripe webhook, and QuickBooks invoice endpoint add tags and optionally enroll the customer into those sequences.
+
+## Calendly Basic-Plan Setup
+
+If you are on Calendly Basic, use the built-in website scheduling page:
+
+- set `VITE_CALENDLY_URL` to your event link
+- set `CALENDLY_PERSONAL_ACCESS_TOKEN` in Vercel
+- send website visitors to `/schedule` instead of linking them off-site directly
+
+That page embeds Calendly, listens for the booking-complete browser event, and posts the booking payload to `/api/calendly/booked` so the invitee is added to Kit.
+
+## Calendly Webhook Setup
+
+If you upgrade to a Calendly plan with webhook subscriptions, you can also point a webhook to:
+
+```bash
+https://your-production-domain.com/api/calendly/webhook
+```
+
+Use the `invitee.created` event so every booked session adds the invitee email to Kit automatically.
+
+Set the signing secret from that Calendly webhook in Vercel as:
+
+```bash
+CALENDLY_WEBHOOK_SIGNING_KEY=...
+```
+
+If you want those booked leads tagged separately in Kit, also set:
+
+```bash
+KIT_TAG_CONSULTATION_BOOKED=...
+KIT_SEQUENCE_CONSULTATION_BOOKED=...
+```
 
 ## Vercel Notes
 
 Client-side pages now exist for:
 
+- `/schedule`
 - `/checkout/success`
 - `/checkout/cancel`
 - `/privacy`

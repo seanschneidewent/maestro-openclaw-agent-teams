@@ -63,6 +63,25 @@ export async function syncKitLifecycleByEmail({ email, firstName = '', lifecycle
   return { email, lifecycle: normalizedLifecycle, synced: true };
 }
 
+export async function syncKitConsultationBookingByEmail({ email, firstName = '' }) {
+  if (!email) {
+    return { email: '', synced: false };
+  }
+
+  const kitConfig = getKitConfig();
+  await upsertSubscriber({ email, firstName });
+
+  if (kitConfig.consultationBookedTagId) {
+    await addTagByEmail(kitConfig.consultationBookedTagId, email);
+  }
+
+  if (kitConfig.consultationBookedSequenceId) {
+    await addSubscriberToSequence(kitConfig.consultationBookedSequenceId, email);
+  }
+
+  return { email, synced: true };
+}
+
 export async function syncKitMonthlySubscriptionStatus({ email, isActive }) {
   if (!email) {
     return { email: '', synced: false };

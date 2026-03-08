@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Search,
   Layers,
@@ -36,6 +36,33 @@ const externalLinkProps = (href) => {
     rel: 'noreferrer',
   };
 };
+
+function loadCalendlyScript() {
+  if (typeof window === 'undefined') {
+    return Promise.resolve();
+  }
+
+  if (window.Calendly) {
+    return Promise.resolve(window.Calendly);
+  }
+
+  return new Promise((resolve, reject) => {
+    const existingScript = document.querySelector('script[data-calendly-widget="true"]');
+    if (existingScript) {
+      existingScript.addEventListener('load', () => resolve(window.Calendly), { once: true });
+      existingScript.addEventListener('error', reject, { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://assets.calendly.com/assets/external/widget.js';
+    script.async = true;
+    script.dataset.calendlyWidget = 'true';
+    script.onload = () => resolve(window.Calendly);
+    script.onerror = reject;
+    document.body.appendChild(script);
+  });
+}
 
 function CtaLink({
   href,
@@ -668,7 +695,162 @@ function BuiltForPage({ primaryContactHref }) {
   );
 }
 
-function renderStandalonePage(pathname, primaryContactHref, contactEmail) {
+function SchedulePage({ calendlyUrl, contactEmail }) {
+  const embedRef = useRef(null);
+  const processedBookingKeysRef = useRef(new Set());
+  const [embedStatus, setEmbedStatus] = useState(calendlyUrl ? 'loading' : 'missing');
+  const [syncStatus, setSyncStatus] = useState('idle');
+  const [syncMessage, setSyncMessage] = useState('');
+
+  useEffect(() => {
+    if (!calendlyUrl || typeof window === 'undefined' || !embedRef.current) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    setEmbedStatus('loading');
+
+    loadCalendlyScript()
+      .then((Calendly) => {
+        if (cancelled || !embedRef.current || !Calendly?.initInlineWidget) {
+          return;
+        }
+
+        embedRef.current.innerHTML = '';
+        Calendly.initInlineWidget({
+          url: calendlyUrl,
+          parentElement: embedRef.current,
+        });
+        setEmbedStatus('ready');
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEmbedStatus('error');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (embedRef.current) {
+        embedRef.current.innerHTML = '';
+      }
+    };
+  }, [calendlyUrl]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    const handleMessage = async (event) => {
+      if (event.origin !== 'https://calendly.com' || event.data?.event !== 'calendly.event_scheduled') {
+        return;
+      }
+
+      const payload = event.data?.payload && typeof event.data.payload === 'object' ? event.data.payload : {};
+      const bookingKey = payload?.invitee?.uri || payload?.event?.uri || JSON.stringify(payload);
+      const sessionStorageKey = bookingKey ? `calendly-booking:${bookingKey}` : '';
+
+      if (processedBookingKeysRef.current.has(bookingKey)) {
+        return;
+      }
+
+      if (sessionStorageKey && window.sessionStorage.getItem(sessionStorageKey) === 'done') {
+        processedBookingKeysRef.current.add(bookingKey);
+        setSyncStatus('success');
+        setSyncMessage('Booked. Your email is already synced for follow-up.');
+        return;
+      }
+
+      processedBookingKeysRef.current.add(bookingKey);
+      if (sessionStorageKey) {
+        window.sessionStorage.setItem(sessionStorageKey, 'pending');
+      }
+
+      setSyncStatus('syncing');
+      setSyncMessage('');
+
+      try {
+        const response = await fetch('/api/calendly/booked', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payload }),
+        });
+
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Unable to sync booking details.');
+        }
+
+        setSyncStatus('success');
+        setSyncMessage('Booked. Your email has been added for Maestro follow-up.');
+        if (sessionStorageKey) {
+          window.sessionStorage.setItem(sessionStorageKey, 'done');
+        }
+      } catch (error) {
+        if (sessionStorageKey) {
+          window.sessionStorage.removeItem(sessionStorageKey);
+        }
+        processedBookingKeysRef.current.delete(bookingKey);
+        setSyncStatus('error');
+        setSyncMessage(error instanceof Error ? error.message : 'Your booking went through, but we could not sync email automatically.');
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
+
+  return (
+    <PageShell
+      eyebrow="Schedule a consultation"
+      title="Pick a time that works."
+      intro="Book directly on the page below. When the booking is confirmed, we sync that invitee into Kit automatically."
+      primaryAction={calendlyUrl ? { href: calendlyUrl, label: 'Open Calendly in new tab', icon: <ExternalLink className="h-4 w-4" /> } : { href: '/', label: 'Back to home' }}
+      secondaryAction={contactEmail ? { href: `mailto:${contactEmail}`, label: 'Email instead' } : undefined}
+    >
+      <div className="space-y-6">
+        <div className="rounded-2xl border border-cyan-200/70 bg-white p-6 shadow-[0_0_20px_rgba(6,182,212,0.08)]">
+          <p className="text-sm font-medium text-zinc-700">
+            After you book, we&apos;ll add that invitee email to the Maestro follow-up list in Kit.
+          </p>
+
+          {syncStatus === 'syncing' ? (
+            <p className="mt-3 text-sm font-semibold text-cyan-700">Booking confirmed. Syncing your email now…</p>
+          ) : null}
+
+          {syncStatus === 'success' ? (
+            <p className="mt-3 text-sm font-semibold text-emerald-700">{syncMessage}</p>
+          ) : null}
+
+          {syncStatus === 'error' ? (
+            <p className="mt-3 text-sm font-semibold text-amber-700">{syncMessage}</p>
+          ) : null}
+        </div>
+
+        {embedStatus === 'missing' ? (
+          <div className="rounded-2xl border border-zinc-200 bg-white p-8 text-sm text-zinc-700">
+            Scheduling is not configured yet. Use the email option below and we&apos;ll coordinate directly.
+          </div>
+        ) : null}
+
+        {embedStatus === 'error' ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-8 text-sm text-amber-900">
+            The embedded scheduler could not load in this browser. Use the open-in-new-tab fallback and we&apos;ll still sync the booking after confirmation from this page when possible.
+          </div>
+        ) : null}
+
+        {calendlyUrl ? (
+          <div className="overflow-hidden rounded-3xl border border-zinc-200/80 bg-white shadow-[0_18px_40px_-24px_rgba(0,0,0,0.14)]">
+            <div ref={embedRef} className="min-h-[760px] w-full" />
+          </div>
+        ) : null}
+      </div>
+    </PageShell>
+  );
+}
+
+function renderStandalonePage(pathname, primaryContactHref, contactEmail, calendlyUrl) {
   const content = buildPolicyContent(contactEmail);
 
   if (pathname === '/privacy') {
@@ -687,6 +869,10 @@ function renderStandalonePage(pathname, primaryContactHref, contactEmail) {
     return <BuiltForPage primaryContactHref={primaryContactHref} />;
   }
 
+  if (pathname === '/schedule') {
+    return <SchedulePage calendlyUrl={calendlyUrl} contactEmail={contactEmail} />;
+  }
+
   if (pathname === '/checkout/success') {
     return <CheckoutStatusPage type="success" primaryContactHref={primaryContactHref} />;
   }
@@ -703,7 +889,7 @@ export default function App() {
   const setupPriceLabel = cleanText(import.meta.env.VITE_STRIPE_SETUP_PRICE_LABEL) || '$1,500';
   const monthlyPriceLabel = cleanText(import.meta.env.VITE_STRIPE_MONTHLY_PRICE_LABEL) || '$400 / month';
   const contactEmail = cleanText(import.meta.env.VITE_CONTACT_EMAIL);
-  const primaryContactHref = calendlyUrl || (contactEmail ? `mailto:${contactEmail}` : '');
+  const primaryContactHref = calendlyUrl ? '/schedule' : contactEmail ? `mailto:${contactEmail}` : '';
   const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
 
   useEffect(() => {
@@ -717,6 +903,7 @@ export default function App() {
       '/terms': 'Maestro Fleet | Terms of Service',
       '/refund': 'Maestro Fleet | Refund Policy',
       '/built-for': 'Maestro Fleet | Built for Contractors',
+      '/schedule': 'Maestro Fleet | Schedule a Consultation',
       '/checkout/success': 'Maestro Fleet | Checkout Complete',
       '/checkout/cancel': 'Maestro Fleet | Checkout Canceled',
     };
@@ -724,7 +911,7 @@ export default function App() {
     document.title = titles[pathname] || titles['/'];
   }, [pathname]);
 
-  const standalonePage = renderStandalonePage(pathname, primaryContactHref, contactEmail);
+  const standalonePage = renderStandalonePage(pathname, primaryContactHref, contactEmail, calendlyUrl);
   if (standalonePage) {
     return standalonePage;
   }
