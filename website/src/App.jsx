@@ -213,7 +213,8 @@ function MobileNav({ primaryContactHref }) {
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-zinc-950 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_15px_rgba(6,182,212,0.2)] transition-all hover:bg-zinc-900"
               >
                 <Calendar className="h-4 w-4 text-cyan-400" />
-                Schedule a Consultation
+                Book a Consultation
+                <ArrowUpRight className="h-4 w-4 text-cyan-400" />
               </CtaLink>
             </div>
           </div>
@@ -644,10 +645,11 @@ function BuiltForPage({ primaryContactHref }) {
         <div className="mt-20 text-center">
           <CtaLink
             href={primaryContactHref}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-10 py-4 text-base font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_30px_rgba(6,182,212,0.4)]"
+            className="group inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-10 py-4 text-base font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_30px_rgba(6,182,212,0.4)]"
           >
             <Calendar className="h-4 w-4 text-cyan-400" />
-            Schedule a Consultation
+            Book a Consultation
+            <ArrowUpRight className="h-4 w-4 text-cyan-400 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
           </CtaLink>
           <p className="mt-5 text-sm font-medium text-zinc-400">
             We will walk through your operation and show you how the fleet maps to your projects.
@@ -773,8 +775,9 @@ export default function App() {
                 href={primaryContactHref}
                 className="group inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-8 py-4 text-base font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_25px_rgba(6,182,212,0.4)]"
               >
-                Schedule a Setup
-                <ArrowRight className="h-4 w-4 transition-all duration-300 group-hover:translate-x-1 group-hover:drop-shadow-[0_0_5px_rgba(6,182,212,0.8)]" />
+                <Calendar className="h-4 w-4 text-cyan-400" />
+                Book a Consultation
+                <ArrowUpRight className="h-4 w-4 text-cyan-400 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
               </CtaLink>
 
               <CtaLink
@@ -1262,10 +1265,11 @@ export default function App() {
                 </div>
                 <CtaLink
                   href={primaryContactHref}
-                  className="mt-10 inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_25px_rgba(6,182,212,0.4)]"
+                  className="group mt-10 inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_25px_rgba(6,182,212,0.4)]"
                 >
-                  Book consultation
-                  <ArrowUpRight className="h-4 w-4 text-cyan-400" />
+                  <Calendar className="h-4 w-4 text-cyan-400" />
+                  Book a Consultation
+                  <ArrowUpRight className="h-4 w-4 text-cyan-400 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                 </CtaLink>
               </div>
             </div>
@@ -1298,10 +1302,11 @@ export default function App() {
                 </div>
                 <CtaLink
                   href={primaryContactHref}
-                  className="mt-10 inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-200/60 bg-white px-6 py-3.5 text-sm font-semibold text-zinc-800 shadow-[0_0_15px_rgba(6,182,212,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-cyan-50/40 hover:shadow-[0_0_20px_rgba(6,182,212,0.18)]"
+                  className="group mt-10 inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-6 py-3.5 text-sm font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_25px_rgba(6,182,212,0.4)]"
                 >
-                  Discuss monthly coverage
-                  <ArrowUpRight className="h-4 w-4 text-cyan-600" />
+                  <Calendar className="h-4 w-4 text-cyan-400" />
+                  Book a Consultation
+                  <ArrowUpRight className="h-4 w-4 text-cyan-400 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                 </CtaLink>
               </div>
             </div>
@@ -1310,10 +1315,11 @@ export default function App() {
           <div className="mt-20 text-center">
             <CtaLink
               href={primaryContactHref}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-10 py-4 text-base font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_30px_rgba(6,182,212,0.4)]"
+              className="group inline-flex items-center justify-center gap-2 rounded-xl bg-zinc-950 px-10 py-4 text-base font-semibold text-white shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_20px_rgba(6,182,212,0.2)] transition-all duration-300 hover:-translate-y-0.5 hover:bg-zinc-900 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.1)_inset,0_0_30px_rgba(6,182,212,0.4)]"
             >
               <Calendar className="h-4 w-4 text-cyan-400" />
-              Schedule a Consultation
+              Book a Consultation
+              <ArrowUpRight className="h-4 w-4 text-cyan-400 transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
             </CtaLink>
             <p className="mt-5 text-sm font-medium text-zinc-400">Pick a time and we will talk through your operation.</p>
           </div>
