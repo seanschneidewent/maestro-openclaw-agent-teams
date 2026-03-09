@@ -21,6 +21,11 @@ def _make_template_dir(base: Path) -> Path:
     for filename in ("SOUL.md", "AGENTS.md", "IDENTITY.md", "USER.md"):
         (tmpl / filename).write_text(f"# {filename}\n", encoding="utf-8")
 
+    commander_dir = tmpl / "skills" / "commander" / "references"
+    commander_dir.mkdir(parents=True, exist_ok=True)
+    (commander_dir.parent / "SKILL.md").write_text("# Commander Skill\n", encoding="utf-8")
+    (commander_dir / "maestro-project.md").write_text("# Maestro Project Reference\n", encoding="utf-8")
+
     skill_dir = tmpl / "skills" / "maestro"
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text("# Maestro Skill\n", encoding="utf-8")
@@ -99,7 +104,12 @@ def test_update_no_changes_when_already_current(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    (workspace / "skills" / "maestro").mkdir(parents=True, exist_ok=True)
+    (workspace / "skills" / "commander" / "references").mkdir(parents=True, exist_ok=True)
+    (workspace / "skills" / "commander" / "SKILL.md").write_text("# Commander Skill\n", encoding="utf-8")
+    (workspace / "skills" / "commander" / "references" / "maestro-project.md").write_text(
+        "# Maestro Project Reference\n",
+        encoding="utf-8",
+    )
     sessions.mkdir(parents=True, exist_ok=True)
 
     before = config_path.read_text(encoding="utf-8")
@@ -117,6 +127,49 @@ def test_update_no_changes_when_already_current(tmp_path: Path):
     assert not summary.workspace_changed
     assert summary.backup_dir is None
     assert config_path.read_text(encoding="utf-8") == before
+
+
+def test_update_replaces_commander_skill_layout(tmp_path: Path):
+    home = tmp_path / "home"
+    openclaw_dir = home / ".openclaw"
+    workspace = openclaw_dir / "workspace-maestro"
+    template_dir = _make_template_dir(tmp_path)
+
+    config = {
+        "agents": {
+            "list": [
+                {
+                    "id": "maestro-company",
+                    "name": "The Commander",
+                    "default": True,
+                    "model": "openai/gpt-5.4",
+                    "workspace": str(workspace),
+                }
+            ]
+        },
+        "channels": {"telegram": _default_telegram()},
+        "bindings": _default_bindings(),
+    }
+    _write_json(openclaw_dir / "openclaw.json", config)
+
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "skills" / "maestro").mkdir(parents=True, exist_ok=True)
+    (workspace / "skills" / "maestro" / "SKILL.md").write_text("# Maestro Skill\n", encoding="utf-8")
+
+    summary, code = perform_update(
+        restart_gateway=False,
+        home_dir=home,
+        template_dir=template_dir,
+        command_runner=lambda cmd: (False, ""),
+    )
+
+    assert code == 0
+    assert summary.workspace_changed
+    assert "Synced Commander skill bundle in workspace" in summary.changes
+    assert "Removed Maestro project skill bundle from Commander workspace" in summary.changes
+    assert (workspace / "skills" / "commander" / "SKILL.md").exists()
+    assert (workspace / "skills" / "commander" / "references" / "maestro-project.md").exists()
+    assert not (workspace / "skills" / "maestro").exists()
 
 
 def test_update_migrates_legacy_agent_and_preserves_telegram(tmp_path: Path):

@@ -267,6 +267,8 @@ def test_register_project_agent_adds_telegram_binding(tmp_path: Path):
     assert "Read `AWARENESS.md` for current model + workspace URLs" in agents_md
     tools_md = (workspace / "projects" / project_slug / "TOOLS.md").read_text(encoding="utf-8")
     assert "Read `AWARENESS.md` and use the recommended workspace URL." in tools_md
+    assert (workspace / "projects" / project_slug / "skills" / "maestro" / "SKILL.md").exists()
+    assert not (workspace / "projects" / project_slug / "skills" / "commander").exists()
     native_plugin = (
         workspace
         / "projects"
@@ -356,6 +358,7 @@ def test_register_project_agent_prefers_fleet_profiled_config(tmp_path: Path):
     assert "Local Workspace URL: `http://localhost:3000/alpha-project/`" in awareness
     agents_md = (fleet_workspace / "projects" / project_slug / "AGENTS.md").read_text(encoding="utf-8")
     assert "Read `AWARENESS.md` for current model + workspace URLs" in agents_md
+    assert (fleet_workspace / "projects" / project_slug / "skills" / "maestro" / "SKILL.md").exists()
 
 
 def test_register_project_agent_rewrites_existing_workspace_store_env(tmp_path: Path):

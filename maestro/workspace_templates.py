@@ -2,11 +2,110 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any, Callable
 
 
 ResolveNetworkUrlsFn = Callable[..., dict[str, Any]]
+
+
+def _skill_template_source(skill_name: str, template_root: Path | None = None) -> Path | None:
+    if template_root is not None:
+        candidate = template_root / "skills" / skill_name
+        if candidate.exists():
+            return candidate
+
+    repo_root = Path(__file__).resolve().parents[1]
+    candidate = repo_root / "agent" / "skills" / skill_name
+    return candidate if candidate.exists() else None
+
+
+def _skill_snapshot(root: Path) -> dict[str, bytes]:
+    snapshot: dict[str, bytes] = {}
+    for path in sorted(root.rglob("*")):
+        if "__pycache__" in path.parts or path.suffix == ".pyc":
+            continue
+        if not path.is_file():
+            continue
+        snapshot[path.relative_to(root).as_posix()] = path.read_bytes()
+    return snapshot
+
+
+def _sync_workspace_skill_bundle(
+    *,
+    workspace: Path,
+    skill_name: str,
+    template_root: Path | None = None,
+    dry_run: bool = False,
+) -> bool:
+    source = _skill_template_source(skill_name, template_root=template_root)
+    if source is None:
+        return False
+
+    destination = workspace / "skills" / skill_name
+    desired = _skill_snapshot(source)
+    current = _skill_snapshot(destination) if destination.exists() else None
+    if current == desired:
+        return False
+
+    if not dry_run:
+        if destination.exists():
+            shutil.rmtree(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    return True
+
+
+def _remove_workspace_skill_bundle(*, workspace: Path, skill_name: str, dry_run: bool = False) -> bool:
+    destination = workspace / "skills" / skill_name
+    if not destination.exists():
+        return False
+    if not dry_run:
+        shutil.rmtree(destination)
+    return True
+
+
+def sync_company_workspace_skill_bundles(
+    *,
+    workspace: Path,
+    template_root: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, bool]:
+    return {
+        "commander_skill_synced": _sync_workspace_skill_bundle(
+            workspace=workspace,
+            skill_name="commander",
+            template_root=template_root,
+            dry_run=dry_run,
+        ),
+        "maestro_skill_removed": _remove_workspace_skill_bundle(
+            workspace=workspace,
+            skill_name="maestro",
+            dry_run=dry_run,
+        ),
+    }
+
+
+def sync_project_workspace_skill_bundles(
+    *,
+    workspace: Path,
+    template_root: Path | None = None,
+    dry_run: bool = False,
+) -> dict[str, bool]:
+    return {
+        "maestro_skill_synced": _sync_workspace_skill_bundle(
+            workspace=workspace,
+            skill_name="maestro",
+            template_root=template_root,
+            dry_run=dry_run,
+        ),
+        "commander_skill_removed": _remove_workspace_skill_bundle(
+            workspace=workspace,
+            skill_name="commander",
+            dry_run=dry_run,
+        ),
+    }
 
 
 def provider_env_key_for_model(model: str | None) -> str | None:
@@ -647,6 +746,11 @@ def sync_project_workspace_runtime_files(
     if not dry_run:
         project_workspace.mkdir(parents=True, exist_ok=True)
 
+    skill_sync = sync_project_workspace_skill_bundles(
+        workspace=project_workspace,
+        dry_run=dry_run,
+    )
+
     awareness_updated = sync_workspace_awareness_file(
         workspace=project_workspace,
         model=model,
@@ -693,6 +797,8 @@ def sync_project_workspace_runtime_files(
         "agents_updated": agents_updated,
         "tools_updated": tools_updated,
         "bootstrap_removed": bootstrap_removed,
+        "maestro_skill_synced": bool(skill_sync.get("maestro_skill_synced")),
+        "commander_skill_removed": bool(skill_sync.get("commander_skill_removed")),
     }
 
 

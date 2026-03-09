@@ -42,7 +42,9 @@ from .workspace_templates import (
     render_personal_tools_md,
     render_tools_md,
     render_workspace_env,
+    sync_company_workspace_skill_bundles,
     sync_project_workspace_runtime_files,
+    sync_project_workspace_skill_bundles,
     sync_workspace_awareness_file,
 )
 from .install_state import load_install_state, save_install_state
@@ -483,13 +485,26 @@ def _sync_workspace_assets(
                     shutil.copy2(src, dst)
                 changes.append(f"Added missing workspace file: {filename}")
 
-        skill_src = template_root / "skills" / "maestro"
-        skill_dst = workspace / "skills" / "maestro"
-        if skill_src.exists() and not skill_dst.exists():
-            if not dry_run:
-                skill_dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(skill_src, skill_dst)
-            changes.append("Added missing Maestro skill in workspace")
+    if profile == PROFILE_FLEET:
+        skill_sync = sync_company_workspace_skill_bundles(
+            workspace=workspace,
+            template_root=template_root,
+            dry_run=dry_run,
+        )
+        if skill_sync["commander_skill_synced"]:
+            changes.append("Synced Commander skill bundle in workspace")
+        if skill_sync["maestro_skill_removed"]:
+            changes.append("Removed Maestro project skill bundle from Commander workspace")
+    else:
+        skill_sync = sync_project_workspace_skill_bundles(
+            workspace=workspace,
+            template_root=template_root,
+            dry_run=dry_run,
+        )
+        if skill_sync["maestro_skill_synced"]:
+            changes.append("Synced Maestro project skill bundle in workspace")
+        if skill_sync["commander_skill_removed"]:
+            changes.append("Removed Commander skill bundle from project workspace")
 
     desired_agents = render_company_agents_md() if profile == PROFILE_FLEET else render_personal_agents_md()
     desired_role = "company" if profile == PROFILE_FLEET else "project"
@@ -712,6 +727,12 @@ def _sync_fleet_project_workspace_assets(
 
         if sync_result["tools_updated"]:
             changes.append(f"Updated project workspace TOOLS.md: {slug}")
+
+        if sync_result["maestro_skill_synced"]:
+            changes.append(f"Synced project workspace Maestro skill: {slug}")
+
+        if sync_result["commander_skill_removed"]:
+            changes.append(f"Removed Commander skill from project workspace: {slug}")
 
         if sync_result["bootstrap_removed"]:
             changes.append(f"Removed generic project BOOTSTRAP.md: {slug}")
