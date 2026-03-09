@@ -158,6 +158,9 @@ main() {
     -s "$RAILWAY_SERVICE" \
     -e "$RAILWAY_ENV" \
     MAESTRO_INSTALLER_SCRIPT_BASE_URL="$script_base_url" \
+    MAESTRO_INSTALLER_FLEET_SCRIPT_URL="$installer_url_linux" \
+    MAESTRO_INSTALLER_FLEET_WINDOWS_SCRIPT_URL="$installer_url_windows" \
+    MAESTRO_INSTALLER_FLEET_BASE_SCRIPT_URL="$base_install_url" \
     MAESTRO_INSTALLER_FLEET_PACKAGE_SPEC="$package_spec"
 
   echo "[fleet-release] Waiting for Railway deployment success"
