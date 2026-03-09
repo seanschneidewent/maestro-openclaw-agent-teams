@@ -133,3 +133,53 @@ def test_fleet_doctor_flags_single_project_company_store(monkeypatch, tmp_path: 
     )
     assert layout.get("ok") is False
     assert "single-project store" in str(layout.get("detail", ""))
+
+
+def test_fleet_doctor_can_skip_runtime_checks(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    state_root = home / ".openclaw-maestro-fleet"
+    workspace = state_root / "workspace-maestro"
+    store_root = tmp_path / "store"
+
+    _write_json(
+        state_root / "openclaw.json",
+        {
+            "env": {"OPENAI_API_KEY": "sk-test-1234567890"},
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-company",
+                        "name": "Maestro (TestCo)",
+                        "default": True,
+                        "model": "openai/gpt-5.4",
+                        "workspace": str(workspace),
+                    }
+                ]
+            },
+            "gateway": {"mode": "local"},
+        },
+    )
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / ".env").write_text(
+        f"MAESTRO_STORE={store_root}\nMAESTRO_AGENT_ROLE=company\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MAESTRO_OPENCLAW_PROFILE", "maestro-fleet")
+    monkeypatch.setattr(legacy_doctor, "_run_cmd", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("runtime checks should be skipped")))
+
+    report = fleet_doctor.build_doctor_report(
+        fix=True,
+        store_override=str(store_root),
+        restart_gateway=True,
+        runtime_checks=False,
+        home_dir=home,
+    )
+
+    checks = report.get("checks", [])
+    names = {item.get("name") for item in checks if isinstance(item, dict)}
+    assert "gateway_auth_tokens" in names
+    assert "launchagent_env_sync" not in names
+    assert "gateway_restart" not in names
+    assert "cli_device_pairing" not in names
+    assert "gateway_running" not in names

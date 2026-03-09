@@ -310,6 +310,7 @@ def _run_doctor_for_deploy(
         "maestro_fleet",
         "doctor",
         "--fix",
+        "--no-runtime-checks",
         "--store",
         str(store_root),
     ]

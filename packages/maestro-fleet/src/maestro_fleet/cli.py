@@ -123,6 +123,7 @@ def _run_fleet_doctor(args: argparse.Namespace) -> int:
         fix=bool(args.fix),
         store_override=args.store,
         restart_gateway=not args.no_restart,
+        runtime_checks=not bool(getattr(args, "no_runtime_checks", False)),
         json_output=bool(args.json),
         field_access_required=bool(getattr(args, "field_access_required", False)),
     )
@@ -378,6 +379,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--fix", action="store_true", help="Apply safe fixes in-place")
     doctor.add_argument("--store", help="Override knowledge store path used in checks")
     doctor.add_argument("--no-restart", action="store_true", help="Skip gateway restart checks")
+    doctor.add_argument("--no-runtime-checks", action="store_true", help=argparse.SUPPRESS)
     doctor.add_argument("--json", action="store_true", help="Print machine-readable JSON output")
 
     up = subparsers.add_parser("up", help="Preferred Fleet startup: doctor --fix then serve")
@@ -563,7 +565,13 @@ def _to_legacy_argv(args: argparse.Namespace) -> list[str]:
     if command == "doctor":
         return ["doctor"] + _flag_args(
             args,
-            {"fix": "--fix", "store": "--store", "no_restart": "--no-restart", "json": "--json"},
+            {
+                "fix": "--fix",
+                "store": "--store",
+                "no_restart": "--no-restart",
+                "no_runtime_checks": "--no-runtime-checks",
+                "json": "--json",
+            },
         )
     if command == "up":
         return ["up"] + _flag_args(

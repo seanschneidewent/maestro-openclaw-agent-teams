@@ -1135,6 +1135,7 @@ def test_run_doctor_for_deploy_uses_package_native_fleet_cli(monkeypatch, tmp_pa
     assert result == {"code": 0, "timed_out": False, "output": "doctor ok"}
     assert observed["cmd"][:4] == [fleet_deploy.sys.executable, "-m", "maestro_fleet", "doctor"]
     assert "--fix" in observed["cmd"]
+    assert "--no-runtime-checks" in observed["cmd"]
     assert observed["env"].get("MAESTRO_OPENCLAW_PROFILE") == "maestro-fleet"
 
 

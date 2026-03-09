@@ -50,6 +50,7 @@ def build_doctor_report(
     fix: bool = False,
     store_override: str | None = None,
     restart_gateway: bool = True,
+    runtime_checks: bool = True,
     field_access_required: bool | None = None,
     home_dir: Path | None = None,
 ) -> dict[str, Any]:
@@ -58,6 +59,7 @@ def build_doctor_report(
             fix=fix,
             store_override=store_override,
             restart_gateway=restart_gateway,
+            runtime_checks=runtime_checks,
             field_access_required=field_access_required,
             home_dir=home_dir,
         )
@@ -67,6 +69,7 @@ def run_doctor(
     fix: bool = False,
     store_override: str | None = None,
     restart_gateway: bool = True,
+    runtime_checks: bool = True,
     json_output: bool = False,
     field_access_required: bool | None = None,
     home_dir: Path | None = None,
@@ -76,6 +79,7 @@ def run_doctor(
             fix=fix,
             store_override=store_override,
             restart_gateway=restart_gateway,
+            runtime_checks=runtime_checks,
             json_output=json_output,
             field_access_required=field_access_required,
             home_dir=home_dir,

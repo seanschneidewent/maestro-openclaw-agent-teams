@@ -318,6 +318,7 @@ def build_doctor_report(
     fix: bool = False,
     store_override: str | None = None,
     restart_gateway: bool = True,
+    runtime_checks: bool = True,
     field_access_required: bool | None = None,
     home_dir: Path | None = None,
 ) -> dict[str, Any]:
@@ -440,7 +441,6 @@ def build_doctor_report(
     ))
     checks.append(_sync_workspace_agents_md(workspace, profile=profile, fix=fix))
     checks.append(_sync_workspace_env_role(workspace, expected_role=expected_role, fix=fix))
-    checks.append(_sync_launchagent_env(home, config_env=config_env, profile=profile, fix=fix))
     checks.append(_rotate_stale_sessions(home, fix=fix, profile=profile))
     checks.append(_sync_telegram_bindings(config, config_path=config_path, fix=fix))
     checks.append(
@@ -458,27 +458,30 @@ def build_doctor_report(
         fix=fix,
     )
     checks.append(gateway_token_check)
-    checks.append(
-        _sync_gateway_launchagent_token(
-            fix=fix,
-            token_check=gateway_token_check,
-            profile=profile,
+
+    if runtime_checks:
+        checks.append(_sync_launchagent_env(home, config_env=config_env, profile=profile, fix=fix))
+        checks.append(
+            _sync_gateway_launchagent_token(
+                fix=fix,
+                token_check=gateway_token_check,
+                profile=profile,
+            )
         )
-    )
 
-    if restart_gateway and fix:
-        checks.append(_restart_gateway(home, fix=fix, profile=profile))
-        time.sleep(1.0)
+        if restart_gateway and fix:
+            checks.append(_restart_gateway(home, fix=fix, profile=profile))
+            time.sleep(1.0)
 
-    checks.append(_repair_cli_device_pairing(fix=fix))
+        checks.append(_repair_cli_device_pairing(fix=fix))
 
-    gateway_ok = _gateway_running()
-    checks.append(DoctorCheck(
-        name="gateway_running",
-        ok=gateway_ok,
-        detail="openclaw gateway service running" if gateway_ok else "openclaw gateway service not running",
-        warning=not gateway_ok,
-    ))
+        gateway_ok = _gateway_running()
+        checks.append(DoctorCheck(
+            name="gateway_running",
+            ok=gateway_ok,
+            detail="openclaw gateway service running" if gateway_ok else "openclaw gateway service not running",
+            warning=not gateway_ok,
+        ))
 
     if profile == PROFILE_FLEET:
         checks.append(DoctorCheck(name="command_center_url", ok=True, detail=network["recommended_url"]))
@@ -536,6 +539,7 @@ def run_doctor(
     fix: bool = False,
     store_override: str | None = None,
     restart_gateway: bool = True,
+    runtime_checks: bool = True,
     json_output: bool = False,
     field_access_required: bool | None = None,
     home_dir: Path | None = None,
@@ -544,6 +548,7 @@ def run_doctor(
         fix=fix,
         store_override=store_override,
         restart_gateway=restart_gateway,
+        runtime_checks=runtime_checks,
         field_access_required=field_access_required,
         home_dir=home_dir,
     )

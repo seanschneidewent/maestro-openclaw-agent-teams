@@ -151,6 +151,69 @@ def test_doctor_fix_syncs_gateway_tokens(tmp_path: Path, monkeypatch):
     assert ["openclaw", "gateway", "install", "--force", "--port", "18789"] in commands
 
 
+def test_doctor_runtime_checks_can_be_skipped(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    workspace = home / ".openclaw-maestro-fleet" / "workspace-maestro"
+    store = tmp_path / "knowledge_store"
+    store.mkdir(parents=True, exist_ok=True)
+
+    _write_json(
+        home / ".openclaw-maestro-fleet" / "openclaw.json",
+        {
+            "env": {"OPENAI_API_KEY": "sk-test-1234567890"},
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-company",
+                        "name": "Maestro (TestCo)",
+                        "default": True,
+                        "model": "openai/gpt-5.4",
+                        "workspace": str(workspace),
+                    }
+                ]
+            },
+            "gateway": {"mode": "local"},
+        },
+    )
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / ".env").write_text(
+        f"MAESTRO_STORE={store}\nMAESTRO_AGENT_ROLE=company\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("MAESTRO_OPENCLAW_PROFILE", "maestro-fleet")
+
+    calls: list[list[str]] = []
+
+    def _fake_run_cmd(args: list[str], timeout: int = 25):
+        calls.append(list(args))
+        if args[:4] == ["openclaw", "gateway", "status", "--json"]:
+            return True, '{"service":{"runtime":{"status":"running"}},"rpc":{"ok":true},"port":{"status":"busy","listeners":[{"pid":1234}]}}'
+        if args[:3] == ["openclaw", "devices", "list"]:
+            return True, '{"pending":[],"paired":[]}'
+        return True, ""
+
+    monkeypatch.setattr(doctor, "_run_cmd", _fake_run_cmd)
+
+    report = doctor.build_doctor_report(
+        fix=True,
+        store_override=str(store),
+        restart_gateway=True,
+        runtime_checks=False,
+        home_dir=home,
+    )
+
+    checks = report.get("checks", [])
+    names = {item.get("name") for item in checks if isinstance(item, dict)}
+    assert "gateway_auth_tokens" in names
+    assert "launchagent_env_sync" not in names
+    assert "gateway_launchagent_sync" not in names
+    assert "gateway_restart" not in names
+    assert "cli_device_pairing" not in names
+    assert "gateway_running" not in names
+    assert calls == []
+
+
 def test_doctor_fix_auto_approves_single_device_pairing_request(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     workspace = home / ".openclaw" / "workspace-maestro"

@@ -92,6 +92,7 @@ def _add_doctor_parser(subparsers: argparse._SubParsersAction):
     parser.add_argument("--fix", action="store_true", help="Apply safe fixes in-place")
     parser.add_argument("--store", help="Override knowledge store path used in checks")
     parser.add_argument("--no-restart", action="store_true", help="Skip gateway restart checks")
+    parser.add_argument("--no-runtime-checks", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--field-access-required",
         action="store_true",
@@ -510,6 +511,7 @@ def _handle_doctor(args: argparse.Namespace):
         fix=bool(args.fix),
         store_override=args.store,
         restart_gateway=not args.no_restart,
+        runtime_checks=not bool(getattr(args, "no_runtime_checks", False)),
         json_output=bool(args.json),
         field_access_required=bool(getattr(args, "field_access_required", False)),
     )
