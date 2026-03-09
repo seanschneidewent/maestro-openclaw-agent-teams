@@ -581,7 +581,7 @@ def _complete_commander_pairing(
                 border_style="cyan",
             )
         )
-        selected = Prompt.ask("Commander pairing code (press Enter to skip)", default="").strip()
+        selected = Prompt.ask("Pairing code", default="").strip()
         if not selected:
             return {"approved": False, "skipped": True, "reason": "user_skipped"}
 
@@ -1531,7 +1531,18 @@ def run_deploy(
             )
         detached = _start_detached_server(port=effective_port, store_root=store_root, host=str(host))
         if not detached.get("ok"):
-            console.print(f"[red]Failed to start detached Fleet server: {detached.get('detail', 'unknown error')}[/]")
+            console.print("[red]Failed to start detached Fleet server.[/]")
+            detail = str(detached.get("detail") or "unknown error").strip()
+            if detail:
+                first_line = detail.splitlines()[0]
+                console.print(f"[dim]{first_line}[/]")
+            log_path = str(detached.get("log_path") or "").strip()
+            if log_path:
+                console.print(f"[dim]Log: {log_path}[/]")
+            tail = str(detached.get("tail") or "").strip()
+            if tail:
+                console.print("[dim]Recent log tail:[/]")
+                console.print(tail, markup=False, soft_wrap=True)
             return 1
         detached_port = int(detached.get("port", 0)) if isinstance(detached.get("port"), int | float | str) else 0
         if detached_port and detached_port != effective_port:

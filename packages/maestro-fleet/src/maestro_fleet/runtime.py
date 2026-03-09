@@ -256,7 +256,7 @@ def managed_listener_pids(
 ) -> list[int]:
     matched: list[int] = []
     for pid in listener_pids_fn(port):
-        if is_fleet_server_process_fn(pid, port, store_root, host):
+        if is_fleet_server_process_fn(pid, port=port, store_root=store_root, host=host):
             matched.append(int(pid))
     return matched
 
@@ -465,22 +465,37 @@ def start_detached_server(
             close_fds=True,
         )
 
-    deadline = time.time() + 8.0
+    deadline = time.time() + 12.0
+    startup_confirmed = False
     while time.time() < deadline:
         if proc.poll() is not None:
             break
+        active_listener_pids = listener_pids_fn(int(port))
+        if int(proc.pid) in active_listener_pids:
+            startup_confirmed = True
+            break
         if managed_listener_pids_fn(requested_port, resolved_store, host):
+            startup_confirmed = True
             break
         time.sleep(0.25)
-    if proc.poll() is not None or not managed_listener_pids_fn(requested_port, resolved_store, host):
+    if proc.poll() is not None:
         try:
             lines = log_path.read_text(encoding="utf-8", errors="ignore").splitlines()
             tail = "\n".join(lines[-12:]).strip()
         except Exception:
             tail = ""
         detail = f"maestro_fleet.server did not become healthy (code={proc.returncode})"
+        result = {"ok": False, "detail": detail, "log_path": str(log_path)}
         if tail:
-            detail = f"{detail}\n{tail}"
+            result["tail"] = tail
+        return result
+
+    active_listener_pids = listener_pids_fn(int(port))
+    if active_listener_pids and int(proc.pid) not in active_listener_pids and not managed_listener_pids_fn(requested_port, resolved_store, host):
+        detail = (
+            f"Port {int(port)} became busy with unexpected listener(s): "
+            + ", ".join(str(pid) for pid in active_listener_pids)
+        )
         return {"ok": False, "detail": detail, "log_path": str(log_path)}
 
     save_detached_server_state(
@@ -501,6 +516,7 @@ def start_detached_server(
         "port_mismatch": False,
         "pid_path": str(pid_path),
         "log_path": str(log_path),
+        "health_pending": not startup_confirmed,
     }
 
 
