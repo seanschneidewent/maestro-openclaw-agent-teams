@@ -12,6 +12,16 @@ const SCHEDULE_TYPES = new Set(["activity", "milestone", "constraint", "inspecti
 const SCHEDULE_STATUSES = new Set(["pending", "in_progress", "blocked", "done", "cancelled"]);
 const NOTE_STATUSES = new Set(["open", "archived"]);
 const NOTE_COLORS = new Set(["slate", "blue", "green", "amber", "red", "purple"]);
+const NUMERIC_SIGNAL_RE = /(?<!\w)(\d+(?:\.\d+)?)\s*("|inches|inch|in\.|feet|foot|ft|mm|cm|m|degrees|degree|°|ga|gauge)\b/gi;
+const CONFLICT_CUE_PAIRS: Array<[string, string, string]> = [
+  ["single-stage", "two-stage", "staging_conflict"],
+  ["single stage", "two stage", "staging_conflict"],
+  ["install", "remove", "scope_conflict"],
+  ["new", "existing", "scope_conflict"],
+  ["demolish", "install", "scope_conflict"],
+  ["prior to", "after", "sequence_conflict"],
+  ["before", "after", "sequence_conflict"],
+];
 
 function asRecord(value: unknown): AnyRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as AnyRecord) : {};
@@ -743,6 +753,47 @@ function matchStrength(text: unknown, phrase: string, terms: string[]): number {
   return matchedTerms;
 }
 
+function normalizeUnit(unit: string): string {
+  const token = asString(unit).toLowerCase();
+  const aliases: Record<string, string> = {
+    '"': "in",
+    "inch": "in",
+    "inches": "in",
+    "in.": "in",
+    "foot": "ft",
+    "feet": "ft",
+    "degree": "deg",
+    "degrees": "deg",
+    "°": "deg",
+    "gauge": "ga",
+  };
+  return aliases[token] || token;
+}
+
+function extractNumericSignals(text: unknown): Array<{ value: string; unit: string; raw: string }> {
+  const blob = asString(text);
+  const matches = [...blob.matchAll(NUMERIC_SIGNAL_RE)];
+  return matches.map((match) => ({
+    value: match[1] || "",
+    unit: normalizeUnit(match[2] || ""),
+    raw: match[0] || "",
+  }));
+}
+
+function extractConflictCues(text: unknown): Set<string> {
+  const blob = asString(text).toLowerCase();
+  const cues = new Set<string>();
+  for (const [left, right] of CONFLICT_CUE_PAIRS) {
+    if (blob.includes(left)) {
+      cues.add(left);
+    }
+    if (blob.includes(right)) {
+      cues.add(right);
+    }
+  }
+  return cues;
+}
+
 function scoreConceptEvidence(project: ProjectRef, query: string) {
   const { phrase, terms } = queryTerms(query);
   const pageScores = new Map<string, { score: number; reasons: string[]; matchedTerms: Set<string> }>();
@@ -867,6 +918,148 @@ function scoreConceptEvidence(project: ProjectRef, query: string) {
   pageHits.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.page_name).localeCompare(String(b.page_name)));
 
   return { phrase, terms, materials, keywords, pointerHits, pageHits, topPages };
+}
+
+function pageEvidenceFlags(reasons: unknown): Record<string, boolean> {
+  const items = Array.isArray(reasons) ? reasons.map((reason) => asString(reason)) : [];
+  return {
+    material: items.some((reason) => reason.startsWith("material:")),
+    keyword: items.some((reason) => reason.startsWith("keyword:")),
+    reflection: items.includes("sheet_reflection"),
+    pointer: items.some((reason) => reason.startsWith("pointer:")),
+    page_name: items.includes("page_name"),
+  };
+}
+
+function evidenceSnippets(evidence: ReturnType<typeof scoreConceptEvidence>, limit = 8) {
+  const pageNames = evidence.topPages.slice(0, Math.max(1, limit)).map((row) => asString(row.page_name)).filter(Boolean);
+  const pageLookup = new Map(pageNames.map((pageName) => [pageName, evidence.topPages.find((row) => asString(row.page_name) === pageName)]));
+  const snippets: AnyRecord[] = [];
+
+  for (const pageName of pageNames) {
+    const row = asRecord(pageLookup.get(pageName));
+    const summary = asString(row.summary);
+    if (!summary) {
+      continue;
+    }
+    snippets.push({
+      page_name: pageName,
+      discipline: asString(row.discipline) || "General",
+      source: "sheet_reflection",
+      matched_terms: Array.isArray(row.matched_terms) ? row.matched_terms : [],
+      text: summary,
+    });
+  }
+
+  const seen = new Set<string>();
+  for (const hit of evidence.pointerHits) {
+    const pageName = asString(hit.page_name);
+    const regionId = asString(hit.region_id);
+    if (!pageNames.includes(pageName) || !regionId) {
+      continue;
+    }
+    const key = `${pageName}:${regionId}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const row = asRecord(pageLookup.get(pageName));
+    snippets.push({
+      page_name: pageName,
+      discipline: asString(row.discipline) || "General",
+      source: "pointer",
+      region_id: regionId,
+      matched_terms: Array.isArray(hit.matched_terms) ? hit.matched_terms : [],
+      text: asString(hit.excerpt),
+    });
+    if (snippets.length >= Math.max(limit * 2, 10)) {
+      break;
+    }
+  }
+  return snippets;
+}
+
+function analyzeConceptConflicts(evidence: ReturnType<typeof scoreConceptEvidence>, limit = 8) {
+  const snippets = evidenceSnippets(evidence, limit);
+  const numericIndex = new Map<string, Map<string, AnyRecord[]>>();
+  const cueIndex = new Map<string, AnyRecord[]>();
+  const disciplines = new Set<string>();
+
+  for (const snippet of snippets) {
+    const discipline = asString(snippet.discipline) || "General";
+    disciplines.add(discipline);
+    const text = asString(snippet.text);
+    for (const signal of extractNumericSignals(text)) {
+      const byUnit = numericIndex.get(signal.unit) || new Map<string, AnyRecord[]>();
+      const rows = byUnit.get(signal.value) || [];
+      rows.push({
+        page_name: asString(snippet.page_name),
+        discipline,
+        source: asString(snippet.source) || "sheet_reflection",
+        raw: signal.raw,
+        text: truncateText(text, 240),
+      });
+      byUnit.set(signal.value, rows);
+      numericIndex.set(signal.unit, byUnit);
+    }
+    for (const cue of extractConflictCues(text)) {
+      const rows = cueIndex.get(cue) || [];
+      rows.push({
+        page_name: asString(snippet.page_name),
+        discipline,
+        source: asString(snippet.source) || "sheet_reflection",
+        text: truncateText(text, 240),
+      });
+      cueIndex.set(cue, rows);
+    }
+  }
+
+  const conflicts: AnyRecord[] = [];
+  for (const [unit, values] of numericIndex.entries()) {
+    const distinctValues = [...values.keys()].filter((value) => (values.get(value) || []).length > 0);
+    if (distinctValues.length < 2) {
+      continue;
+    }
+    const evidenceRows = distinctValues.slice(0, 3).flatMap((value) => (values.get(value) || []).slice(0, 2));
+    conflicts.push({
+      kind: "dimension_mismatch",
+      severity: "medium",
+      summary: `Potential ${unit} mismatch across supporting evidence.`,
+      values: distinctValues.slice(0, 4),
+      evidence: evidenceRows,
+    });
+  }
+
+  for (const [left, right, kind] of CONFLICT_CUE_PAIRS) {
+    const leftRows = cueIndex.get(left) || [];
+    const rightRows = cueIndex.get(right) || [];
+    if (!leftRows.length || !rightRows.length) {
+      continue;
+    }
+    conflicts.push({
+      kind,
+      severity: "medium",
+      summary: `Potential instruction tension between '${left}' and '${right}'.`,
+      signals: [left, right],
+      evidence: [...leftRows.slice(0, 2), ...rightRows.slice(0, 2)],
+    });
+  }
+
+  const coordinationFlags: AnyRecord[] = [];
+  if (disciplines.size >= 2) {
+    coordinationFlags.push({
+      kind: "cross_discipline_coordination",
+      summary: "The concept spans multiple disciplines and should be verified across governing sheets before acting.",
+      disciplines: [...disciplines].sort(),
+      supporting_pages: evidence.topPages.slice(0, Math.max(2, Math.min(limit, 6))).map((row) => ({
+        page_name: row.page_name,
+        discipline: row.discipline,
+        reasons: row.reasons,
+      })),
+    });
+  }
+
+  return { snippets, conflicts, coordinationFlags };
 }
 
 function toolResult(payload: AnyRecord): AnyRecord {
@@ -1075,6 +1268,137 @@ export default function register(api: {
                 "Inspect the strongest sheets and regions before creating or updating a workspace.",
                 "If this concept affects execution, convert unresolved gaps into notes or schedule constraints after verifying the evidence.",
               ],
+            };
+          })(params),
+      },
+      {
+        name: `${TOOL_PREFIX}governing_scope`,
+        description: "Identify the governing sheets and regions for a concept before rendering a workspace or making a field decision.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            query: { type: "string" },
+            limit: { type: "integer", minimum: 1, maximum: 12 },
+          },
+          required: ["query"],
+        },
+        execute: (_id: string, params: unknown) =>
+          withProject((project, payload) => {
+            const query = asString(payload.query);
+            if (!query) {
+              throw new Error("query is required.");
+            }
+            const limit = Math.max(1, Math.min(12, Math.trunc(asNumber(payload.limit, 6))));
+            const evidence = scoreConceptEvidence(project, query);
+            const scopedPages = evidence.topPages
+              .slice(0, limit)
+              .map((row) => {
+                const flags = pageEvidenceFlags(row.reasons);
+                let governanceScore = Number(row.score) || 0;
+                if (flags.pointer) governanceScore += 6;
+                if (flags.material) governanceScore += 5;
+                if (flags.keyword) governanceScore += 4;
+                if (flags.reflection) governanceScore += 3;
+                governanceScore += Array.isArray(row.matched_terms) ? row.matched_terms.length : 0;
+                const role = flags.pointer && (flags.material || flags.keyword || flags.reflection)
+                  ? "governing"
+                  : (flags.material || flags.keyword || flags.reflection)
+                    ? "supporting"
+                    : "locator";
+                return {
+                  ...row,
+                  governance_score: governanceScore,
+                  role,
+                };
+              })
+              .sort((a, b) => Number(b.governance_score) - Number(a.governance_score) || String(a.page_name).localeCompare(String(b.page_name)));
+
+            const governingPages = scopedPages.filter((row) => row.role === "governing").slice(0, Math.max(2, Math.min(limit, 4)));
+            const supportingPages = scopedPages.filter((row) => row.role !== "governing").slice(0, limit);
+            const governingNames = new Set(governingPages.map((row) => asString(row.page_name)).filter(Boolean));
+            const governingRegions = evidence.pointerHits
+              .filter((row) => governingNames.has(asString(row.page_name)))
+              .slice(0, Math.max(4, limit))
+              .map((row) => ({
+                page_name: row.page_name,
+                region_id: row.region_id,
+                matched_terms: row.matched_terms,
+                excerpt: row.excerpt,
+              }));
+            const disciplines = [...new Set(scopedPages.map((row) => asString(row.discipline) || "General"))].sort();
+            const confidence = governingPages.length >= 2 && governingRegions.length ? "high" : scopedPages.length ? "medium" : "low";
+            const gaps: string[] = [];
+            if (!governingPages.length) {
+              gaps.push("No clearly governing pages emerged yet; inspect the top supporting sheets before creating a workspace.");
+            }
+            if (!governingRegions.length) {
+              gaps.push("No governing regions matched directly; verify the governing scope with region details before relying on it in the field.");
+            }
+
+            return {
+              ok: true,
+              project_slug: project.slug,
+              query,
+              matched_terms: evidence.terms,
+              confidence,
+              governing_scope: {
+                governing_pages: governingPages,
+                supporting_pages: supportingPages,
+                governing_regions: governingRegions,
+                disciplines,
+              },
+              gaps,
+              next_moves: [
+                "Read the governing sheets and regions first; use supporting pages to fill in trade coordination and execution context.",
+                "Only render a workspace after the governing scope feels stable enough to guide field decisions.",
+              ],
+            };
+          })(params),
+      },
+      {
+        name: `${TOOL_PREFIX}detect_conflicts`,
+        description: "Surface contradiction cues, dimension mismatches, and coordination tensions around a concept.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            query: { type: "string" },
+            limit: { type: "integer", minimum: 1, maximum: 12 },
+          },
+          required: ["query"],
+        },
+        execute: (_id: string, params: unknown) =>
+          withProject((project, payload) => {
+            const query = asString(payload.query);
+            if (!query) {
+              throw new Error("query is required.");
+            }
+            const limit = Math.max(2, Math.min(12, Math.trunc(asNumber(payload.limit, 8))));
+            const evidence = scoreConceptEvidence(project, query);
+            const analysis = analyzeConceptConflicts(evidence, limit);
+            const confidence = analysis.conflicts.length ? "high" : (analysis.coordinationFlags.length || evidence.topPages.length >= 2) ? "medium" : "low";
+            const gaps: string[] = [];
+            if (!analysis.conflicts.length) {
+              gaps.push("No direct contradiction cues were found; verify against governing details before assuming the concept is conflict-free.");
+            }
+            if (!analysis.snippets.length) {
+              gaps.push("Very little evidence text matched directly; widen the concept trace before using this as a field decision.");
+            }
+            return {
+              ok: true,
+              project_slug: project.slug,
+              query,
+              matched_terms: evidence.terms,
+              confidence,
+              potential_conflicts: analysis.conflicts,
+              coordination_flags: analysis.coordinationFlags,
+              supporting_evidence: analysis.snippets.slice(0, Math.max(6, limit)),
+              next_moves: [
+                "Inspect the cited sheets and regions before changing the field plan.",
+                "If the tension is real, convert it into a note, RFI candidate, or schedule constraint after verification.",
+              ],
+              gaps,
             };
           })(params),
       },

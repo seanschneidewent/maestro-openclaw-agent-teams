@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 import shutil
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -48,6 +49,21 @@ MANAGED_SCHEDULE_FILE = "maestro_schedule.json"
 SCHEDULE_ITEM_TYPES = {"activity", "milestone", "constraint", "inspection", "delivery", "task"}
 SCHEDULE_ITEM_STATUSES = {"pending", "in_progress", "blocked", "done", "cancelled"}
 CLOSED_SCHEDULE_ITEM_STATUSES = {"done", "cancelled"}
+
+NUMERIC_SIGNAL_RE = re.compile(
+    r"(?<!\w)(\d+(?:\.\d+)?)\s*(\"|inches|inch|in\.|feet|foot|ft|mm|cm|m|degrees|degree|°|ga|gauge)\b",
+    re.IGNORECASE,
+)
+
+CONFLICT_CUE_PAIRS: tuple[tuple[str, str, str], ...] = (
+    ("single-stage", "two-stage", "staging_conflict"),
+    ("single stage", "two stage", "staging_conflict"),
+    ("install", "remove", "scope_conflict"),
+    ("new", "existing", "scope_conflict"),
+    ("demolish", "install", "scope_conflict"),
+    ("prior to", "after", "sequence_conflict"),
+    ("before", "after", "sequence_conflict"),
+)
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -93,6 +109,47 @@ def _match_strength(text: Any, full_query: str, terms: list[str]) -> int:
     if full_query and full_query in blob:
         return max(matched_terms, len(terms))
     return matched_terms
+
+
+def _normalize_unit(unit: str) -> str:
+    token = str(unit or "").strip().lower()
+    aliases = {
+        '"': "in",
+        "inch": "in",
+        "inches": "in",
+        "in.": "in",
+        "foot": "ft",
+        "feet": "ft",
+        "degree": "deg",
+        "degrees": "deg",
+        "°": "deg",
+        "gauge": "ga",
+    }
+    return aliases.get(token, token)
+
+
+def _extract_numeric_signals(text: Any) -> list[dict[str, str]]:
+    blob = str(text or "")
+    signals: list[dict[str, str]] = []
+    for match in NUMERIC_SIGNAL_RE.finditer(blob):
+        value, unit = match.groups()
+        signals.append({
+            "value": value,
+            "unit": _normalize_unit(unit),
+            "raw": match.group(0),
+        })
+    return signals
+
+
+def _extract_conflict_cues(text: Any) -> set[str]:
+    blob = str(text or "").lower()
+    cues: set[str] = set()
+    for left, right, _kind in CONFLICT_CUE_PAIRS:
+        if left in blob:
+            cues.add(left)
+        if right in blob:
+            cues.add(right)
+    return cues
 
 
 def _derive_schedule_variance_days(current_update: dict[str, Any]) -> int:
@@ -547,6 +604,147 @@ class MaestroTools:
         )
         return full_query, query_terms, ranked_pages, evidence
 
+    def _evidence_snippets(
+        self,
+        ranked_pages: list[dict[str, Any]],
+        evidence: dict[str, Any],
+        *,
+        limit: int = 8,
+    ) -> list[dict[str, Any]]:
+        page_names = [str(row.get("page_name") or "") for row in ranked_pages[: max(1, limit)]]
+        page_lookup = {str(row.get("page_name") or ""): row for row in ranked_pages}
+        snippets: list[dict[str, Any]] = []
+
+        for page_name in page_names:
+            if not page_name:
+                continue
+            row = page_lookup.get(page_name, {})
+            summary = str(row.get("summary") or "").strip()
+            if summary:
+                snippets.append({
+                    "page_name": page_name,
+                    "discipline": row.get("discipline") or "General",
+                    "source": "sheet_reflection",
+                    "matched_terms": row.get("matched_terms") or [],
+                    "text": summary,
+                })
+
+        seen_regions: set[tuple[str, str]] = set()
+        for hit in evidence.get("pointer_hits", []):
+            page_name = str(hit.get("page_name") or "")
+            region_id = str(hit.get("region_id") or "")
+            if page_name not in page_names or not region_id:
+                continue
+            key = (page_name, region_id)
+            if key in seen_regions:
+                continue
+            seen_regions.add(key)
+            row = page_lookup.get(page_name, {})
+            snippets.append({
+                "page_name": page_name,
+                "discipline": row.get("discipline") or "General",
+                "source": "pointer",
+                "region_id": region_id,
+                "matched_terms": hit.get("matched_terms") or [],
+                "text": str(hit.get("excerpt") or "").strip(),
+            })
+            if len(snippets) >= max(limit * 2, 10):
+                break
+        return snippets
+
+    def _page_evidence_flags(self, reasons: list[str]) -> dict[str, bool]:
+        items = {str(reason) for reason in reasons or []}
+        return {
+            "material": any(reason.startswith("material:") for reason in items),
+            "keyword": any(reason.startswith("keyword:") for reason in items),
+            "reflection": "sheet_reflection" in items,
+            "pointer": any(reason.startswith("pointer:") for reason in items),
+            "page_name": "page_name" in items,
+        }
+
+    def _concept_conflicts(
+        self,
+        ranked_pages: list[dict[str, Any]],
+        evidence: dict[str, Any],
+        *,
+        limit: int = 8,
+    ) -> dict[str, Any]:
+        snippets = self._evidence_snippets(ranked_pages, evidence, limit=limit)
+        numeric_index: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        cue_index: dict[str, list[dict[str, Any]]] = {}
+        disciplines: set[str] = set()
+
+        for snippet in snippets:
+            discipline = str(snippet.get("discipline") or "General")
+            disciplines.add(discipline)
+            text = str(snippet.get("text") or "")
+            for signal in _extract_numeric_signals(text):
+                bucket = numeric_index.setdefault(signal["unit"], {})
+                bucket.setdefault(signal["value"], []).append({
+                    "page_name": snippet["page_name"],
+                    "discipline": discipline,
+                    "source": snippet.get("source") or "sheet_reflection",
+                    "raw": signal["raw"],
+                    "text": text[:240],
+                })
+            for cue in _extract_conflict_cues(text):
+                cue_index.setdefault(cue, []).append({
+                    "page_name": snippet["page_name"],
+                    "discipline": discipline,
+                    "source": snippet.get("source") or "sheet_reflection",
+                    "text": text[:240],
+                })
+
+        conflicts: list[dict[str, Any]] = []
+        for unit, values in numeric_index.items():
+            distinct_values = [value for value, rows in values.items() if rows]
+            if len(distinct_values) < 2:
+                continue
+            evidence_rows = [row for value in distinct_values[:3] for row in values[value][:2]]
+            conflicts.append({
+                "kind": "dimension_mismatch",
+                "severity": "medium",
+                "summary": f"Potential {unit} mismatch across supporting evidence.",
+                "values": distinct_values[:4],
+                "evidence": evidence_rows,
+            })
+
+        for left, right, kind in CONFLICT_CUE_PAIRS:
+            left_rows = cue_index.get(left, [])
+            right_rows = cue_index.get(right, [])
+            if not left_rows or not right_rows:
+                continue
+            conflicts.append({
+                "kind": kind,
+                "severity": "medium",
+                "summary": f"Potential instruction tension between '{left}' and '{right}'.",
+                "signals": [left, right],
+                "evidence": left_rows[:2] + right_rows[:2],
+            })
+
+        coordination_flags: list[dict[str, Any]] = []
+        if len(disciplines) >= 2:
+            top_pages = ranked_pages[: max(2, min(limit, 6))]
+            coordination_flags.append({
+                "kind": "cross_discipline_coordination",
+                "summary": "The concept spans multiple disciplines and should be verified across governing sheets before acting.",
+                "disciplines": sorted(disciplines),
+                "supporting_pages": [
+                    {
+                        "page_name": row.get("page_name"),
+                        "discipline": row.get("discipline"),
+                        "reasons": row.get("reasons") or [],
+                    }
+                    for row in top_pages
+                ],
+            })
+
+        return {
+            "conflicts": conflicts,
+            "coordination_flags": coordination_flags,
+            "snippets": snippets,
+        }
+
     @requires_license
     def search(self, query: str) -> list[dict[str, Any]] | str:
         query_lower, _, ranked_pages, evidence = self._score_pages_for_query(query)
@@ -660,6 +858,128 @@ class MaestroTools:
                 "If the concept will drive execution, compare evidence across details/spec language and record any unresolved gap as a note or schedule item.",
             ],
             "evidence_terms": evidence_terms,
+        }
+
+    @requires_license
+    def governing_scope(self, query: str, limit: int = 6) -> dict[str, Any] | str:
+        full_query, query_terms, ranked_pages, evidence = self._score_pages_for_query(query)
+        if not full_query:
+            return "Scope query is required"
+
+        capped_limit = max(1, min(limit, 12))
+        scoped_pages: list[dict[str, Any]] = []
+        for row in ranked_pages[:capped_limit]:
+            flags = self._page_evidence_flags(row.get("reasons") or [])
+            governance_score = int(row.get("score") or 0)
+            if flags["pointer"]:
+                governance_score += 6
+            if flags["material"]:
+                governance_score += 5
+            if flags["keyword"]:
+                governance_score += 4
+            if flags["reflection"]:
+                governance_score += 3
+            governance_score += len(row.get("matched_terms") or [])
+
+            role = "supporting"
+            if flags["pointer"] and (flags["material"] or flags["keyword"] or flags["reflection"]):
+                role = "governing"
+            elif not (flags["material"] or flags["keyword"] or flags["reflection"]):
+                role = "locator"
+
+            scoped_pages.append({
+                "page_name": row.get("page_name"),
+                "discipline": row.get("discipline") or "General",
+                "governance_score": governance_score,
+                "role": role,
+                "matched_terms": row.get("matched_terms") or [],
+                "reasons": row.get("reasons") or [],
+                "summary": str(row.get("summary") or "")[:420],
+            })
+
+        scoped_pages.sort(key=lambda row: (-int(row["governance_score"]), str(row["page_name"]).lower()))
+        governing_pages = [row for row in scoped_pages if row["role"] == "governing"][: max(2, min(capped_limit, 4))]
+        supporting_pages = [row for row in scoped_pages if row["role"] != "governing"][:capped_limit]
+
+        governing_names = {str(row["page_name"]) for row in governing_pages}
+        governing_regions: list[dict[str, Any]] = []
+        for hit in evidence["pointer_hits"]:
+            page_name = str(hit.get("page_name") or "")
+            if page_name not in governing_names:
+                continue
+            governing_regions.append({
+                "page_name": page_name,
+                "region_id": hit.get("region_id") or "",
+                "matched_terms": hit.get("matched_terms") or [],
+                "excerpt": hit.get("excerpt") or "",
+            })
+            if len(governing_regions) >= max(4, capped_limit):
+                break
+
+        disciplines = sorted({str(row.get("discipline") or "General") for row in scoped_pages})
+        confidence = "low"
+        if len(governing_pages) >= 2 and governing_regions:
+            confidence = "high"
+        elif scoped_pages:
+            confidence = "medium"
+
+        gaps: list[str] = []
+        if not governing_pages:
+            gaps.append("No clearly governing pages emerged yet; inspect the top supporting sheets before creating a workspace.")
+        if not governing_regions:
+            gaps.append("No governing regions matched directly; verify the governing scope with region details before relying on it in the field.")
+
+        return {
+            "query": full_query,
+            "matched_terms": query_terms,
+            "confidence": confidence,
+            "governing_scope": {
+                "governing_pages": governing_pages,
+                "supporting_pages": supporting_pages,
+                "governing_regions": governing_regions,
+                "disciplines": disciplines,
+            },
+            "gaps": gaps,
+            "next_moves": [
+                "Read the governing sheets and regions first; use supporting pages to fill in trade coordination and execution context.",
+                "Only render a workspace after the governing scope feels stable enough to guide field decisions.",
+            ],
+        }
+
+    @requires_license
+    def detect_conflicts(self, query: str, limit: int = 8) -> dict[str, Any] | str:
+        full_query, query_terms, ranked_pages, evidence = self._score_pages_for_query(query)
+        if not full_query:
+            return "Conflict query is required"
+
+        capped_limit = max(2, min(limit, 12))
+        analysis = self._concept_conflicts(ranked_pages, evidence, limit=capped_limit)
+        conflicts = analysis["conflicts"]
+        coordination_flags = analysis["coordination_flags"]
+        confidence = "low"
+        if conflicts:
+            confidence = "high"
+        elif coordination_flags or ranked_pages[:2]:
+            confidence = "medium"
+
+        gaps: list[str] = []
+        if not conflicts:
+            gaps.append("No direct contradiction cues were found; verify against governing details before assuming the concept is conflict-free.")
+        if not analysis["snippets"]:
+            gaps.append("Very little evidence text matched directly; widen the concept trace before using this as a field decision.")
+
+        return {
+            "query": full_query,
+            "matched_terms": query_terms,
+            "confidence": confidence,
+            "potential_conflicts": conflicts,
+            "coordination_flags": coordination_flags,
+            "supporting_evidence": analysis["snippets"][: max(6, capped_limit)],
+            "next_moves": [
+                "Inspect the cited sheets and regions before changing the field plan.",
+                "If the tension is real, convert it into a note, RFI candidate, or schedule constraint after verification.",
+            ],
+            "gaps": gaps,
         }
 
     @requires_license

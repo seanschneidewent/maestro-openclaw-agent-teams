@@ -7,6 +7,55 @@ from pathlib import Path
 from maestro.tools import MaestroTools
 
 
+def _add_conflict_pages(store_root: Path) -> None:
+    project_dir = store_root / "Test Project"
+    index_path = project_dir / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index.setdefault("materials", {})["waterproofing membrane"] = [
+        {"page": "A201_Wall_Section_p001"},
+        {"page": "S201_Foundation_Detail_p001"},
+    ]
+    index.setdefault("keywords", {})["single-stage pour"] = [{"page": "A201_Wall_Section_p001"}]
+    index.setdefault("keywords", {})["two-stage pour"] = [{"page": "S201_Foundation_Detail_p001"}]
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    pages_dir = project_dir / "pages"
+
+    a201 = pages_dir / "A201_Wall_Section_p001"
+    a201.mkdir(parents=True, exist_ok=True)
+    (a201 / "pass1.json").write_text(json.dumps({
+        "page_type": "wall_section",
+        "discipline": "architectural",
+        "sheet_reflection": "Wall section shows waterproofing membrane turning 6 inches up the wall and a single-stage pour at the slab edge.",
+        "index": {"keywords": ["wall", "waterproofing", "single-stage pour"], "materials": ["waterproofing membrane"]},
+        "cross_references": ["S201"],
+        "regions": [{"id": "r_conflict_a201", "type": "detail", "label": "WALL BASE DETAIL"}],
+    }), encoding="utf-8")
+    a201_ptr = a201 / "pointers" / "r_conflict_a201"
+    a201_ptr.mkdir(parents=True, exist_ok=True)
+    (a201_ptr / "pass2.json").write_text(json.dumps({
+        "content_markdown": "Waterproofing membrane extends 6 inches up wall at entry. Single-stage pour noted at slab edge.",
+        "materials": ["waterproofing membrane"],
+    }), encoding="utf-8")
+
+    s201 = pages_dir / "S201_Foundation_Detail_p001"
+    s201.mkdir(parents=True, exist_ok=True)
+    (s201 / "pass1.json").write_text(json.dumps({
+        "page_type": "detail_sheet",
+        "discipline": "structural",
+        "sheet_reflection": "Foundation detail requires waterproofing membrane 12 inches up wall and a two-stage pour sequence.",
+        "index": {"keywords": ["foundation", "waterproofing", "two-stage pour"], "materials": ["waterproofing membrane"]},
+        "cross_references": ["A201"],
+        "regions": [{"id": "r_conflict_s201", "type": "detail", "label": "FOUNDATION EDGE DETAIL"}],
+    }), encoding="utf-8")
+    s201_ptr = s201 / "pointers" / "r_conflict_s201"
+    s201_ptr.mkdir(parents=True, exist_ok=True)
+    (s201_ptr / "pass2.json").write_text(json.dumps({
+        "content_markdown": "Waterproofing membrane extends 12 inches up wall and requires a two-stage pour before backfill.",
+        "materials": ["waterproofing membrane"],
+    }), encoding="utf-8")
+
+
 @pytest.fixture
 def mock_store(tmp_path):
     """Create a minimal knowledge store for testing."""
@@ -193,6 +242,26 @@ class TestKnowledgeQueries:
         result = tools.concept_trace("")
         assert isinstance(result, str)
         assert "required" in result.lower()
+
+    def test_governing_scope_returns_governing_pages(self, tools):
+        result = tools.governing_scope("brick waterproofing", limit=4)
+        assert isinstance(result, dict)
+        governing = result["governing_scope"]["governing_pages"]
+        assert governing
+        assert any(page["page_name"] == "A101_Floor_Plan_p001" for page in governing)
+        assert result["governing_scope"]["governing_regions"]
+
+    def test_detect_conflicts_surfaces_dimension_and_staging_tension(self, mock_store):
+        _add_conflict_pages(mock_store)
+        scoped_tools = MaestroTools(store_path=mock_store)
+
+        result = scoped_tools.detect_conflicts("waterproofing pour wall", limit=6)
+
+        assert isinstance(result, dict)
+        conflict_kinds = {entry["kind"] for entry in result["potential_conflicts"]}
+        assert "dimension_mismatch" in conflict_kinds
+        assert "staging_conflict" in conflict_kinds
+        assert result["coordination_flags"]
 
     def test_search_no_results(self, tools):
         result = tools.search("xyznonexistent")

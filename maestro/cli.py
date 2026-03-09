@@ -146,6 +146,14 @@ def _add_tools_parser(subparsers: argparse._SubParsersAction):
     ct.add_argument("query")
     ct.add_argument("--limit", type=int, default=8)
 
+    gs = tools_sub.add_parser("governing_scope")
+    gs.add_argument("query")
+    gs.add_argument("--limit", type=int, default=6)
+
+    dc = tools_sub.add_parser("detect_conflicts")
+    dc.add_argument("query")
+    dc.add_argument("--limit", type=int, default=8)
+
     fcr = tools_sub.add_parser("find_cross_references")
     fcr.add_argument("page_name")
 
@@ -928,6 +936,8 @@ def _run_tools(args: argparse.Namespace):
         "get_region_detail": lambda: tools.get_region_detail(args.page_name, args.region_id),
         "search": lambda: tools.search(args.query),
         "concept_trace": lambda: tools.concept_trace(args.query, getattr(args, "limit", 8)),
+        "governing_scope": lambda: tools.governing_scope(args.query, getattr(args, "limit", 6)),
+        "detect_conflicts": lambda: tools.detect_conflicts(args.query, getattr(args, "limit", 8)),
         "find_cross_references": lambda: tools.find_cross_references(args.page_name),
         "list_modifications": lambda: tools.list_modifications(),
         "check_gaps": lambda: tools.check_gaps(),

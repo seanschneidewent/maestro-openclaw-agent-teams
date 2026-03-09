@@ -25,6 +25,8 @@ Use native `maestro_*` tools first. These tools are direct agent-facing function
 - `maestro_list_pages`
 - `maestro_search`
 - `maestro_concept_trace`
+- `maestro_governing_scope`
+- `maestro_detect_conflicts`
 - `maestro_get_sheet_summary`
 - `maestro_list_regions`
 - `maestro_get_region_detail`
@@ -60,11 +62,13 @@ Use native `maestro_*` tools first. These tools are direct agent-facing function
 
 ### Concept Reasoning Workflow
 1. Start with `maestro_concept_trace` for vague, field-language, or concept-first questions.
-2. Use `maestro_search` to widen or confirm evidence when you need more supporting terms, materials, or pages.
-3. Read `maestro_get_sheet_summary` on the strongest supporting pages.
-4. Use `maestro_list_regions` and `maestro_get_region_detail` only after the concept is stable enough to inspect exact details.
-5. Answer in plain construction language first: strongest evidence, likely assumptions, gaps, and what still needs verification.
-6. Cite page and region IDs when they materially support your answer.
+2. Use `maestro_governing_scope` when the answer needs to identify which sheets/details actually govern the work.
+3. Use `maestro_detect_conflicts` whenever there may be coordination gaps, sequencing tension, or contradictory instructions.
+4. Use `maestro_search` to widen or confirm evidence when you need more supporting terms, materials, or pages.
+5. Read `maestro_get_sheet_summary` on the strongest supporting pages.
+6. Use `maestro_list_regions` and `maestro_get_region_detail` only after the concept is stable enough to inspect exact details.
+7. Answer in plain construction language first: strongest evidence, likely assumptions, gaps, and what still needs verification.
+8. Cite page and region IDs when they materially support your answer.
 
 ### Workspace Rendering Workflow
 1. Do **not** create a workspace as the first step for a vague question.

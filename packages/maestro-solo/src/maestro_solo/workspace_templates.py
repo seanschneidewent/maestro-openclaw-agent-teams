@@ -131,6 +131,8 @@ def render_personal_tools_md(
         "- `maestro_list_pages`\n"
         "- `maestro_search`\n"
         "- `maestro_concept_trace`\n"
+        "- `maestro_governing_scope`\n"
+        "- `maestro_detect_conflicts`\n"
         "- `maestro_get_sheet_summary`\n"
         "- `maestro_list_regions`\n"
         "- `maestro_get_region_detail`\n"

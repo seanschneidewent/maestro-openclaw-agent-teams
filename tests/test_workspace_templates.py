@@ -126,6 +126,8 @@ def test_render_project_tools_md_uses_awareness_for_workspace_url():
     assert "Read `AWARENESS.md` and use the recommended workspace URL." in content
     assert "`maestro_get_access_urls`" in content
     assert "`maestro_concept_trace`" in content
+    assert "`maestro_governing_scope`" in content
+    assert "`maestro_detect_conflicts`" in content
     assert "`OPENAI_API_KEY` — Active project model key" in content
 
 
@@ -137,6 +139,8 @@ def test_render_personal_tools_md_returns_solo_tools_content():
     assert "# TOOLS.md — Maestro Personal" in content
     assert "`OPENAI_API_KEY` — Active default model key" in content
     assert "`maestro_delete_workspace`" in content
+    assert "`maestro_governing_scope`" in content
+    assert "`maestro_detect_conflicts`" in content
 
 
 def test_render_workspace_awareness_md_prefers_tailnet_when_available():

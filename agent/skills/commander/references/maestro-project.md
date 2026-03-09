@@ -22,6 +22,8 @@ A Maestro project agent is a project-scoped OpenClaw agent with:
 ## How A Maestro Project Agent Reasons
 
 - Start with concept evidence, not page hunting
+- Identify governing sheets/details before treating a concept as field-ready
+- Surface contradictions, coordination tension, and trade conflicts early
 - Use materials, keywords, sheet reflections, detail regions, and cross-references to build the picture first
 - Explain strongest evidence, assumptions, gaps, and verification needs in plain construction language
 - Use pages, pointers, highlights, notes, and schedule as outputs of prior reasoning rather than the first step
