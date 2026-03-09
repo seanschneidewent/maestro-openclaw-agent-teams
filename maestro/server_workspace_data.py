@@ -125,7 +125,7 @@ def load_project_notes(proj: dict[str, Any]) -> dict[str, Any]:
     for idx, entry in enumerate(payload.get("categories", []) if isinstance(payload.get("categories"), list) else []):
         if not isinstance(entry, dict):
             continue
-        category_id = slugify_underscore(_text(entry.get("id")) or _text(entry.get("name")), "category")
+        category_id = slugify_underscore(_text(entry.get("id")) or _text(entry.get("name"))) or "category"
         if not category_id:
             continue
         category = {
@@ -160,14 +160,14 @@ def load_project_notes(proj: dict[str, Any]) -> dict[str, Any]:
         text = _text(entry.get("text"))
         if not text:
             continue
-        note_id = slugify_underscore(_text(entry.get("id") or entry.get("note_id")), "")
+        note_id = slugify_underscore(_text(entry.get("id") or entry.get("note_id")))
         if not note_id:
             note_id = f"note_{idx + 1}"
         if note_id in seen_note_ids:
             note_id = f"{note_id}_{idx + 1}"
         seen_note_ids.add(note_id)
 
-        category_id = slugify_underscore(_text(entry.get("category_id") or entry.get("category")), "general")
+        category_id = slugify_underscore(_text(entry.get("category_id") or entry.get("category"))) or "general"
         if category_id not in categories_by_id:
             categories_by_id[category_id] = {
                 "id": category_id,

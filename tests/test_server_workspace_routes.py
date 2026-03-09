@@ -20,6 +20,47 @@ def _make_single_project_store(root: Path, name: str = "Solo Project"):
     _write_json(root / "project.json", {"name": name})
 
 
+def _make_workspace(root: Path, slug: str, *, title: str, notes: list[dict] | None = None):
+    _write_json(
+        root / "workspaces" / slug / "workspace.json",
+        {
+            "slug": slug,
+            "title": title,
+            "description": "Demo workspace",
+            "pages": [{"page_name": "A101_p001", "selected_pointers": []}],
+            "notes": notes or [],
+        },
+    )
+
+
+def _make_project_notes(root: Path):
+    _write_json(
+        root / "notes" / "project_notes.json",
+        {
+            "version": 1,
+            "updated_at": "2026-03-09T20:00:00Z",
+            "categories": [
+                {"id": "Field Decisions", "name": "Field Decisions", "color": "blue", "order": 10},
+            ],
+            "notes": [
+                {
+                    "id": "andy-foundation-note",
+                    "text": "Andy wants a single-stage pour instead of the two-stage pour on plan.",
+                    "category_id": "Field Decisions",
+                    "source_pages": [
+                        {
+                            "page_name": "S1_1_Foundation_Plan_p001",
+                            "workspace_slug": "building_addition_foundations_vapor_barrier_sequencing",
+                        }
+                    ],
+                    "status": "open",
+                    "pinned": False,
+                }
+            ],
+        },
+    )
+
+
 @contextmanager
 def _with_store(path: Path):
     previous_store = server.store_path
@@ -74,6 +115,54 @@ def test_workspace_project_notes_route_returns_empty_payload(tmp_path: Path):
         assert payload["project_slug"]
         assert payload["categories"]
         assert payload["note_count"] == 0
+
+
+def test_workspace_project_notes_route_returns_saved_notes(tmp_path: Path):
+    _make_single_project_store(tmp_path, name="Solo Project")
+    _make_workspace(
+        tmp_path,
+        "building_addition_foundations_vapor_barrier_sequencing",
+        title="Foundations",
+    )
+    _make_project_notes(tmp_path)
+
+    with _with_store(tmp_path):
+        client = TestClient(server.app)
+        response = client.get("/workspace/api/project-notes")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["note_count"] == 1
+        assert payload["category_count"] == 2
+        note = payload["notes"][0]
+        assert note["id"] == "andy_foundation_note"
+        assert note["category_id"] == "field_decisions"
+        assert note["source_pages"][0]["workspace_slug"] == "building_addition_foundations_vapor_barrier_sequencing"
+
+
+def test_workspace_core_api_routes_are_healthy(tmp_path: Path):
+    _make_single_project_store(tmp_path, name="Solo Project")
+    _make_workspace(
+        tmp_path,
+        "building_addition_foundations_vapor_barrier_sequencing",
+        title="Foundations",
+    )
+    _make_project_notes(tmp_path)
+
+    with _with_store(tmp_path):
+        client = TestClient(server.app)
+
+        project_response = client.get("/workspace/api/project")
+        workspaces_response = client.get("/workspace/api/workspaces")
+        notes_response = client.get("/workspace/api/project-notes")
+        schedule_response = client.get("/workspace/api/schedule/status")
+
+        assert project_response.status_code == 200
+        assert workspaces_response.status_code == 200
+        assert notes_response.status_code == 200
+        assert schedule_response.status_code == 200
+        assert workspaces_response.json()["workspaces"][0]["slug"] == "building_addition_foundations_vapor_barrier_sequencing"
+        assert notes_response.json()["note_count"] == 1
 
 
 def test_command_center_disabled_in_solo_returns_actionable_404(monkeypatch):
