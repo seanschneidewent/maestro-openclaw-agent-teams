@@ -65,6 +65,70 @@ CONFLICT_CUE_PAIRS: tuple[tuple[str, str, str], ...] = (
     ("before", "after", "sequence_conflict"),
 )
 
+OBJECT_FAMILY_RULES: dict[str, dict[str, Any]] = {
+    "refuse_enclosure": {
+        "label": "refuse enclosure",
+        "aliases": (
+            "refuse enclosure",
+            "trash enclosure",
+            "dumpster enclosure",
+            "screened refuse enclosure",
+            "enclosure gate",
+            "bollards",
+        ),
+        "primary_disciplines": {"architectural", "structural"},
+        "supporting_disciplines": {"civil", "plumbing", "electrical"},
+    },
+    "vapor_barrier_addition": {
+        "label": "building addition vapor barrier",
+        "aliases": (
+            "building addition vapor barrier",
+            "vapor barrier sequencing",
+            "soil vapor control",
+            "vapor venting",
+            "vapor barrier",
+        ),
+        "primary_disciplines": {"environmental"},
+        "supporting_disciplines": {"structural", "architectural", "plumbing"},
+    },
+    "walk_in_cooler_freezer": {
+        "label": "walk-in cooler freezer",
+        "aliases": (
+            "walk in cooler freezer",
+            "walk-in cooler freezer",
+            "cooler freezer electrical layout",
+            "cooler freezer",
+            "walk in cooler",
+            "walk in freezer",
+        ),
+        "primary_disciplines": {"kitchen", "electrical"},
+        "supporting_disciplines": {"architectural", "mechanical", "plumbing"},
+    },
+    "canopy_footings": {
+        "label": "canopy footings",
+        "aliases": (
+            "canopy footing",
+            "canopy footings",
+            "canopy columns",
+            "anchor bolts",
+            "footing elevations",
+        ),
+        "primary_disciplines": {"structural"},
+        "supporting_disciplines": {"civil", "architectural"},
+    },
+    "electrical_enclosure": {
+        "label": "electrical enclosure",
+        "aliases": (
+            "nema enclosure",
+            "panel enclosure",
+            "disconnect enclosure",
+            "electrical enclosure",
+        ),
+        "primary_disciplines": {"electrical"},
+        "supporting_disciplines": set(),
+    },
+}
+
 
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
@@ -150,6 +214,124 @@ def _extract_conflict_cues(text: Any) -> set[str]:
         if right in blob:
             cues.add(right)
     return cues
+
+
+def _family_alias_score(text: Any, aliases: tuple[str, ...]) -> int:
+    blob = str(text or "").lower()
+    if not blob:
+        return 0
+    best = 0
+    for alias in aliases:
+        phrase, terms = _query_terms(alias)
+        best = max(best, _match_strength(blob, phrase, terms))
+    return best
+
+
+def _resolve_object_family(query: str) -> dict[str, Any]:
+    phrase, terms = _query_terms(query)
+    family_scores = {
+        family_id: _family_alias_score(phrase, tuple(rule.get("aliases", ())))
+        for family_id, rule in OBJECT_FAMILY_RULES.items()
+    }
+    best_id = ""
+    best_score = 0
+    for family_id, score in family_scores.items():
+        if score > best_score:
+            best_id = family_id
+            best_score = score
+    if not best_id or best_score < 2:
+        return {
+            "object_family": "",
+            "label": "",
+            "aliases": [],
+            "expected_disciplines": [],
+            "family_scores": family_scores,
+            "matched_terms": terms,
+        }
+    rule = OBJECT_FAMILY_RULES[best_id]
+    expected_disciplines = sorted(
+        set(rule.get("primary_disciplines", set())) | set(rule.get("supporting_disciplines", set()))
+    )
+    return {
+        "object_family": best_id,
+        "label": str(rule.get("label") or best_id.replace("_", " ")),
+        "aliases": list(rule.get("aliases", ())),
+        "expected_disciplines": expected_disciplines,
+        "primary_disciplines": sorted(rule.get("primary_disciplines", set())),
+        "supporting_disciplines": sorted(rule.get("supporting_disciplines", set())),
+        "family_scores": family_scores,
+        "matched_terms": terms,
+    }
+
+
+def _discipline_fit(discipline: str, query_context: dict[str, Any]) -> str:
+    clean = str(discipline or "").strip().lower()
+    if not clean or not query_context.get("object_family"):
+        return "neutral"
+    if clean in set(query_context.get("primary_disciplines", [])):
+        return "primary"
+    if clean in set(query_context.get("supporting_disciplines", [])):
+        return "supporting"
+    return "unrelated"
+
+
+def _classify_page_alignment(page_name: str, summary: str, discipline: str, query_context: dict[str, Any]) -> dict[str, Any]:
+    object_family = str(query_context.get("object_family") or "")
+    if not object_family:
+        return {
+            "score_adjustment": 0,
+            "family_alignment": "neutral",
+            "discipline_fit": "neutral",
+            "page_family": "",
+            "noise_family": "",
+            "query_family_score": 0,
+        }
+
+    blob = f"{page_name}\n{summary}".lower()
+    family_scores = {
+        family_id: _family_alias_score(blob, tuple(rule.get("aliases", ())))
+        for family_id, rule in OBJECT_FAMILY_RULES.items()
+    }
+    query_family_score = int(family_scores.get(object_family, 0))
+    page_family = ""
+    page_family_score = 0
+    for family_id, score in family_scores.items():
+        if score > page_family_score:
+            page_family = family_id
+            page_family_score = score
+
+    discipline_role = _discipline_fit(discipline, query_context)
+    score_adjustment = 0
+    if query_family_score > 0:
+        score_adjustment += query_family_score * 8
+    if discipline_role == "primary":
+        score_adjustment += 6
+    elif discipline_role == "supporting":
+        score_adjustment += 3
+    elif query_family_score > 0:
+        score_adjustment -= 2
+
+    family_alignment = "aligned"
+    noise_family = ""
+    if page_family and page_family != object_family and page_family_score >= max(2, query_family_score + 1):
+        score_adjustment -= page_family_score * 7
+        family_alignment = "noise"
+        noise_family = page_family
+    elif query_family_score == 0 and page_family_score >= 2:
+        score_adjustment -= page_family_score * 4
+        family_alignment = "noise"
+        noise_family = page_family
+    elif query_family_score <= 1 and discipline_role == "unrelated":
+        family_alignment = "weak"
+
+    return {
+        "score_adjustment": score_adjustment,
+        "family_alignment": family_alignment,
+        "discipline_fit": discipline_role,
+        "page_family": page_family if query_family_score <= 0 else object_family,
+        "noise_family": noise_family,
+        "query_family_score": query_family_score,
+    }
 
 
 def _derive_schedule_variance_days(current_update: dict[str, Any]) -> int:
@@ -465,14 +647,24 @@ class MaestroTools:
     def _score_pages_for_query(self, query: str) -> tuple[str, list[str], list[dict[str, Any]], dict[str, Any]]:
         full_query, query_terms = _query_terms(query)
         if not full_query:
-            return "", [], [], {"materials": [], "keywords": [], "pointer_hits": [], "page_hits": []}
+            return "", [], [], {
+                "materials": [],
+                "keywords": [],
+                "pointer_hits": [],
+                "page_hits": [],
+                "reference_only_noise": [],
+                "query_context": _resolve_object_family(""),
+            }
 
         page_scores: dict[str, dict[str, Any]] = {}
+        query_context = _resolve_object_family(full_query)
         evidence = {
             "materials": [],
             "keywords": [],
             "pointer_hits": [],
             "page_hits": [],
+            "reference_only_noise": [],
+            "query_context": query_context,
         }
 
         def ensure_page(page_name: str) -> dict[str, Any]:
@@ -484,6 +676,7 @@ class MaestroTools:
                     "score": 0,
                     "reasons": [],
                     "discipline": str(page.get("discipline", "") or "General"),
+                    "page_type": str(page.get("page_type", "") or "unknown"),
                     "summary": str(page.get("sheet_reflection", "") or ""),
                     "matched_terms": set(),
                 }
@@ -574,6 +767,36 @@ class MaestroTools:
                 })
                 apply_page_score(page_name, pointer_strength * 3, f"pointer:{pointer_id}", matched_terms)
 
+        for row in page_scores.values():
+            alignment = _classify_page_alignment(
+                str(row.get("page_name") or ""),
+                str(row.get("summary") or ""),
+                str(row.get("discipline") or ""),
+                query_context,
+            )
+            row["score"] += int(alignment.get("score_adjustment") or 0)
+            row["object_family"] = str(query_context.get("object_family") or "")
+            row["family_alignment"] = str(alignment.get("family_alignment") or "neutral")
+            row["discipline_fit"] = str(alignment.get("discipline_fit") or "neutral")
+            row["page_family"] = str(alignment.get("page_family") or "")
+            row["noise_family"] = str(alignment.get("noise_family") or "")
+            row["query_family_score"] = int(alignment.get("query_family_score") or 0)
+
+            object_family = str(query_context.get("object_family") or "")
+            if object_family and row["query_family_score"] > 0:
+                reason = f"object_family:{object_family}"
+                if reason not in row["reasons"]:
+                    row["reasons"].append(reason)
+            discipline_fit = str(row["discipline_fit"] or "")
+            if discipline_fit and discipline_fit != "neutral":
+                reason = f"discipline_fit:{discipline_fit}"
+                if reason not in row["reasons"]:
+                    row["reasons"].append(reason)
+            if row["family_alignment"] == "noise" and row["noise_family"]:
+                reason = f"noise_family:{row['noise_family']}"
+                if reason not in row["reasons"]:
+                    row["reasons"].append(reason)
+
         ranked_pages = sorted(
             (
                 {
@@ -585,6 +808,21 @@ class MaestroTools:
             ),
             key=lambda row: (-int(row["score"]), -len(row["matched_terms"]), str(row["page_name"]).lower()),
         )
+
+        evidence["reference_only_noise"] = [
+            {
+                "page_name": row.get("page_name") or "",
+                "discipline": row.get("discipline") or "General",
+                "page_type": row.get("page_type") or "unknown",
+                "score": int(row.get("score") or 0),
+                "matched_terms": row.get("matched_terms") or [],
+                "reasons": row.get("reasons") or [],
+                "noise_family": row.get("noise_family") or "",
+                "summary": str(row.get("summary") or "")[:240],
+            }
+            for row in ranked_pages
+            if str(row.get("family_alignment") or "") == "noise"
+        ][:8]
 
         evidence["materials"] = sorted(
             evidence["materials"],
@@ -781,13 +1019,20 @@ class MaestroTools:
         if not full_query:
             return "Concept query is required"
 
-        top_pages = ranked_pages[: max(1, min(limit, 12))]
+        capped_limit = max(1, min(limit, 12))
+        query_context = evidence.get("query_context") if isinstance(evidence.get("query_context"), dict) else {}
+        aligned_pages = [row for row in ranked_pages if str(row.get("family_alignment") or "") != "noise"]
+        top_pages = (aligned_pages or ranked_pages)[:capped_limit]
+        reference_only_noise = evidence.get("reference_only_noise", [])[: max(2, min(capped_limit, 6))]
         explicit_claims: list[dict[str, Any]] = []
         inferred_claims: list[dict[str, Any]] = []
         for row in top_pages:
             claim = {
                 "page_name": row["page_name"],
                 "discipline": row["discipline"],
+                "page_type": row.get("page_type") or "unknown",
+                "discipline_fit": row.get("discipline_fit") or "neutral",
+                "family_alignment": row.get("family_alignment") or "neutral",
                 "matched_terms": row["matched_terms"],
                 "reasons": row["reasons"],
                 "summary": str(row["summary"] or "")[:420],
@@ -799,7 +1044,10 @@ class MaestroTools:
 
         supporting_regions: list[dict[str, Any]] = []
         seen_regions: set[tuple[str, str]] = set()
+        top_page_names = {str(row.get("page_name") or "") for row in top_pages}
         for hit in evidence["pointer_hits"]:
+            if str(hit.get("page_name") or "") not in top_page_names:
+                continue
             key = (str(hit["page_name"]), str(hit["region_id"]))
             if key in seen_regions:
                 continue
@@ -827,20 +1075,27 @@ class MaestroTools:
             gaps.append("No material hits matched directly; concept is currently driven more by keywords and summaries.")
         if len(top_pages) < 2:
             gaps.append("Concept is supported by very few sheets; verify before turning it into a workspace or schedule decision.")
+        if query_context.get("object_family") and not any(str(row.get("family_alignment") or "") == "aligned" for row in top_pages):
+            gaps.append("No clearly aligned governing family emerged yet; inspect the top pages manually before trusting the concept trace.")
 
         return {
             "query": full_query,
             "matched_terms": query_terms,
+            "query_context": query_context,
             "confidence": confidence,
             "concept_evidence": {
                 "materials": evidence["materials"][:8],
                 "keywords": evidence["keywords"][:8],
                 "supporting_regions": supporting_regions,
+                "reference_only_noise": reference_only_noise,
                 "top_pages": [
                     {
                         "page_name": row["page_name"],
                         "discipline": row["discipline"],
+                        "page_type": row.get("page_type") or "unknown",
                         "score": row["score"],
+                        "discipline_fit": row.get("discipline_fit") or "neutral",
+                        "family_alignment": row.get("family_alignment") or "neutral",
                         "matched_terms": row["matched_terms"],
                         "reasons": row["reasons"],
                         "summary": str(row["summary"] or "")[:420],
@@ -867,8 +1122,10 @@ class MaestroTools:
             return "Scope query is required"
 
         capped_limit = max(1, min(limit, 12))
+        query_context = evidence.get("query_context") if isinstance(evidence.get("query_context"), dict) else {}
+        candidate_pages = ranked_pages[: max(capped_limit * 2, 8)]
         scoped_pages: list[dict[str, Any]] = []
-        for row in ranked_pages[:capped_limit]:
+        for row in candidate_pages:
             flags = self._page_evidence_flags(row.get("reasons") or [])
             governance_score = int(row.get("score") or 0)
             if flags["pointer"]:
@@ -880,18 +1137,47 @@ class MaestroTools:
             if flags["reflection"]:
                 governance_score += 3
             governance_score += len(row.get("matched_terms") or [])
+            if str(row.get("family_alignment") or "") == "aligned":
+                governance_score += 8
+            elif str(row.get("family_alignment") or "") == "weak":
+                governance_score += 2
+            elif str(row.get("family_alignment") or "") == "noise":
+                governance_score -= 12
+            if str(row.get("discipline_fit") or "") == "primary":
+                governance_score += 4
+            elif str(row.get("discipline_fit") or "") == "supporting":
+                governance_score += 2
+            elif str(row.get("discipline_fit") or "") == "unrelated":
+                governance_score -= 4
 
             role = "supporting"
-            if flags["pointer"] and (flags["material"] or flags["keyword"] or flags["reflection"]):
+            has_object_family = bool(query_context.get("object_family"))
+            family_alignment = str(row.get("family_alignment") or "neutral")
+            query_family_score = int(row.get("query_family_score") or 0)
+            if family_alignment == "noise":
+                role = "reference_only_noise"
+            elif not has_object_family and flags["pointer"] and (flags["material"] or flags["keyword"] or flags["reflection"]):
                 role = "governing"
+            elif has_object_family and family_alignment == "aligned" and (flags["pointer"] or query_family_score >= 2) and (
+                flags["material"] or flags["keyword"] or flags["reflection"] or flags["pointer"]
+            ):
+                role = "governing"
+            elif flags["pointer"] and (flags["material"] or flags["keyword"] or flags["reflection"]) and str(row.get("discipline_fit") or "") in {"primary", "supporting"}:
+                role = "secondary_governing"
+            elif (flags["material"] or flags["keyword"] or flags["reflection"]) and family_alignment in {"aligned", "neutral", "weak"}:
+                role = "secondary_governing"
             elif not (flags["material"] or flags["keyword"] or flags["reflection"]):
-                role = "locator"
+                role = "supporting"
 
             scoped_pages.append({
                 "page_name": row.get("page_name"),
                 "discipline": row.get("discipline") or "General",
+                "page_type": row.get("page_type") or "unknown",
                 "governance_score": governance_score,
                 "role": role,
+                "discipline_fit": row.get("discipline_fit") or "neutral",
+                "family_alignment": row.get("family_alignment") or "neutral",
+                "noise_family": row.get("noise_family") or "",
                 "matched_terms": row.get("matched_terms") or [],
                 "reasons": row.get("reasons") or [],
                 "summary": str(row.get("summary") or "")[:420],
@@ -899,7 +1185,9 @@ class MaestroTools:
 
         scoped_pages.sort(key=lambda row: (-int(row["governance_score"]), str(row["page_name"]).lower()))
         governing_pages = [row for row in scoped_pages if row["role"] == "governing"][: max(2, min(capped_limit, 4))]
-        supporting_pages = [row for row in scoped_pages if row["role"] != "governing"][:capped_limit]
+        secondary_governing_pages = [row for row in scoped_pages if row["role"] == "secondary_governing"][:capped_limit]
+        supporting_pages = [row for row in scoped_pages if row["role"] == "supporting"][:capped_limit]
+        reference_only_noise = [row for row in scoped_pages if row["role"] == "reference_only_noise"][:capped_limit]
 
         governing_names = {str(row["page_name"]) for row in governing_pages}
         governing_regions: list[dict[str, Any]] = []
@@ -916,11 +1204,11 @@ class MaestroTools:
             if len(governing_regions) >= max(4, capped_limit):
                 break
 
-        disciplines = sorted({str(row.get("discipline") or "General") for row in scoped_pages})
+        disciplines = sorted({str(row.get("discipline") or "General") for row in scoped_pages if row["role"] != "reference_only_noise"})
         confidence = "low"
         if len(governing_pages) >= 2 and governing_regions:
             confidence = "high"
-        elif scoped_pages:
+        elif governing_pages or secondary_governing_pages:
             confidence = "medium"
 
         gaps: list[str] = []
@@ -928,14 +1216,19 @@ class MaestroTools:
             gaps.append("No clearly governing pages emerged yet; inspect the top supporting sheets before creating a workspace.")
         if not governing_regions:
             gaps.append("No governing regions matched directly; verify the governing scope with region details before relying on it in the field.")
+        if query_context.get("object_family") and not governing_pages and not secondary_governing_pages:
+            gaps.append("The expected object family did not separate clearly from noise; refine the concept before trusting the governing scope.")
 
         return {
             "query": full_query,
             "matched_terms": query_terms,
+            "query_context": query_context,
             "confidence": confidence,
             "governing_scope": {
                 "governing_pages": governing_pages,
+                "secondary_governing_pages": secondary_governing_pages,
                 "supporting_pages": supporting_pages,
+                "reference_only_noise": reference_only_noise,
                 "governing_regions": governing_regions,
                 "disciplines": disciplines,
             },
@@ -953,7 +1246,9 @@ class MaestroTools:
             return "Conflict query is required"
 
         capped_limit = max(2, min(limit, 12))
-        analysis = self._concept_conflicts(ranked_pages, evidence, limit=capped_limit)
+        query_context = evidence.get("query_context") if isinstance(evidence.get("query_context"), dict) else {}
+        aligned_pages = [row for row in ranked_pages if str(row.get("family_alignment") or "") != "noise"]
+        analysis = self._concept_conflicts(aligned_pages or ranked_pages, evidence, limit=capped_limit)
         conflicts = analysis["conflicts"]
         coordination_flags = analysis["coordination_flags"]
         confidence = "low"
@@ -971,10 +1266,12 @@ class MaestroTools:
         return {
             "query": full_query,
             "matched_terms": query_terms,
+            "query_context": query_context,
             "confidence": confidence,
             "potential_conflicts": conflicts,
             "coordination_flags": coordination_flags,
             "supporting_evidence": analysis["snippets"][: max(6, capped_limit)],
+            "reference_only_noise": evidence.get("reference_only_noise", [])[: max(2, min(capped_limit, 6))],
             "next_moves": [
                 "Inspect the cited sheets and regions before changing the field plan.",
                 "If the tension is real, convert it into a note, RFI candidate, or schedule constraint after verification.",

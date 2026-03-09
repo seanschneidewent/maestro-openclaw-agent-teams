@@ -56,6 +56,88 @@ def _add_conflict_pages(store_root: Path) -> None:
     }), encoding="utf-8")
 
 
+def _add_refuse_enclosure_pages(store_root: Path) -> None:
+    project_dir = store_root / "Test Project"
+    index_path = project_dir / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index.setdefault("materials", {})["refuse enclosure gate"] = [
+        {"page": "AS401_Refuse_Enclosure_Plan_p001"},
+        {"page": "S502_Refuse_Enclosure_Detail_p001"},
+    ]
+    index.setdefault("materials", {})["bollards"] = [
+        {"page": "AS401_Refuse_Enclosure_Plan_p001"},
+        {"page": "S502_Refuse_Enclosure_Detail_p001"},
+    ]
+    index.setdefault("keywords", {})["refuse enclosure"] = [
+        {"page": "AS401_Refuse_Enclosure_Plan_p001"},
+        {"page": "S502_Refuse_Enclosure_Detail_p001"},
+        {"page": "C101_Utility_Site_Plan_p001"},
+    ]
+    index.setdefault("keywords", {})["trash enclosure"] = [{"page": "AS401_Refuse_Enclosure_Plan_p001"}]
+    index.setdefault("keywords", {})["electrical enclosure"] = [{"page": "E601_Electrical_Equipment_p001"}]
+    index.setdefault("pages", {}).update({
+        "AS401_Refuse_Enclosure_Plan_p001": {"discipline": "architectural", "page_type": "plan"},
+        "S502_Refuse_Enclosure_Detail_p001": {"discipline": "structural", "page_type": "detail_sheet"},
+        "C101_Utility_Site_Plan_p001": {"discipline": "civil", "page_type": "site_plan"},
+        "E601_Electrical_Equipment_p001": {"discipline": "electrical", "page_type": "equipment_schedule"},
+    })
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    pages_dir = project_dir / "pages"
+
+    as401 = pages_dir / "AS401_Refuse_Enclosure_Plan_p001"
+    as401.mkdir(parents=True, exist_ok=True)
+    (as401 / "pass1.json").write_text(json.dumps({
+        "page_type": "plan",
+        "discipline": "architectural",
+        "sheet_reflection": "Refuse enclosure plan shows screened trash enclosure walls, swing gate, bollards, and slab extents.",
+        "index": {"keywords": ["refuse enclosure", "trash enclosure"], "materials": ["refuse enclosure gate", "bollards"]},
+        "regions": [{"id": "r_refuse_plan", "type": "detail", "label": "REFUSE ENCLOSURE PLAN"}],
+    }), encoding="utf-8")
+    as401_ptr = as401 / "pointers" / "r_refuse_plan"
+    as401_ptr.mkdir(parents=True, exist_ok=True)
+    (as401_ptr / "pass2.json").write_text(json.dumps({
+        "content_markdown": "Refuse enclosure gate aligns with bollards and slab edge. Trash enclosure wall returns at gate opening.",
+        "materials": ["refuse enclosure gate", "bollards"],
+    }), encoding="utf-8")
+
+    s502 = pages_dir / "S502_Refuse_Enclosure_Detail_p001"
+    s502.mkdir(parents=True, exist_ok=True)
+    (s502 / "pass1.json").write_text(json.dumps({
+        "page_type": "detail_sheet",
+        "discipline": "structural",
+        "sheet_reflection": "Trash enclosure footing and bollard detail governs concrete pad thickness and reinforcing at refuse enclosure walls.",
+        "index": {"keywords": ["refuse enclosure", "bollards"], "materials": ["bollards"]},
+        "regions": [{"id": "r_refuse_detail", "type": "detail", "label": "TRASH ENCLOSURE FOOTING"}],
+    }), encoding="utf-8")
+    s502_ptr = s502 / "pointers" / "r_refuse_detail"
+    s502_ptr.mkdir(parents=True, exist_ok=True)
+    (s502_ptr / "pass2.json").write_text(json.dumps({
+        "content_markdown": "Refuse enclosure footing detail shows bollard embedment, wall footing width, and reinforcing at trash enclosure slab edge.",
+        "materials": ["bollards"],
+    }), encoding="utf-8")
+
+    c101 = pages_dir / "C101_Utility_Site_Plan_p001"
+    c101.mkdir(parents=True, exist_ok=True)
+    (c101 / "pass1.json").write_text(json.dumps({
+        "page_type": "site_plan",
+        "discipline": "civil",
+        "sheet_reflection": "Site utility plan references drainage near the refuse enclosure and adjacent paving transitions.",
+        "index": {"keywords": ["refuse enclosure", "drainage"]},
+        "regions": [],
+    }), encoding="utf-8")
+
+    e601 = pages_dir / "E601_Electrical_Equipment_p001"
+    e601.mkdir(parents=True, exist_ok=True)
+    (e601 / "pass1.json").write_text(json.dumps({
+        "page_type": "equipment_schedule",
+        "discipline": "electrical",
+        "sheet_reflection": "Electrical equipment schedule lists NEMA enclosure ratings for disconnects and panel enclosure accessories.",
+        "index": {"keywords": ["electrical enclosure", "nema enclosure"]},
+        "regions": [],
+    }), encoding="utf-8")
+
+
 @pytest.fixture
 def mock_store(tmp_path):
     """Create a minimal knowledge store for testing."""
@@ -262,6 +344,32 @@ class TestKnowledgeQueries:
         assert "dimension_mismatch" in conflict_kinds
         assert "staging_conflict" in conflict_kinds
         assert result["coordination_flags"]
+
+    def test_governing_scope_demotes_reference_noise_for_refuse_enclosure(self, mock_store):
+        _add_refuse_enclosure_pages(mock_store)
+        scoped_tools = MaestroTools(store_path=mock_store)
+
+        result = scoped_tools.governing_scope("refuse enclosure", limit=6)
+
+        assert isinstance(result, dict)
+        assert result["query_context"]["object_family"] == "refuse_enclosure"
+        governing = result["governing_scope"]["governing_pages"] + result["governing_scope"]["secondary_governing_pages"]
+        governing_names = {row["page_name"] for row in governing}
+        assert "AS401_Refuse_Enclosure_Plan_p001" in governing_names
+        assert "S502_Refuse_Enclosure_Detail_p001" in governing_names
+        noise_names = {row["page_name"] for row in result["governing_scope"]["reference_only_noise"]}
+        assert "E601_Electrical_Equipment_p001" in noise_names
+
+    def test_concept_trace_includes_reference_only_noise_bin(self, mock_store):
+        _add_refuse_enclosure_pages(mock_store)
+        scoped_tools = MaestroTools(store_path=mock_store)
+
+        result = scoped_tools.concept_trace("refuse enclosure", limit=6)
+
+        assert isinstance(result, dict)
+        assert result["query_context"]["object_family"] == "refuse_enclosure"
+        noise_names = {row["page_name"] for row in result["concept_evidence"]["reference_only_noise"]}
+        assert "E601_Electrical_Equipment_p001" in noise_names
 
     def test_search_no_results(self, tools):
         result = tools.search("xyznonexistent")

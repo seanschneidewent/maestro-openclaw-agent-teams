@@ -22,6 +22,43 @@ const CONFLICT_CUE_PAIRS: Array<[string, string, string]> = [
   ["prior to", "after", "sequence_conflict"],
   ["before", "after", "sequence_conflict"],
 ];
+const OBJECT_FAMILY_RULES: Record<string, {
+  label: string;
+  aliases: string[];
+  primary_disciplines: string[];
+  supporting_disciplines: string[];
+}> = {
+  refuse_enclosure: {
+    label: "refuse enclosure",
+    aliases: ["refuse enclosure", "trash enclosure", "dumpster enclosure", "screened refuse enclosure", "enclosure gate", "bollards"],
+    primary_disciplines: ["architectural", "structural"],
+    supporting_disciplines: ["civil", "plumbing", "electrical"],
+  },
+  vapor_barrier_addition: {
+    label: "building addition vapor barrier",
+    aliases: ["building addition vapor barrier", "vapor barrier sequencing", "soil vapor control", "vapor venting", "vapor barrier"],
+    primary_disciplines: ["environmental"],
+    supporting_disciplines: ["structural", "architectural", "plumbing"],
+  },
+  walk_in_cooler_freezer: {
+    label: "walk-in cooler freezer",
+    aliases: ["walk in cooler freezer", "walk-in cooler freezer", "cooler freezer electrical layout", "cooler freezer", "walk in cooler", "walk in freezer"],
+    primary_disciplines: ["kitchen", "electrical"],
+    supporting_disciplines: ["architectural", "mechanical", "plumbing"],
+  },
+  canopy_footings: {
+    label: "canopy footings",
+    aliases: ["canopy footing", "canopy footings", "canopy columns", "anchor bolts", "footing elevations"],
+    primary_disciplines: ["structural"],
+    supporting_disciplines: ["civil", "architectural"],
+  },
+  electrical_enclosure: {
+    label: "electrical enclosure",
+    aliases: ["nema enclosure", "panel enclosure", "disconnect enclosure", "electrical enclosure"],
+    primary_disciplines: ["electrical"],
+    supporting_disciplines: [],
+  },
+};
 
 function asRecord(value: unknown): AnyRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as AnyRecord) : {};
@@ -794,11 +831,145 @@ function extractConflictCues(text: unknown): Set<string> {
   return cues;
 }
 
+function familyAliasScore(text: unknown, aliases: string[]): number {
+  const blob = asString(text).toLowerCase();
+  if (!blob) {
+    return 0;
+  }
+  let best = 0;
+  for (const alias of aliases) {
+    const { phrase, terms } = queryTerms(alias);
+    best = Math.max(best, matchStrength(blob, phrase, terms));
+  }
+  return best;
+}
+
+function resolveObjectFamily(query: string): AnyRecord {
+  const { phrase, terms } = queryTerms(query);
+  const familyScores: Record<string, number> = {};
+  let bestId = "";
+  let bestScore = 0;
+  for (const [familyId, rule] of Object.entries(OBJECT_FAMILY_RULES)) {
+    const score = familyAliasScore(phrase, rule.aliases);
+    familyScores[familyId] = score;
+    if (score > bestScore) {
+      bestId = familyId;
+      bestScore = score;
+    }
+  }
+  if (!bestId || bestScore < 2) {
+    return {
+      object_family: "",
+      label: "",
+      aliases: [],
+      expected_disciplines: [],
+      primary_disciplines: [],
+      supporting_disciplines: [],
+      family_scores: familyScores,
+      matched_terms: terms,
+    };
+  }
+  const rule = OBJECT_FAMILY_RULES[bestId];
+  const expectedDisciplines = [...new Set([...rule.primary_disciplines, ...rule.supporting_disciplines])].sort();
+  return {
+    object_family: bestId,
+    label: rule.label,
+    aliases: [...rule.aliases],
+    expected_disciplines: expectedDisciplines,
+    primary_disciplines: [...rule.primary_disciplines].sort(),
+    supporting_disciplines: [...rule.supporting_disciplines].sort(),
+    family_scores: familyScores,
+    matched_terms: terms,
+  };
+}
+
+function disciplineFit(discipline: string, queryContext: AnyRecord): string {
+  const clean = asString(discipline).toLowerCase();
+  const objectFamily = asString(queryContext.object_family);
+  if (!clean || !objectFamily) {
+    return "neutral";
+  }
+  const primary = new Set((Array.isArray(queryContext.primary_disciplines) ? queryContext.primary_disciplines : []).map((value) => asString(value).toLowerCase()));
+  const supporting = new Set((Array.isArray(queryContext.supporting_disciplines) ? queryContext.supporting_disciplines : []).map((value) => asString(value).toLowerCase()));
+  if (primary.has(clean)) {
+    return "primary";
+  }
+  if (supporting.has(clean)) {
+    return "supporting";
+  }
+  return "unrelated";
+}
+
+function classifyPageAlignment(pageName: string, summary: string, discipline: string, queryContext: AnyRecord): AnyRecord {
+  const objectFamily = asString(queryContext.object_family);
+  if (!objectFamily) {
+    return {
+      score_adjustment: 0,
+      family_alignment: "neutral",
+      discipline_fit: "neutral",
+      page_family: "",
+      noise_family: "",
+      query_family_score: 0,
+    };
+  }
+
+  const blob = `${pageName}\n${summary}`.toLowerCase();
+  let pageFamily = "";
+  let pageFamilyScore = 0;
+  const familyScores: Record<string, number> = {};
+  for (const [familyId, rule] of Object.entries(OBJECT_FAMILY_RULES)) {
+    const score = familyAliasScore(blob, rule.aliases);
+    familyScores[familyId] = score;
+    if (score > pageFamilyScore) {
+      pageFamily = familyId;
+      pageFamilyScore = score;
+    }
+  }
+
+  const queryFamilyScore = Number(familyScores[objectFamily] || 0);
+  const fit = disciplineFit(discipline, queryContext);
+  let scoreAdjustment = 0;
+  if (queryFamilyScore > 0) {
+    scoreAdjustment += queryFamilyScore * 8;
+  }
+  if (fit === "primary") {
+    scoreAdjustment += 6;
+  } else if (fit === "supporting") {
+    scoreAdjustment += 3;
+  } else if (queryFamilyScore > 0) {
+    scoreAdjustment -= 2;
+  }
+
+  let familyAlignment = "aligned";
+  let noiseFamily = "";
+  if (pageFamily && pageFamily !== objectFamily && pageFamilyScore >= Math.max(2, queryFamilyScore + 1)) {
+    scoreAdjustment -= pageFamilyScore * 7;
+    familyAlignment = "noise";
+    noiseFamily = pageFamily;
+  } else if (queryFamilyScore === 0 && pageFamilyScore >= 2) {
+    scoreAdjustment -= pageFamilyScore * 4;
+    familyAlignment = "noise";
+    noiseFamily = pageFamily;
+  } else if (queryFamilyScore <= 1 && fit === "unrelated") {
+    familyAlignment = "weak";
+  }
+
+  return {
+    score_adjustment: scoreAdjustment,
+    family_alignment: familyAlignment,
+    discipline_fit: fit,
+    page_family: queryFamilyScore <= 0 ? pageFamily : objectFamily,
+    noise_family: noiseFamily,
+    query_family_score: queryFamilyScore,
+  };
+}
+
 function scoreConceptEvidence(project: ProjectRef, query: string) {
   const { phrase, terms } = queryTerms(query);
   const pageScores = new Map<string, { score: number; reasons: string[]; matchedTerms: Set<string> }>();
   const index = loadProjectIndex(project);
   const allPages = listProjectPages(project);
+  const queryContext = resolveObjectFamily(phrase);
   const materials: AnyRecord[] = [];
   const keywords: AnyRecord[] = [];
   const pointerHits: AnyRecord[] = [];
@@ -901,23 +1072,58 @@ function scoreConceptEvidence(project: ProjectRef, query: string) {
   const topPages = [...pageScores.entries()]
     .map(([pageName, meta]) => {
       const pass1 = loadPass1(project, pageName);
+      const alignment = classifyPageAlignment(pageName, asString(pass1.sheet_reflection), asString(pass1.discipline), queryContext);
+      const reasons = [...meta.reasons];
+      const objectFamily = asString(queryContext.object_family);
+      if (objectFamily && Number(alignment.query_family_score) > 0 && !reasons.includes(`object_family:${objectFamily}`)) {
+        reasons.push(`object_family:${objectFamily}`);
+      }
+      const fit = asString(alignment.discipline_fit);
+      if (fit && fit !== "neutral" && !reasons.includes(`discipline_fit:${fit}`)) {
+        reasons.push(`discipline_fit:${fit}`);
+      }
+      const noiseFamily = asString(alignment.noise_family);
+      if (asString(alignment.family_alignment) === "noise" && noiseFamily && !reasons.includes(`noise_family:${noiseFamily}`)) {
+        reasons.push(`noise_family:${noiseFamily}`);
+      }
       return {
         page_name: pageName,
-        score: meta.score,
-        reasons: meta.reasons.slice(0, 6),
+        score: meta.score + Number(alignment.score_adjustment || 0),
+        reasons: reasons.slice(0, 6),
         matched_terms: [...meta.matchedTerms].sort(),
         discipline: asString(pass1.discipline) || "General",
+        page_type: asString(pass1.page_type) || "unknown",
         summary: truncateText(pass1.sheet_reflection, 420),
+        object_family: objectFamily,
+        family_alignment: asString(alignment.family_alignment) || "neutral",
+        discipline_fit: fit || "neutral",
+        noise_family: noiseFamily,
+        page_family: asString(alignment.page_family),
+        query_family_score: Number(alignment.query_family_score || 0),
       };
     })
     .sort((a, b) => b.score - a.score || b.matched_terms.length - a.matched_terms.length || a.page_name.localeCompare(b.page_name));
+
+  const referenceOnlyNoise = topPages
+    .filter((row) => asString(row.family_alignment) === "noise")
+    .slice(0, 8)
+    .map((row) => ({
+      page_name: row.page_name,
+      discipline: row.discipline,
+      page_type: row.page_type,
+      score: row.score,
+      matched_terms: row.matched_terms,
+      reasons: row.reasons,
+      noise_family: row.noise_family,
+      summary: truncateText(row.summary, 240),
+    }));
 
   materials.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.text).localeCompare(String(b.text)));
   keywords.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.text).localeCompare(String(b.text)));
   pointerHits.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.page_name).localeCompare(String(b.page_name)));
   pageHits.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.page_name).localeCompare(String(b.page_name)));
 
-  return { phrase, terms, materials, keywords, pointerHits, pageHits, topPages };
+  return { phrase, terms, materials, keywords, pointerHits, pageHits, topPages, referenceOnlyNoise, queryContext };
 }
 
 function pageEvidenceFlags(reasons: unknown): Record<string, boolean> {
@@ -931,9 +1137,9 @@ function pageEvidenceFlags(reasons: unknown): Record<string, boolean> {
   };
 }
 
-function evidenceSnippets(evidence: ReturnType<typeof scoreConceptEvidence>, limit = 8) {
-  const pageNames = evidence.topPages.slice(0, Math.max(1, limit)).map((row) => asString(row.page_name)).filter(Boolean);
-  const pageLookup = new Map(pageNames.map((pageName) => [pageName, evidence.topPages.find((row) => asString(row.page_name) === pageName)]));
+function evidenceSnippets(evidence: ReturnType<typeof scoreConceptEvidence>, limit = 8, rankedPages: AnyRecord[] = evidence.topPages) {
+  const pageNames = rankedPages.slice(0, Math.max(1, limit)).map((row) => asString(row.page_name)).filter(Boolean);
+  const pageLookup = new Map(pageNames.map((pageName) => [pageName, rankedPages.find((row) => asString(row.page_name) === pageName)]));
   const snippets: AnyRecord[] = [];
 
   for (const pageName of pageNames) {
@@ -979,8 +1185,8 @@ function evidenceSnippets(evidence: ReturnType<typeof scoreConceptEvidence>, lim
   return snippets;
 }
 
-function analyzeConceptConflicts(evidence: ReturnType<typeof scoreConceptEvidence>, limit = 8) {
-  const snippets = evidenceSnippets(evidence, limit);
+function analyzeConceptConflicts(evidence: ReturnType<typeof scoreConceptEvidence>, limit = 8, rankedPages: AnyRecord[] = evidence.topPages) {
+  const snippets = evidenceSnippets(evidence, limit, rankedPages);
   const numericIndex = new Map<string, Map<string, AnyRecord[]>>();
   const cueIndex = new Map<string, AnyRecord[]>();
   const disciplines = new Set<string>();
@@ -1051,7 +1257,7 @@ function analyzeConceptConflicts(evidence: ReturnType<typeof scoreConceptEvidenc
       kind: "cross_discipline_coordination",
       summary: "The concept spans multiple disciplines and should be verified across governing sheets before acting.",
       disciplines: [...disciplines].sort(),
-      supporting_pages: evidence.topPages.slice(0, Math.max(2, Math.min(limit, 6))).map((row) => ({
+      supporting_pages: rankedPages.slice(0, Math.max(2, Math.min(limit, 6))).map((row) => ({
         page_name: row.page_name,
         discipline: row.discipline,
         reasons: row.reasons,
@@ -1180,18 +1386,20 @@ export default function register(api: {
             }
             const limit = Math.max(1, Math.min(50, Math.trunc(asNumber(payload.limit, defaultSearchLimit))));
             const evidence = scoreConceptEvidence(project, query);
-            const ranked = evidence.topPages.slice(0, limit);
+            const ranked = evidence.topPages.filter((row) => asString(row.family_alignment) !== "noise").slice(0, limit);
 
             return {
               ok: true,
               project_slug: project.slug,
               query,
               matched_terms: evidence.terms,
+              query_context: evidence.queryContext,
               evidence: {
                 materials: evidence.materials.slice(0, Math.min(limit, 8)),
                 keywords: evidence.keywords.slice(0, Math.min(limit, 8)),
                 pointer_hits: evidence.pointerHits.slice(0, Math.min(limit, 8)),
                 page_hits: evidence.pageHits.slice(0, Math.min(limit, 8)),
+                reference_only_noise: evidence.referenceOnlyNoise.slice(0, Math.min(limit, 6)),
               },
               count: ranked.length,
               results: ranked,
@@ -1218,13 +1426,17 @@ export default function register(api: {
             }
             const limit = Math.max(1, Math.min(12, Math.trunc(asNumber(payload.limit, 6))));
             const evidence = scoreConceptEvidence(project, query);
-            const topPages = evidence.topPages.slice(0, limit);
-            const supportingRegions = evidence.pointerHits.slice(0, Math.max(limit, 4)).map((entry) => ({
-              page_name: entry.page_name,
-              region_id: entry.region_id,
-              matched_terms: entry.matched_terms,
-              excerpt: entry.excerpt,
-            }));
+            const topPages = evidence.topPages.filter((row) => asString(row.family_alignment) !== "noise").slice(0, limit);
+            const topPageNames = new Set(topPages.map((row) => asString(row.page_name)).filter(Boolean));
+            const supportingRegions = evidence.pointerHits
+              .map((entry) => ({
+                page_name: entry.page_name,
+                region_id: entry.region_id,
+                matched_terms: entry.matched_terms,
+                excerpt: entry.excerpt,
+              }))
+              .filter((entry) => topPageNames.has(asString(entry.page_name)))
+              .slice(0, Math.max(limit, 4));
             const explicit = topPages
               .filter((row) => row.reasons.some((reason) => reason.startsWith("material:") || reason.startsWith("keyword:") || reason === "sheet_reflection"))
               .slice(0, 6);
@@ -1246,17 +1458,22 @@ export default function register(api: {
             if (topPages.length < 2) {
               gaps.push("Very few sheets support this concept so far; treat the result as exploratory rather than final.");
             }
+            if (asString(evidence.queryContext.object_family) && !topPages.some((row) => asString(row.family_alignment) === "aligned")) {
+              gaps.push("No clearly aligned governing family emerged yet; inspect the top pages manually before trusting the concept trace.");
+            }
 
             return {
               ok: true,
               project_slug: project.slug,
               query,
               matched_terms: evidence.terms,
+              query_context: evidence.queryContext,
               confidence,
               concept_evidence: {
                 materials: evidence.materials.slice(0, 8),
                 keywords: evidence.keywords.slice(0, 8),
                 supporting_regions: supportingRegions,
+                reference_only_noise: evidence.referenceOnlyNoise.slice(0, Math.min(limit, 6)),
                 top_pages: topPages,
               },
               claims: {
@@ -1292,7 +1509,7 @@ export default function register(api: {
             const limit = Math.max(1, Math.min(12, Math.trunc(asNumber(payload.limit, 6))));
             const evidence = scoreConceptEvidence(project, query);
             const scopedPages = evidence.topPages
-              .slice(0, limit)
+              .slice(0, Math.max(limit * 2, 8))
               .map((row) => {
                 const flags = pageEvidenceFlags(row.reasons);
                 let governanceScore = Number(row.score) || 0;
@@ -1301,11 +1518,27 @@ export default function register(api: {
                 if (flags.keyword) governanceScore += 4;
                 if (flags.reflection) governanceScore += 3;
                 governanceScore += Array.isArray(row.matched_terms) ? row.matched_terms.length : 0;
-                const role = flags.pointer && (flags.material || flags.keyword || flags.reflection)
-                  ? "governing"
-                  : (flags.material || flags.keyword || flags.reflection)
-                    ? "supporting"
-                    : "locator";
+                if (asString(row.family_alignment) === "aligned") governanceScore += 8;
+                else if (asString(row.family_alignment) === "weak") governanceScore += 2;
+                else if (asString(row.family_alignment) === "noise") governanceScore -= 12;
+                if (asString(row.discipline_fit) === "primary") governanceScore += 4;
+                else if (asString(row.discipline_fit) === "supporting") governanceScore += 2;
+                else if (asString(row.discipline_fit) === "unrelated") governanceScore -= 4;
+
+                const hasObjectFamily = Boolean(asString(evidence.queryContext.object_family));
+                const familyAlignment = asString(row.family_alignment) || "neutral";
+                const queryFamilyScore = Number(row.query_family_score || 0);
+                const role = familyAlignment === "noise"
+                  ? "reference_only_noise"
+                  : !hasObjectFamily && flags.pointer && (flags.material || flags.keyword || flags.reflection)
+                    ? "governing"
+                    : hasObjectFamily && familyAlignment === "aligned" && (flags.pointer || queryFamilyScore >= 2) && (flags.material || flags.keyword || flags.reflection || flags.pointer)
+                      ? "governing"
+                      : flags.pointer && (flags.material || flags.keyword || flags.reflection) && ["primary", "supporting"].includes(asString(row.discipline_fit))
+                        ? "secondary_governing"
+                        : (flags.material || flags.keyword || flags.reflection) && ["aligned", "neutral", "weak"].includes(familyAlignment)
+                          ? "secondary_governing"
+                          : "supporting";
                 return {
                   ...row,
                   governance_score: governanceScore,
@@ -1315,7 +1548,9 @@ export default function register(api: {
               .sort((a, b) => Number(b.governance_score) - Number(a.governance_score) || String(a.page_name).localeCompare(String(b.page_name)));
 
             const governingPages = scopedPages.filter((row) => row.role === "governing").slice(0, Math.max(2, Math.min(limit, 4)));
-            const supportingPages = scopedPages.filter((row) => row.role !== "governing").slice(0, limit);
+            const secondaryGoverningPages = scopedPages.filter((row) => row.role === "secondary_governing").slice(0, limit);
+            const supportingPages = scopedPages.filter((row) => row.role === "supporting").slice(0, limit);
+            const referenceOnlyNoise = scopedPages.filter((row) => row.role === "reference_only_noise").slice(0, limit);
             const governingNames = new Set(governingPages.map((row) => asString(row.page_name)).filter(Boolean));
             const governingRegions = evidence.pointerHits
               .filter((row) => governingNames.has(asString(row.page_name)))
@@ -1326,8 +1561,8 @@ export default function register(api: {
                 matched_terms: row.matched_terms,
                 excerpt: row.excerpt,
               }));
-            const disciplines = [...new Set(scopedPages.map((row) => asString(row.discipline) || "General"))].sort();
-            const confidence = governingPages.length >= 2 && governingRegions.length ? "high" : scopedPages.length ? "medium" : "low";
+            const disciplines = [...new Set(scopedPages.filter((row) => row.role !== "reference_only_noise").map((row) => asString(row.discipline) || "General"))].sort();
+            const confidence = governingPages.length >= 2 && governingRegions.length ? "high" : (governingPages.length || secondaryGoverningPages.length) ? "medium" : "low";
             const gaps: string[] = [];
             if (!governingPages.length) {
               gaps.push("No clearly governing pages emerged yet; inspect the top supporting sheets before creating a workspace.");
@@ -1335,16 +1570,22 @@ export default function register(api: {
             if (!governingRegions.length) {
               gaps.push("No governing regions matched directly; verify the governing scope with region details before relying on it in the field.");
             }
+            if (asString(evidence.queryContext.object_family) && !governingPages.length && !secondaryGoverningPages.length) {
+              gaps.push("The expected object family did not separate clearly from noise; refine the concept before trusting the governing scope.");
+            }
 
             return {
               ok: true,
               project_slug: project.slug,
               query,
               matched_terms: evidence.terms,
+              query_context: evidence.queryContext,
               confidence,
               governing_scope: {
                 governing_pages: governingPages,
+                secondary_governing_pages: secondaryGoverningPages,
                 supporting_pages: supportingPages,
+                reference_only_noise: referenceOnlyNoise,
                 governing_regions: governingRegions,
                 disciplines,
               },
@@ -1376,7 +1617,8 @@ export default function register(api: {
             }
             const limit = Math.max(2, Math.min(12, Math.trunc(asNumber(payload.limit, 8))));
             const evidence = scoreConceptEvidence(project, query);
-            const analysis = analyzeConceptConflicts(evidence, limit);
+            const alignedPages = evidence.topPages.filter((row) => asString(row.family_alignment) !== "noise");
+            const analysis = analyzeConceptConflicts(evidence, limit, alignedPages.length ? alignedPages : evidence.topPages);
             const confidence = analysis.conflicts.length ? "high" : (analysis.coordinationFlags.length || evidence.topPages.length >= 2) ? "medium" : "low";
             const gaps: string[] = [];
             if (!analysis.conflicts.length) {
@@ -1390,10 +1632,12 @@ export default function register(api: {
               project_slug: project.slug,
               query,
               matched_terms: evidence.terms,
+              query_context: evidence.queryContext,
               confidence,
               potential_conflicts: analysis.conflicts,
               coordination_flags: analysis.coordinationFlags,
               supporting_evidence: analysis.snippets.slice(0, Math.max(6, limit)),
+              reference_only_noise: evidence.referenceOnlyNoise.slice(0, Math.min(limit, 6)),
               next_moves: [
                 "Inspect the cited sheets and regions before changing the field plan.",
                 "If the tension is real, convert it into a note, RFI candidate, or schedule constraint after verification.",
