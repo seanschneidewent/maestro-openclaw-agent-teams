@@ -108,9 +108,16 @@ def _ensure_native_plugin_config(config: dict[str, Any]) -> bool:
 
 
 def _native_extension_source() -> Path | None:
-    repo_root = Path(__file__).resolve().parents[3]
-    candidate = repo_root / "agent" / "extensions" / NATIVE_PLUGIN_ID
-    return candidate if candidate.exists() else None
+    package_root = Path(__file__).resolve().parents[2]
+    repo_root = package_root.parent
+    candidates = [
+        package_root / "agent" / "extensions" / NATIVE_PLUGIN_ID,
+        repo_root / "agent" / "extensions" / NATIVE_PLUGIN_ID,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _sync_native_extension(workspace_root: Path) -> bool:

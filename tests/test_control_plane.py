@@ -10,6 +10,8 @@ import pytest
 from fastapi.responses import JSONResponse
 
 from maestro.fleet.projects import awareness as project_awareness
+import maestro.fleet.projects.lifecycle as project_lifecycle
+import maestro.workspace_templates as workspace_templates
 import maestro.server as server
 from maestro.control_plane import (
     build_awareness_state,
@@ -47,6 +49,74 @@ def _make_project(project_dir: Path, name: str = "Alpha Project", slug: str = "a
         },
     )
 
+
+
+
+def test_register_project_agent_syncs_native_extension_from_packaged_assets(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    state_dir = home / ".openclaw-maestro-fleet"
+    workspace = state_dir / "workspace-maestro"
+    store_root = workspace / "knowledge_store"
+    project_store = store_root / "alpha-project"
+    project_store.mkdir(parents=True, exist_ok=True)
+
+    save_install_state({"profile": "fleet", "fleet_enabled": True}, home_dir=home)
+
+    _write_json(
+        state_dir / "openclaw.json",
+        {
+            "agents": {
+                "list": [
+                    {
+                        "id": "maestro-company",
+                        "name": "The Commander",
+                        "default": True,
+                        "model": "openai/gpt-5.4",
+                        "workspace": str(workspace),
+                    }
+                ]
+            },
+            "channels": {
+                "telegram": {
+                    "accounts": {
+                        "maestro-company": {
+                            "botToken": "123456:ABCDEF",
+                            "dmPolicy": "pairing",
+                            "groupPolicy": "allowlist",
+                            "streaming": "partial",
+                        }
+                    }
+                }
+            },
+        },
+    )
+
+    package_root = tmp_path / "site-packages" / "maestro"
+    maestro_skill = package_root / "agent" / "skills" / "maestro"
+    extension_dir = package_root / "agent" / "extensions" / "maestro-native-tools"
+    maestro_skill.mkdir(parents=True, exist_ok=True)
+    extension_dir.mkdir(parents=True, exist_ok=True)
+    (maestro_skill / "SKILL.md").write_text("# Maestro\n", encoding="utf-8")
+    (extension_dir / "openclaw.plugin.json").write_text("{}\n", encoding="utf-8")
+    (extension_dir / "index.ts").write_text("export {};\n", encoding="utf-8")
+
+    monkeypatch.setattr(project_lifecycle, "__file__", str(package_root / "fleet" / "projects" / "lifecycle.py"))
+    monkeypatch.setattr(workspace_templates, "__file__", str(package_root / "workspace_templates.py"))
+
+    result = register_project_agent(
+        store_root=store_root,
+        project_slug="alpha-project",
+        project_name="Alpha Project",
+        project_store_path=str(project_store),
+        home_dir=home,
+        dry_run=False,
+        model="openai/gpt-5.4",
+    )
+
+    assert result["ok"] is True
+    project_workspace = workspace / "projects" / "alpha-project"
+    assert (project_workspace / ".openclaw" / "extensions" / "maestro-native-tools" / "openclaw.plugin.json").exists()
+    assert (project_workspace / "skills" / "maestro" / "SKILL.md").exists()
 
 def test_registry_sync_discovers_projects(tmp_path: Path):
     project_dir = tmp_path / "alpha"

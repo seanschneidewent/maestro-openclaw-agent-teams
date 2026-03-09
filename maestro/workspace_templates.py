@@ -17,9 +17,16 @@ def _skill_template_source(skill_name: str, template_root: Path | None = None) -
         if candidate.exists():
             return candidate
 
-    repo_root = Path(__file__).resolve().parents[1]
-    candidate = repo_root / "agent" / "skills" / skill_name
-    return candidate if candidate.exists() else None
+    package_root = Path(__file__).resolve().parent
+    repo_root = package_root.parent
+    candidates = [
+        package_root / "agent" / "skills" / skill_name,
+        repo_root / "agent" / "skills" / skill_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _skill_snapshot(root: Path) -> dict[str, bytes]:
@@ -68,9 +75,16 @@ def _remove_workspace_skill_bundle(*, workspace: Path, skill_name: str, dry_run:
 
 
 def _native_extension_source() -> Path | None:
-    repo_root = Path(__file__).resolve().parents[1]
-    candidate = repo_root / "agent" / "extensions" / NATIVE_PLUGIN_ID
-    return candidate if candidate.exists() else None
+    package_root = Path(__file__).resolve().parent
+    repo_root = package_root.parent
+    candidates = [
+        package_root / "agent" / "extensions" / NATIVE_PLUGIN_ID,
+        repo_root / "agent" / "extensions" / NATIVE_PLUGIN_ID,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def sync_workspace_native_extension(*, workspace: Path, dry_run: bool = False) -> bool:

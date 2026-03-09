@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import maestro.workspace_templates as workspace_templates
+
 from maestro.workspace_templates import (
     provider_env_key_for_model,
     render_company_agents_md,
@@ -160,3 +164,18 @@ def test_render_company_identity_files_describe_company_setup_role():
     assert "company-level Maestro orchestrator" in identity
     assert "Company Leadership" in user
     assert "Specialty teams desired" in user
+
+
+def test_workspace_template_helpers_support_installed_package_layout(tmp_path: Path, monkeypatch):
+    package_root = tmp_path / "site-packages" / "maestro"
+    skill_dir = package_root / "agent" / "skills" / "commander"
+    extension_dir = package_root / "agent" / "extensions" / "maestro-native-tools"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    extension_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text("# Commander\n", encoding="utf-8")
+    (extension_dir / "openclaw.plugin.json").write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(workspace_templates, "__file__", str(package_root / "workspace_templates.py"))
+
+    assert workspace_templates._skill_template_source("commander") == skill_dir
+    assert workspace_templates._native_extension_source() == extension_dir
