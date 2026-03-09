@@ -143,7 +143,7 @@ class MaestroTools:
             return resolved_store.parent
 
         cwd = Path.cwd()
-        if (cwd / ".env").exists() or (cwd / "AWARENESS.md").exists():
+        if (cwd / ".env").exists():
             return cwd
         return None
 

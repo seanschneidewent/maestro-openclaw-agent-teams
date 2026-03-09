@@ -16,7 +16,6 @@ ProjectSlugForNodeFn = Callable[[str], str]
 SnapshotLookupFn = Callable[[str], dict[str, Any] | None]
 ReadConversationFn = Callable[..., dict[str, Any]]
 SendAgentMessageFn = Callable[..., dict[str, Any]]
-SaveFleetRegistryFn = Callable[[Any, dict[str, Any]], None]
 RefreshFn = Callable[[], None]
 BroadcastCommandCenterFn = Callable[[], Awaitable[None]]
 
@@ -131,9 +130,7 @@ def send_node_message(
     projects: dict[str, dict[str, Any]],
     store_path: Any,
     fleet_registry: dict[str, Any],
-    registry_entry_for_slug_fn: RegistryEntryGetterFn,
     send_agent_message_fn: SendAgentMessageFn,
-    save_fleet_registry_fn: SaveFleetRegistryFn,
     max_message_chars: int,
     node_exists_fn: NodeExistsFn,
     node_agent_id_for_slug_fn: NodeAgentIdForSlugFn,
@@ -149,9 +146,7 @@ def send_node_message(
         projects=projects,
         store_path=store_path,
         fleet_registry=fleet_registry,
-        registry_entry_for_slug_fn=registry_entry_for_slug_fn,
         send_agent_message_fn=send_agent_message_fn,
-        save_fleet_registry_fn=save_fleet_registry_fn,
         max_message_chars=max_message_chars,
         node_exists_fn=node_exists_fn,
         node_agent_id_for_slug_fn=node_agent_id_for_slug_fn,

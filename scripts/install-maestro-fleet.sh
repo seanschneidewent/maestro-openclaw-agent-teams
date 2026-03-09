@@ -565,6 +565,10 @@ install_fleet_packages() {
 
 validate_install() {
   "$VENV_DIR/bin/maestro-fleet" --help >/dev/null
+  export PATH="$VENV_DIR/bin:$PATH"
+  persist_path_entry "$VENV_DIR/bin"
+  hash -r 2>/dev/null || true
+  command -v maestro-fleet >/dev/null 2>&1 || fatal "maestro-fleet CLI not found on PATH after install."
   log "maestro-fleet CLI installed."
 }
 

@@ -29,12 +29,7 @@ from .profile import PROFILE_FLEET, resolve_profile
 from .system_directives import summarize_system_directives
 from .utils import load_json, save_json, slugify
 from .workspace_templates import (
-    provider_env_key_for_model,
-    render_project_agents_md,
-    render_project_tools_md,
-    render_workspace_awareness_md,
-    should_remove_generic_project_bootstrap,
-    should_refresh_generic_project_file,
+    sync_project_workspace_runtime_files,
 )
 
 
@@ -501,11 +496,9 @@ def create_project_node(
         save_json_fn=save_json,
         sync_fleet_registry_fn=lambda root: sync_fleet_registry(root, dry_run=dry_run),
         find_registry_project_fn=_find_registry_project,
-        save_fleet_registry_fn=save_fleet_registry,
         resolve_node_identity_fn=resolve_node_identity,
         project_control_payload_fn=lambda root, slug: project_control_payload(root, slug, dpi=200),
         register_project_agent_fn=register_project_agent,
-        registry_version=REGISTRY_VERSION,
         project_slug=project_slug,
         project_dir_name=project_dir_name,
         ingest_input_root=ingest_input_root,
@@ -545,7 +538,6 @@ def onboard_project_store(
         now_iso_fn=_now_iso,
         sync_fleet_registry_fn=lambda root: sync_fleet_registry(root, dry_run=dry_run),
         find_registry_project_fn=_find_registry_project,
-        save_fleet_registry_fn=save_fleet_registry,
         resolve_node_identity_fn=resolve_node_identity,
         register_project_agent_fn=register_project_agent,
         build_ingest_command_fn=lambda root, entry, input_root_override, dpi: build_ingest_command(
@@ -561,7 +553,6 @@ def onboard_project_store(
         ),
         resolve_network_urls_fn=resolve_network_urls,
         quote_path_fn=_quote_path,
-        registry_version=REGISTRY_VERSION,
         default_web_port=DEFAULT_WEB_PORT,
         default_input_placeholder=DEFAULT_INPUT_PLACEHOLDER,
         project_name=project_name,
@@ -628,35 +619,16 @@ def register_project_agent(
     if bool(result.get("ok")) and not dry_run:
         project_workspace = Path(str(result.get("workspace", "")).strip()).expanduser()
         if str(project_workspace):
-            urls = resolve_network_urls(route_path=f"/{project_slug}/")
             model_value = str(result.get("model", "")).strip() or "unknown"
-            awareness = render_workspace_awareness_md(
+            sync_project_workspace_runtime_files(
+                project_workspace=project_workspace,
+                project_slug=project_slug,
                 model=model_value,
-                preferred_url=str(urls.get("recommended_url", "")).strip(),
-                local_url=str(urls.get("localhost_url", "")).strip(),
-                tailnet_url=str(urls.get("tailnet_url") or "").strip(),
                 store_root=project_store_path,
-                surface_label="Workspace",
                 generated_by="maestro-fleet project create",
+                resolve_network_urls_fn=resolve_network_urls,
+                dry_run=False,
             )
-            project_workspace.mkdir(parents=True, exist_ok=True)
-            (project_workspace / "AWARENESS.md").write_text(awareness, encoding="utf-8")
-            agents_path = project_workspace / "AGENTS.md"
-            current_agents = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
-            if (not agents_path.exists()) or should_refresh_generic_project_file("AGENTS.md", current_agents):
-                agents_path.write_text(render_project_agents_md(), encoding="utf-8")
-            tools_path = project_workspace / "TOOLS.md"
-            current_tools = tools_path.read_text(encoding="utf-8") if tools_path.exists() else ""
-            if (not tools_path.exists()) or should_refresh_generic_project_file("TOOLS.md", current_tools):
-                tools_path.write_text(
-                    render_project_tools_md(provider_env_key_for_model(model_value)),
-                    encoding="utf-8",
-                )
-            bootstrap_path = project_workspace / "BOOTSTRAP.md"
-            if bootstrap_path.exists():
-                bootstrap_content = bootstrap_path.read_text(encoding="utf-8")
-                if should_remove_generic_project_bootstrap(bootstrap_content):
-                    bootstrap_path.unlink()
     return result
 
 

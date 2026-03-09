@@ -16,10 +16,13 @@ from typing import Any, Callable
 
 from .control_plane import (
     ensure_telegram_account_bindings,
-    resolve_node_identity,
     resolve_network_urls,
-    save_fleet_registry,
-    sync_fleet_registry,
+)
+from .command_center import discover_project_dirs
+from .fleet_constants import (
+    DEFAULT_COMMANDER_MODEL,
+    canonicalize_model,
+    default_model_from_agents as default_fleet_model_from_agents,
 )
 from .profile import PROFILE_FLEET, PROFILE_SOLO, infer_profile_from_openclaw_config
 from .openclaw_guard import ensure_openclaw_override_allowed
@@ -37,13 +40,10 @@ from .workspace_templates import (
     render_company_user_md,
     render_personal_agents_md,
     render_personal_tools_md,
-    render_project_agents_md,
-    render_project_tools_md,
     render_tools_md,
-    render_workspace_awareness_md,
     render_workspace_env,
-    should_remove_generic_project_bootstrap,
-    should_refresh_generic_project_file,
+    sync_project_workspace_runtime_files,
+    sync_workspace_awareness_file,
 )
 from .install_state import load_install_state, save_install_state
 
@@ -371,16 +371,7 @@ def _apply_config_migrations(
                 changes.append("Added maestro-company agent from legacy maestro config")
                 company_agent = new_company
             else:
-                default_model = "google/gemini-3-pro-preview"
-                for agent in agents:
-                    if isinstance(agent, dict) and agent.get("default") and agent.get("model"):
-                        default_model = str(agent.get("model"))
-                        break
-                if default_model == "google/gemini-3-pro-preview":
-                    for agent in agents:
-                        if isinstance(agent, dict) and agent.get("model"):
-                            default_model = str(agent.get("model"))
-                            break
+                default_model = default_fleet_model_from_agents(agents, fallback=DEFAULT_COMMANDER_MODEL)
 
                 company_agent = {
                     "id": "maestro-company",
@@ -406,6 +397,18 @@ def _apply_config_migrations(
             if not default_exists:
                 company_agent["default"] = True
                 changes.append("Marked maestro-company as default agent")
+
+    if target_profile == PROFILE_FLEET:
+        for agent in agents:
+            if not isinstance(agent, dict):
+                continue
+            agent_id = str(agent.get("id", "")).strip()
+            if agent_id != "maestro-company" and not agent_id.startswith("maestro-project-"):
+                continue
+            normalized_model = canonicalize_model(agent.get("model"))
+            if normalized_model and str(agent.get("model", "")).strip() != normalized_model:
+                agent["model"] = normalized_model
+                changes.append(f"Normalized Fleet model for {agent_id}")
 
     if not isinstance(migrated.get("channels"), dict):
         migrated["channels"] = {}
@@ -609,21 +612,17 @@ def _sync_workspace_assets(
 
     route_path = "/command-center" if profile == PROFILE_FLEET else "/workspace"
     surface_label = "Command Center" if profile == PROFILE_FLEET else "Workspace"
-    urls = resolve_network_urls(route_path=route_path, command_runner=command_runner)
-    awareness_path = workspace / "AWARENESS.md"
-    desired_awareness = render_workspace_awareness_md(
+    if sync_workspace_awareness_file(
+        workspace=workspace,
         model=str(model or "").strip() or "unknown",
-        preferred_url=str(urls.get("recommended_url", "")).strip(),
-        local_url=str(urls.get("localhost_url", "")).strip(),
-        tailnet_url=str(urls.get("tailnet_url") or "").strip(),
         store_root=knowledge_store.resolve(),
+        route_path=route_path,
+        resolve_network_urls_fn=resolve_network_urls,
         surface_label=surface_label,
         generated_by="maestro update",
-    )
-    current_awareness = awareness_path.read_text(encoding="utf-8") if awareness_path.exists() else ""
-    if current_awareness != desired_awareness:
-        if not dry_run:
-            awareness_path.write_text(desired_awareness, encoding="utf-8")
+        command_runner=command_runner,
+        dry_run=dry_run,
+    ):
         changes.append("Updated workspace AWARENESS.md")
 
     return changes, warnings
@@ -640,6 +639,26 @@ def _read_env_value(env_path: Path, key: str) -> str:
         if current_key.strip() == key:
             return value.strip()
     return ""
+
+
+def _load_json_or_empty(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return _load_json(path)
+    except Exception:
+        return {}
+
+
+def _project_model_from_store(store_root: str | Path | None) -> str:
+    if not store_root:
+        return ""
+    project_json = Path(store_root).expanduser().resolve() / "project.json"
+    payload = _load_json_or_empty(project_json)
+    maestro_meta = payload.get("maestro") if isinstance(payload.get("maestro"), dict) else {}
+    if not isinstance(maestro_meta, dict):
+        return ""
+    return canonicalize_model(maestro_meta.get("model"))
 
 
 def _sync_fleet_project_workspace_assets(
@@ -662,65 +681,40 @@ def _sync_fleet_project_workspace_assets(
             continue
         slug = project_workspace.name
         agent_id = f"maestro-project-{slug}"
-        agent = next(
-            (item for item in agent_list if isinstance(item, dict) and str(item.get("id", "")).strip() == agent_id),
-            {},
-        )
-        model = str(agent.get("model", "")).strip()
-        if not model:
-            metadata = load_json(project_workspace / "project_agent.json", default={})
-            if isinstance(metadata, dict):
-                model = str(metadata.get("model", "")).strip()
-        model = model or "unknown"
-
         store_root = _read_env_value(project_workspace / ".env", "MAESTRO_STORE")
         if not store_root:
             store_root = str((project_workspace / "knowledge_store").resolve())
 
-        urls = resolve_network_urls(
-            route_path=f"/{slug}/",
-            command_runner=command_runner,
+        agent = next(
+            (item for item in agent_list if isinstance(item, dict) and str(item.get("id", "")).strip() == agent_id),
+            {},
         )
-        desired_awareness = render_workspace_awareness_md(
+        model = canonicalize_model(agent.get("model"))
+        if not model:
+            model = _project_model_from_store(store_root)
+        model = model or "unknown"
+
+        sync_result = sync_project_workspace_runtime_files(
+            project_workspace=project_workspace,
+            project_slug=slug,
             model=model,
-            preferred_url=str(urls.get("recommended_url", "")).strip(),
-            local_url=str(urls.get("localhost_url", "")).strip(),
-            tailnet_url=str(urls.get("tailnet_url") or "").strip(),
             store_root=store_root,
-            surface_label="Workspace",
             generated_by="maestro update",
+            resolve_network_urls_fn=resolve_network_urls,
+            command_runner=command_runner,
+            dry_run=dry_run,
         )
-        awareness_path = project_workspace / "AWARENESS.md"
-        current_awareness = awareness_path.read_text(encoding="utf-8") if awareness_path.exists() else ""
-        if current_awareness != desired_awareness:
-            if not dry_run:
-                awareness_path.write_text(desired_awareness, encoding="utf-8")
+        if sync_result["awareness_updated"]:
             changes.append(f"Updated project workspace AWARENESS.md: {slug}")
 
-        agents_path = project_workspace / "AGENTS.md"
-        current_agents = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
-        if (not agents_path.exists()) or should_refresh_generic_project_file("AGENTS.md", current_agents):
-            if not dry_run:
-                agents_path.write_text(render_project_agents_md(), encoding="utf-8")
+        if sync_result["agents_updated"]:
             changes.append(f"Updated project workspace AGENTS.md: {slug}")
 
-        tools_path = project_workspace / "TOOLS.md"
-        current_tools = tools_path.read_text(encoding="utf-8") if tools_path.exists() else ""
-        if (not tools_path.exists()) or should_refresh_generic_project_file("TOOLS.md", current_tools):
-            if not dry_run:
-                tools_path.write_text(
-                    render_project_tools_md(provider_env_key_for_model(model)),
-                    encoding="utf-8",
-                )
+        if sync_result["tools_updated"]:
             changes.append(f"Updated project workspace TOOLS.md: {slug}")
 
-        bootstrap_path = project_workspace / "BOOTSTRAP.md"
-        if bootstrap_path.exists():
-            bootstrap_content = bootstrap_path.read_text(encoding="utf-8")
-            if should_remove_generic_project_bootstrap(bootstrap_content):
-                if not dry_run:
-                    bootstrap_path.unlink()
-                changes.append(f"Removed generic project BOOTSTRAP.md: {slug}")
+        if sync_result["bootstrap_removed"]:
+            changes.append(f"Removed generic project BOOTSTRAP.md: {slug}")
 
     return changes
 
@@ -736,66 +730,46 @@ def _ensure_session_dir(home_dir: Path, dry_run: bool, *, profile: str) -> bool:
 
 
 def _backfill_registry_identity(workspace: Path, config: dict, *, dry_run: bool) -> list[str]:
-    """Backfill fleet registry node identity from Telegram account metadata."""
+    """Backfill project Telegram identity metadata from Telegram account bindings."""
     store_root = (workspace / "knowledge_store").resolve()
     if not store_root.exists():
         return []
 
-    registry = sync_fleet_registry(store_root, dry_run=dry_run)
-    projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
     channels = config.get("channels", {}) if isinstance(config.get("channels"), dict) else {}
     telegram = channels.get("telegram", {}) if isinstance(channels.get("telegram"), dict) else {}
     accounts = telegram.get("accounts", {}) if isinstance(telegram.get("accounts"), dict) else {}
 
     changed = False
     messages: list[str] = []
-    for entry in projects:
-        if not isinstance(entry, dict):
-            continue
-        slug = str(entry.get("project_slug", "")).strip()
+    for project_dir in discover_project_dirs(store_root):
+        payload = _load_json_or_empty(project_dir / "project.json")
+        slug = str(payload.get("slug", "")).strip() or project_dir.name
         if not slug:
             continue
-        agent_id = str(entry.get("maestro_agent_id", "")).strip() or f"maestro-project-{slug}"
-        account = accounts.get(agent_id, {}) if isinstance(accounts.get(agent_id), dict) else {}
+        maestro_meta = payload.get("maestro") if isinstance(payload.get("maestro"), dict) else {}
+        if not isinstance(maestro_meta, dict):
+            maestro_meta = {}
 
-        username = str(
-            account.get("username")
-            or account.get("telegram_bot_username")
-            or ""
-        ).strip()
-        display_name = str(
-            account.get("display_name")
-            or account.get("telegram_bot_display_name")
-            or ""
-        ).strip()
+        account = accounts.get(f"maestro-project-{slug}", {}) if isinstance(accounts.get(f"maestro-project-{slug}"), dict) else {}
+        username = str(account.get("username") or account.get("telegram_bot_username") or "").strip()
+        display_name = str(account.get("display_name") or account.get("telegram_bot_display_name") or "").strip()
 
-        if username and str(entry.get("telegram_bot_username", "")).strip() != username:
-            entry["telegram_bot_username"] = username
+        entry_changed = False
+        if username and str(maestro_meta.get("telegram_bot_username", "")).strip() != username:
+            maestro_meta["telegram_bot_username"] = username
+            entry_changed = True
             changed = True
-        if display_name and str(entry.get("telegram_bot_display_name", "")).strip() != display_name:
-            entry["telegram_bot_display_name"] = display_name
+        if display_name and str(maestro_meta.get("telegram_bot_display_name", "")).strip() != display_name:
+            maestro_meta["telegram_bot_display_name"] = display_name
+            entry_changed = True
             changed = True
 
-        node_display_name, source, node_handle = resolve_node_identity(entry)
-        if str(entry.get("node_display_name", "")).strip() != node_display_name:
-            entry["node_display_name"] = node_display_name
-            changed = True
-        if str(entry.get("node_identity_source", "")).strip() != source:
-            entry["node_identity_source"] = source
-            changed = True
-        if str(entry.get("node_handle", "")).strip() != node_handle:
-            entry["node_handle"] = node_handle
-            changed = True
+        if entry_changed and not dry_run:
+            payload["maestro"] = maestro_meta
+            _save_json(project_dir / "project.json", payload)
 
     if changed:
-        if not dry_run:
-            save_fleet_registry(store_root, {
-                "version": int(registry.get("version", 1)),
-                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "store_root": str(store_root),
-                "projects": projects,
-            })
-        messages.append("Backfilled fleet registry node identity metadata")
+        messages.append("Backfilled project Telegram identity metadata")
     return messages
 
 

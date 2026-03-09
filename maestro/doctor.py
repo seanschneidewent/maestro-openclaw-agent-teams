@@ -387,6 +387,20 @@ def build_doctor_report(
         detail=f"{store_root}",
         warning=not store_root.exists(),
     ))
+    if profile == PROFILE_FLEET:
+        fleet_store_is_single_project = (store_root / "project.json").exists()
+        checks.append(DoctorCheck(
+            name="fleet_store_layout",
+            ok=not fleet_store_is_single_project,
+            detail=(
+                "Fleet store root uses multi-project layout"
+                if not fleet_store_is_single_project
+                else (
+                    "Fleet store root is a single-project store; point the commander workspace "
+                    "MAESTRO_STORE at the parent directory that contains project folders"
+                )
+            ),
+        ))
 
     registry = sync_fleet_registry(store_root)
     registry_projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []

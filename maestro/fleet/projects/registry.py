@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import warnings
 from pathlib import Path
 from typing import Any, Callable
 
@@ -14,6 +16,19 @@ LoadJsonFn = Callable[..., Any]
 SaveJsonFn = Callable[[Path, Any], None]
 ProjectIndexTimestampFn = Callable[[Path], str]
 NowIsoFn = Callable[[], str]
+
+
+def _load_package_command_center_module():
+    try:
+        from maestro_fleet import command_center as command_center_module
+        return command_center_module
+    except ModuleNotFoundError:
+        repo_root = Path(__file__).resolve().parents[3]
+        package_src = repo_root / "packages" / "maestro-fleet" / "src"
+        if package_src.exists() and str(package_src) not in sys.path:
+            sys.path.insert(0, str(package_src))
+        from maestro_fleet import command_center as command_center_module
+        return command_center_module
 
 
 def fleet_registry_path(store_root: Path) -> Path:
@@ -166,7 +181,12 @@ def registries_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 
 def save_fleet_registry(store_root: Path, registry: dict[str, Any], *, save_json_fn: SaveJsonFn):
-    save_json_fn(fleet_registry_path(store_root), registry)
+    _ = (store_root, registry, save_json_fn)
+    warnings.warn(
+        "save_fleet_registry() is deprecated; Fleet registry state is now derived from OpenClaw config, workspace env, and project.json metadata.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
 
 def sync_fleet_registry(
@@ -181,86 +201,17 @@ def sync_fleet_registry(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     root = Path(store_root).resolve()
-    existing = load_fleet_registry(root, load_json_fn=load_json_fn)
-    existing_by_slug = {
-        item["project_slug"]: item for item in existing.get("projects", []) if isinstance(item, dict)
-    }
-
-    synced: list[dict[str, Any]] = []
-    seen_slugs: set[str] = set()
-    for project_dir in discover_project_dirs_fn(root):
-        snapshot = build_project_snapshot_fn(project_dir)
-        slug = str(snapshot.get("slug", "")).strip()
-        if not slug:
-            continue
-
-        project_data = load_json_fn(project_dir / "project.json")
-        if not isinstance(project_data, dict):
-            project_data = {}
-
-        existing_entry = existing_by_slug.get(slug, {})
-        entry = {
-            "project_slug": slug,
-            "project_name": str(snapshot.get("name", "")).strip() or str(existing_entry.get("project_name", slug)),
-            "project_dir_name": project_dir.name,
-            "project_store_path": str(project_dir.resolve()),
-            "maestro_agent_id": str(existing_entry.get("maestro_agent_id", f"maestro-project-{slug}")),
-            "ingest_input_root": str(existing_entry.get("ingest_input_root", "")).strip(),
-            "superintendent": str(existing_entry.get("superintendent", "Unknown")).strip() or "Unknown",
-            "assignee": str(existing_entry.get("assignee", "Unassigned")).strip() or "Unassigned",
-            "status": str(snapshot.get("status", existing_entry.get("status", "active"))),
-            "last_ingest_at": (
-                str(project_data.get("ingested_at", "")).strip()
-                or str(existing_entry.get("last_ingest_at", "")).strip()
-            ),
-            "last_index_at": project_index_timestamp_fn(project_dir)
-            or str(existing_entry.get("last_index_at", "")).strip(),
-            "last_updated": (
-                str(snapshot.get("last_updated", "")).strip()
-                or str(existing_entry.get("last_updated", "")).strip()
-            ),
-            "telegram_bot_username": normalize_bot_username(existing_entry.get("telegram_bot_username")),
-            "telegram_bot_display_name": clean_registry_text(existing_entry.get("telegram_bot_display_name")),
-            "last_conversation_at": clean_registry_text(existing_entry.get("last_conversation_at")),
-        }
-        display_name, source, handle = resolve_node_identity(entry)
-        entry["node_display_name"] = display_name
-        entry["node_identity_source"] = source
-        entry["node_handle"] = handle
-        synced.append(entry)
-        seen_slugs.add(slug)
-
-    for slug, item in existing_by_slug.items():
-        if slug in seen_slugs:
-            continue
-        archived = dict(item)
-        archived["status"] = "archived"
-        display_name, source, handle = resolve_node_identity(archived)
-        archived["node_display_name"] = display_name
-        archived["node_identity_source"] = source
-        archived["node_handle"] = handle
-        synced.append(archived)
-
-    synced.sort(key=lambda x: x.get("project_name", "").lower())
-    core_registry = {
-        "version": REGISTRY_VERSION,
-        "store_root": str(root),
-        "projects": synced,
-    }
-    changed = not registries_equal(existing, core_registry)
-    registry = {
-        "version": REGISTRY_VERSION,
-        "updated_at": now_iso_fn() if changed else str(existing.get("updated_at", "")),
-        "store_root": str(root),
-        "projects": synced,
-    }
-    if not registry["updated_at"]:
-        registry["updated_at"] = now_iso_fn()
-
-    if not dry_run and changed:
-        save_fleet_registry(root, registry, save_json_fn=save_json_fn)
-
-    return registry
+    _ = (
+        discover_project_dirs_fn,
+        build_project_snapshot_fn,
+        load_json_fn,
+        save_json_fn,
+        project_index_timestamp_fn,
+        now_iso_fn,
+        dry_run,
+    )
+    command_center_module = _load_package_command_center_module()
+    return command_center_module.build_derived_registry(root)
 
 
 def find_registry_project(registry: dict[str, Any], project_slug: str) -> dict[str, Any] | None:

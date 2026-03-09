@@ -32,6 +32,11 @@ DoctorBuilder = Callable[..., dict[str, Any]]
 StateGetter = Callable[[], dict[str, Any]]
 RefreshFn = Callable[[], None]
 BroadcastFn = Callable[[], Awaitable[None]]
+CreateProjectNodeFn = Callable[..., dict[str, Any]]
+OnboardProjectStoreFn = Callable[..., dict[str, Any]]
+ProjectControlPayloadFn = Callable[..., dict[str, Any]]
+MoveProjectStoreFn = Callable[..., dict[str, Any]]
+RegisterProjectAgentFn = Callable[..., dict[str, Any]]
 
 
 def _to_bool(value: Any, default: bool = False) -> bool:
@@ -55,11 +60,22 @@ async def run_command_center_action(
     get_fleet_registry: StateGetter,
     get_awareness_state: StateGetter,
     doctor_builder: DoctorBuilder,
+    create_project_node_fn: CreateProjectNodeFn | None = None,
+    onboard_project_store_fn: OnboardProjectStoreFn | None = None,
+    project_control_payload_fn: ProjectControlPayloadFn | None = None,
+    move_project_store_fn: MoveProjectStoreFn | None = None,
+    register_project_agent_fn: RegisterProjectAgentFn | None = None,
 ) -> dict[str, Any]:
     """Execute a command-center action payload and return response payload."""
     action = str(payload.get("action", "")).strip().lower()
     if not action:
         raise ActionError(400, {"error": "Missing action"})
+
+    create_project_node_impl = create_project_node_fn or create_project_node
+    onboard_project_store_impl = onboard_project_store_fn or onboard_project_store
+    project_control_payload_impl = project_control_payload_fn or project_control_payload
+    move_project_store_impl = move_project_store_fn or move_project_store
+    register_project_agent_impl = register_project_agent_fn or register_project_agent
 
     if action == "sync_registry":
         refresh_all_state()
@@ -126,7 +142,7 @@ async def run_command_center_action(
         if not project_name:
             raise ActionError(400, {"error": "Missing project_name"})
 
-        result = create_project_node(
+        result = create_project_node_impl(
             store_path,
             project_name=project_name,
             project_slug=str(payload.get("project_slug", "")).strip() or None,
@@ -147,7 +163,7 @@ async def run_command_center_action(
         if not source_path:
             raise ActionError(400, {"error": "Missing source_path"})
 
-        result = onboard_project_store(
+        result = onboard_project_store_impl(
             store_root=store_path,
             source_path=source_path,
             project_name=str(payload.get("project_name", "")).strip() or None,
@@ -172,7 +188,7 @@ async def run_command_center_action(
         project_slug = str(payload.get("project_slug", "")).strip()
         if not project_slug:
             raise ActionError(400, {"error": "Missing project_slug"})
-        control = project_control_payload(
+        control = project_control_payload_impl(
             store_path,
             project_slug=project_slug,
             input_root_override=str(payload.get("input_root", "")).strip() or None,
@@ -209,7 +225,7 @@ async def run_command_center_action(
             raise ActionError(400, {"error": "Missing project_slug or new_dir_name"})
 
         dry_run = _to_bool(payload.get("dry_run"), default=True)
-        result = move_project_store(
+        result = move_project_store_impl(
             store_root=store_path,
             project_slug=project_slug,
             new_dir_name=new_dir_name,
@@ -226,11 +242,11 @@ async def run_command_center_action(
         project_slug = str(payload.get("project_slug", "")).strip()
         if not project_slug:
             raise ActionError(400, {"error": "Missing project_slug"})
-        control = project_control_payload(store_path, project_slug=project_slug)
+        control = project_control_payload_impl(store_path, project_slug=project_slug)
         if not control.get("ok"):
             raise ActionError(404, {"error": control.get("error", "Project not found")})
         project = control.get("project", {}) if isinstance(control.get("project"), dict) else {}
-        registration = register_project_agent(
+        registration = register_project_agent_impl(
             store_root=store_path,
             project_slug=project_slug,
             project_name=str(project.get("project_name", project_slug)),

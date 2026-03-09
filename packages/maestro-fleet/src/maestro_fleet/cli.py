@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
+import platform
+import subprocess
 import sys
 from pathlib import Path
 from typing import Callable
 
-from maestro.fleet.shared.subprocesses import maybe_reexec_without_disabled_malloc_stack_logging
+from . import provisioning as fleet_provisioning
+from . import doctor as fleet_doctor
+from . import state as fleet_state
+from . import update as fleet_update
+from .openclaw_runtime import (
+    DEFAULT_FLEET_OPENCLAW_PROFILE,
+    ensure_openclaw_profile_env,
+    maybe_reexec_without_disabled_malloc_stack_logging,
+)
 
 
 def _ensure_runtime_modules_on_path() -> None:
@@ -36,16 +47,31 @@ def _import_legacy_main() -> Callable[[list[str] | None], None]:
     return legacy_main
 
 
-def _run_fleet_up_tui(args: argparse.Namespace) -> int:
+def _load_legacy_attr(module_name: str, attr: str):
     _ensure_runtime_modules_on_path()
+    module = importlib.import_module(module_name)
+    return getattr(module, attr)
 
-    from maestro.doctor import run_doctor
-    from maestro.install_state import resolve_fleet_store_root
+
+def _open_url(url: str) -> None:
+    try:
+        system = platform.system().lower()
+        if system == "darwin":
+            subprocess.run(["open", url], check=False)
+        elif system == "windows":
+            subprocess.run(["cmd", "/c", "start", "", url], check=False)
+        else:
+            subprocess.run(["xdg-open", url], check=False)
+    except Exception:
+        pass
+
+
+def _run_fleet_up_tui(args: argparse.Namespace) -> int:
     from .monitor import run_up_tui
 
-    resolved_store = str(resolve_fleet_store_root(args.store))
+    resolved_store = str(fleet_state.resolve_fleet_store_root(args.store))
     if not args.skip_doctor:
-        doctor_code = run_doctor(
+        doctor_code = fleet_doctor.run_doctor(
             fix=not args.no_fix,
             store_override=resolved_store,
             restart_gateway=not args.no_restart,
@@ -61,6 +87,158 @@ def _run_fleet_up_tui(args: argparse.Namespace) -> int:
         host=str(args.host),
     )
     return 0
+
+
+def _run_fleet_serve(args: argparse.Namespace) -> int:
+    from .server import main as server_main
+
+    argv = ["--port", str(int(args.port)), "--host", str(args.host)]
+    if getattr(args, "store", None):
+        argv.extend(["--store", str(args.store)])
+    return int(server_main(argv) or 0)
+
+
+def _run_fleet_up(args: argparse.Namespace) -> int:
+    if bool(getattr(args, "tui", False)):
+        return _run_fleet_up_tui(args)
+
+    resolved_store = str(fleet_state.resolve_fleet_store_root(args.store))
+    if not args.skip_doctor:
+        doctor_code = fleet_doctor.run_doctor(
+            fix=not args.no_fix,
+            store_override=resolved_store,
+            restart_gateway=not args.no_restart,
+            json_output=False,
+            field_access_required=False,
+        )
+        if doctor_code != 0:
+            return doctor_code
+
+    args.store = resolved_store
+    return _run_fleet_serve(args)
+
+
+def _run_fleet_doctor(args: argparse.Namespace) -> int:
+    return fleet_doctor.run_doctor(
+        fix=bool(args.fix),
+        store_override=args.store,
+        restart_gateway=not args.no_restart,
+        json_output=bool(args.json),
+        field_access_required=bool(getattr(args, "field_access_required", False)),
+    )
+
+
+def _run_fleet_project_create(args: argparse.Namespace) -> int:
+    return fleet_provisioning.run_project_create(
+        project_name=args.project_name,
+        assignee=args.assignee,
+        superintendent=args.superintendent,
+        model=args.model,
+        api_key=args.api_key,
+        telegram_token=args.telegram_token,
+        pairing_code=args.pairing_code,
+        store_override=args.store,
+        dry_run=bool(args.dry_run),
+        json_output=bool(args.json),
+        non_interactive=bool(args.non_interactive),
+        skip_remote_validation=bool(args.skip_remote_validation),
+        allow_openclaw_override=bool(args.allow_openclaw_override),
+    )
+
+
+def _run_fleet_update(args: argparse.Namespace) -> int:
+    return fleet_update.run_update(
+        workspace_override=args.workspace,
+        restart_gateway=not args.no_restart,
+        dry_run=bool(args.dry_run),
+    )
+
+
+def _run_fleet_enable(args: argparse.Namespace) -> int:
+    resolve_network_urls = _load_legacy_attr("maestro.control_plane", "resolve_network_urls")
+    set_profile = _load_legacy_attr("maestro.profile", "set_profile")
+
+    if args.dry_run:
+        print("Fleet enable dry-run")
+        print("- Would set profile=fleet and fleet_enabled=true")
+        print("- Would run `maestro update` then `maestro doctor --fix`")
+        return 0
+
+    state = set_profile("fleet", fleet=True)
+    print("Fleet profile enabled")
+    print(f"- Profile: {state.get('profile')}")
+    print(f"- Fleet enabled: {state.get('fleet_enabled')}")
+    update_code = fleet_update.run_update(restart_gateway=not args.no_restart, dry_run=False)
+    if update_code != 0:
+        return int(update_code)
+    doctor_code = fleet_doctor.run_doctor(fix=True, restart_gateway=not args.no_restart, json_output=False)
+    if doctor_code != 0:
+        return int(doctor_code)
+    network = resolve_network_urls(web_port=3000)
+    print(f"- Command Center: {network.get('recommended_url')}")
+    return 0
+
+
+def _run_fleet_status(_args: argparse.Namespace) -> int:
+    resolve_network_urls = _load_legacy_attr("maestro.control_plane", "resolve_network_urls")
+    get_profile_state = _load_legacy_attr("maestro.profile", "get_profile_state")
+
+    state = get_profile_state()
+    network = resolve_network_urls(web_port=3000)
+    print("Maestro profile status")
+    print(f"- profile: {state.get('profile')}")
+    print(f"- fleet_enabled: {state.get('fleet_enabled')}")
+    print(f"- workspace_root: {state.get('workspace_root', '')}")
+    print(f"- store_root: {state.get('store_root') or state.get('fleet_store_root') or ''}")
+    print(f"- command_center_url: {network.get('recommended_url')}")
+    return 0
+
+
+def _run_fleet_command_center(args: argparse.Namespace) -> int:
+    resolve_network_urls = _load_legacy_attr("maestro.control_plane", "resolve_network_urls")
+    fleet_enabled = _load_legacy_attr("maestro.profile", "fleet_enabled")
+
+    if not fleet_enabled():
+        print("Fleet mode is not enabled.")
+        print("Run: maestro fleet enable")
+        return 0
+    network = resolve_network_urls(web_port=3000)
+    url = str(network.get("recommended_url", "http://localhost:3000/command-center"))
+    print(url)
+    if getattr(args, "open", False):
+        _open_url(url)
+    return 0
+
+
+def _run_fleet_deploy(args: argparse.Namespace) -> int:
+    run_deploy = _load_legacy_attr("maestro.fleet_deploy", "run_deploy")
+    return int(
+        run_deploy(
+            company_name=args.company_name,
+            model=args.model,
+            commander_model=args.commander_model,
+            project_model=args.project_model,
+            api_key=args.api_key,
+            gemini_api_key=args.gemini_api_key,
+            openai_api_key=args.openai_api_key,
+            anthropic_api_key=args.anthropic_api_key,
+            telegram_token=args.telegram_token,
+            commander_pairing_code=args.commander_pairing_code,
+            project_name=args.project_name,
+            assignee=args.assignee,
+            superintendent=args.superintendent,
+            project_telegram_token=args.project_telegram_token,
+            provision_initial_project=bool(args.provision_initial_project),
+            store_override=args.store,
+            port=int(args.port),
+            host=str(args.host),
+            non_interactive=bool(args.non_interactive),
+            skip_remote_validation=bool(args.skip_remote_validation),
+            require_tailscale=bool(args.require_tailscale),
+            allow_openclaw_override=bool(args.allow_openclaw_override),
+            start_services=not bool(args.no_start),
+        )
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -412,16 +590,16 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         maybe_reexec_without_disabled_malloc_stack_logging(module="maestro_fleet")
 
-    if not str(os.environ.get("MAESTRO_OPENCLAW_PROFILE", "")).strip():
-        os.environ["MAESTRO_OPENCLAW_PROFILE"] = "maestro-fleet"
+    ensure_openclaw_profile_env(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
 
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if str(args.command).strip() == "up" and bool(getattr(args, "tui", False)):
-        print("[fleet] launching dedicated Fleet setup TUI")
+    command = str(args.command).strip()
+    if command == "up":
+        print("[fleet] launching package-native Fleet runtime")
         try:
-            return _run_fleet_up_tui(args)
+            return _run_fleet_up(args)
         except SystemExit as exc:
             code = exc.code
             if code is None:
@@ -430,8 +608,32 @@ def main(argv: list[str] | None = None) -> int:
                 return code
             print(str(code), file=sys.stderr)
             return 1
+    if command == "serve":
+        print("[fleet] launching package-native Fleet server")
+        return _run_fleet_serve(args)
+    if command == "doctor":
+        print("[fleet] running package-native Fleet doctor")
+        return _run_fleet_doctor(args)
+    if command == "update":
+        print("[fleet] running package-native Fleet update")
+        return _run_fleet_update(args)
+    if command == "enable":
+        print("[fleet] enabling Fleet profile")
+        return _run_fleet_enable(args)
+    if command == "status":
+        print("[fleet] reading Fleet profile status")
+        return _run_fleet_status(args)
+    if command == "command-center":
+        print("[fleet] resolving Fleet command center")
+        return _run_fleet_command_center(args)
+    if command == "deploy":
+        print("[fleet] running Fleet deploy")
+        return _run_fleet_deploy(args)
+    if command == "project" and str(getattr(args, "project_command", "")).strip() == "create":
+        print("[fleet] running package-native project create")
+        return _run_fleet_project_create(args)
 
-    print("[fleet-staging] maestro-fleet delegates to current Fleet runtime modules in `maestro/`.")
+    print("[fleet] forwarding compatibility command")
     legacy_main = _import_legacy_main()
     forwarded = _to_legacy_argv(args)
     try:

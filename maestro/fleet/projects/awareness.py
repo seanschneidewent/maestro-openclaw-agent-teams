@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import sys
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -24,6 +26,21 @@ ParseIsoFn = Callable[[Any], datetime | None]
 FleetRegistryPathFn = Callable[[Path], Path]
 QuotePathFn = Callable[[str | Path], str]
 NowIsoFn = Callable[[], str]
+
+_BUILD_PURCHASE_STATUS_DEPRECATED_WARNED = False
+
+
+def _load_package_command_center_module():
+    try:
+        from maestro_fleet import command_center as command_center_module
+        return command_center_module
+    except ModuleNotFoundError:
+        repo_root = Path(__file__).resolve().parents[3]
+        package_src = repo_root / "packages" / "maestro-fleet" / "src"
+        if package_src.exists() and str(package_src) not in sys.path:
+            sys.path.insert(0, str(package_src))
+        from maestro_fleet import command_center as command_center_module
+        return command_center_module
 
 
 def _invoke_runner(runner: CommandRunner, args: list[str], timeout: int) -> tuple[bool, str]:
@@ -124,20 +141,8 @@ def build_project_onboarding_status(
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     current_registry = registry if isinstance(registry, dict) else sync_fleet_registry_fn(store_root)
-    projects = current_registry.get("projects", []) if isinstance(current_registry.get("projects"), list) else []
-    active_count = len([
-        item for item in projects
-        if isinstance(item, dict) and str(item.get("status", "active")).strip().lower() != "archived"
-    ])
-    next_node_badge = "+"
-    return {
-        "project_create_command": "maestro-fleet project create",
-        "active_project_count": active_count,
-        "project_creation_policy": "unrestricted",
-        "next_node_badge": next_node_badge,
-        "purchase_disabled": True,
-        "disabled_reason": "Fleet purchase flow is disabled. Use `maestro-fleet project create` directly.",
-    }
+    command_center_module = _load_package_command_center_module()
+    return command_center_module.build_derived_onboarding_status(current_registry)
 
 
 def build_purchase_status(
@@ -146,6 +151,14 @@ def build_purchase_status(
     build_project_onboarding_status_fn: Callable[[Path, dict[str, Any] | None], dict[str, Any]],
     registry: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    global _BUILD_PURCHASE_STATUS_DEPRECATED_WARNED
+    if not _BUILD_PURCHASE_STATUS_DEPRECATED_WARNED:
+        warnings.warn(
+            "maestro.fleet.projects.awareness.build_purchase_status() is deprecated; use build_project_onboarding_status() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        _BUILD_PURCHASE_STATUS_DEPRECATED_WARNED = True
     return build_project_onboarding_status_fn(store_root, registry=registry)
 
 
@@ -167,124 +180,24 @@ def build_awareness_state(
     command_runner: CommandRunner | None = None,
     home_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Build a machine-specific, runtime-specific awareness state contract."""
     root = Path(store_root).resolve()
+    _ = (
+        service_status_fn,
+        resolve_network_urls_fn,
+        build_project_onboarding_status_fn,
+        summarize_system_directives_fn,
+        parse_iso_fn,
+        fleet_registry_path_fn,
+        quote_path_fn,
+        now_iso_fn,
+    )
+    command_center_module = _load_package_command_center_module()
     registry = sync_fleet_registry_fn(root)
-    port = int(web_port or default_web_port)
-    services = service_status_fn(command_runner=command_runner, home_dir=home_dir)
-    network = resolve_network_urls_fn(web_port=port, command_runner=command_runner)
-    onboarding = build_project_onboarding_status_fn(root, registry=registry)
-    directives_summary = summarize_system_directives_fn(root)
-
-    fleet_projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
-    project_count = len([p for p in fleet_projects if isinstance(p, dict) and p.get("status") != "archived"])
-    slug_counts: dict[str, int] = {}
-    for item in fleet_projects:
-        if not isinstance(item, dict):
-            continue
-        slug = str(item.get("project_slug", "")).strip()
-        if not slug:
-            continue
-        slug_counts[slug] = slug_counts.get(slug, 0) + 1
-    duplicate_project_slugs = sorted(slug for slug, count in slug_counts.items() if count > 1)
-
-    stale_projects: list[dict[str, Any]] = []
-    for item in fleet_projects:
-        if not isinstance(item, dict):
-            continue
-        dt = parse_iso_fn(item.get("last_updated")) or parse_iso_fn(item.get("last_ingest_at"))
-        if not dt:
-            continue
-        age_hours = (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds() / 3600
-        if age_hours > 72:
-            stale_projects.append({
-                "project_slug": item.get("project_slug", ""),
-                "project_name": item.get("project_name", ""),
-                "last_updated": item.get("last_updated", ""),
-                "age_hours": round(age_hours, 1),
-            })
-
-    degraded_reasons: list[str] = []
-    if not services["tailscale"]["connected"]:
-        degraded_reasons.append("Tailscale not connected")
-    if not services["openclaw"]["running"]:
-        degraded_reasons.append("OpenClaw gateway not running")
-    gateway_auth = services["openclaw"].get("gateway_auth", {}) if isinstance(services["openclaw"], dict) else {}
-    if not bool(gateway_auth.get("tokens_aligned")):
-        degraded_reasons.append("Gateway auth token mismatch or missing")
-    device_pairing = services["openclaw"].get("device_pairing", {}) if isinstance(services["openclaw"], dict) else {}
-    if bool(device_pairing.get("required")):
-        degraded_reasons.append("CLI device pairing approval required")
-    if not services["telegram"]["configured"]:
-        degraded_reasons.append("Telegram not configured")
-    telegram_routing = services.get("telegram", {}).get("routing", {}) if isinstance(services.get("telegram"), dict) else {}
-    if not bool(telegram_routing.get("fully_bound", True)):
-        degraded_reasons.append("Telegram routing bindings missing")
-    if not services["company_agent"]["configured"]:
-        degraded_reasons.append("Commander agent not configured")
-    if not root.exists():
-        degraded_reasons.append("Knowledge store root missing")
-    if project_count == 0:
-        degraded_reasons.append("No project nodes discovered")
-    if duplicate_project_slugs:
-        degraded_reasons.append(
-            "Duplicate project slug registrations: " + ", ".join(duplicate_project_slugs)
-        )
-
-    posture = "healthy" if not degraded_reasons else "degraded"
-    current_action = ""
-    if isinstance(command_center_state, dict):
-        orchestrator = command_center_state.get("orchestrator")
-        if isinstance(orchestrator, dict):
-            current_action = str(orchestrator.get("currentAction", "")).strip()
-
-    return {
-        "generated_at": now_iso_fn(),
-        "posture": posture,
-        "degraded_reasons": degraded_reasons,
-        "network": network,
-        "paths": {
-            "store_root": str(root),
-            "registry_path": str(fleet_registry_path_fn(root)),
-            "workspace_root": str(services["company_agent"].get("workspace", "")).strip(),
-        },
-        "services": services,
-        "commander": {
-            "display_name": "The Commander",
-            "agent_id": "maestro-company",
-            "chat_transport": "openclaw_agent_invoke",
-        },
-        "fleet": {
-            "project_count": project_count,
-            "duplicate_project_slugs": duplicate_project_slugs,
-            "stale_projects": stale_projects,
-            "registry": registry,
-            "current_action": current_action,
-            "directives": directives_summary,
-        },
-        "commands": {
-            "update": "maestro update",
-            "doctor": "maestro doctor --fix",
-            "serve": f"maestro serve --port {port} --store {quote_path_fn(root)}",
-            "start": f"maestro start --port {port} --store {quote_path_fn(root)}",
-            "project_create": "maestro-fleet project create",
-        },
-        "onboarding": onboarding,
-        "purchase": onboarding,
-        "available_actions": [
-            "sync_registry",
-            "list_system_directives",
-            "upsert_system_directive",
-            "archive_system_directive",
-            "create_project_node",
-            "onboard_project_store",
-            "ingest_command",
-            "preflight_ingest",
-            "index_command",
-            "move_project_store",
-            "register_project_agent",
-            "doctor_fix",
-            "conversation_read",
-            "conversation_send",
-        ],
-    }
+    return command_center_module.build_derived_awareness_state(
+        store_root=root,
+        server_port=int(web_port or default_web_port),
+        command_center_state=command_center_state if isinstance(command_center_state, dict) else {},
+        fleet_registry=registry,
+        command_runner=command_runner,
+        home_dir=home_dir,
+    )

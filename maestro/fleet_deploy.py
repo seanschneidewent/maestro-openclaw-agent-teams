@@ -12,6 +12,7 @@ import shlex
 import sys
 import time
 import json
+import importlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,13 +30,19 @@ from .fleet.runtime import server as fleet_server_runtime
 from .fleet.platform import windows as fleet_windows_runtime
 from .fleet.shared import subprocesses as fleet_subprocesses
 from .fleet_constants import (
+    DEFAULT_COMMANDER_MODEL,
+    DEFAULT_PROJECT_MODEL,
     DEPLOY_STEP_TITLES,
     FLEET_GATEWAY_PORT,
     FLEET_PROFILE,
+    FLEET_MODEL_OPTIONS,
     KEY_LABELS,
     KEY_ORDER,
     MODEL_CHOICES,
-    MODEL_LABELS,
+    canonicalize_model,
+    default_model_from_agents,
+    format_model_display,
+    model_label,
 )
 from .install_state import resolve_fleet_store_root, save_install_state
 from .openclaw_guard import ensure_openclaw_override_allowed
@@ -47,7 +54,6 @@ from .openclaw_profile import (
 )
 from .profile import set_profile
 from .fleet.projects.provisioning import run_project_create
-from .update import run_update
 from .utils import load_json, save_json, slugify
 from .workspace_templates import provider_env_key_for_model
 
@@ -55,6 +61,27 @@ from .workspace_templates import provider_env_key_for_model
 console = Console()
 
 VERTEX_API_KEY_RE = re.compile(r"^AIza[0-9A-Za-z_-]{24,}$")
+
+
+def _load_package_run_update():
+    try:
+        module = importlib.import_module("maestro_fleet.update")
+        return getattr(module, "run_update")
+    except ModuleNotFoundError:
+        repo_root = Path(__file__).resolve().parents[1]
+        package_src = repo_root / "packages" / "maestro-fleet" / "src"
+        if package_src.exists() and str(package_src) not in sys.path:
+            sys.path.insert(0, str(package_src))
+        try:
+            module = importlib.import_module("maestro_fleet.update")
+            return getattr(module, "run_update")
+        except ModuleNotFoundError:
+            from .update import run_update as legacy_run_update
+
+            return legacy_run_update
+
+
+run_update = _load_package_run_update()
 
 
 def _looks_like_vertex_api_key(value: str) -> bool:
@@ -173,21 +200,23 @@ def _collect_provider_key(
 
 def _prompt_model_selection(*, title: str, default_model: str, non_interactive: bool) -> str:
     if non_interactive:
-        return default_model
-    model_options = [
-        ("1", "anthropic/claude-opus-4-6"),
-        ("2", "openai/gpt-5.4"),
-        ("3", "google/gemini-3-pro-preview"),
-    ]
-    default_choice = next((choice for choice, model in model_options if model == default_model), "1")
+        return canonicalize_model(default_model, fallback=DEFAULT_COMMANDER_MODEL)
+    default_choice = next(
+        (
+            choice
+            for choice, model, _label in FLEET_MODEL_OPTIONS
+            if canonicalize_model(model) == canonicalize_model(default_model, fallback=DEFAULT_COMMANDER_MODEL)
+        ),
+        "2",
+    )
     table = Table(show_header=False, box=None, padding=(0, 1))
-    for choice, model in model_options:
-        label = MODEL_LABELS.get(model, model)
+    for choice, model, _label in FLEET_MODEL_OPTIONS:
+        label = model_label(model)
         suffix = " (default)" if choice == default_choice else ""
         table.add_row(f"[cyan]{choice}[/]", f"{label}{suffix}")
     console.print(Panel(table, title=title, border_style="cyan"))
-    choice = Prompt.ask("Choice", choices=[item[0] for item in model_options], default=default_choice)
-    return MODEL_CHOICES.get(choice, default_model)
+    choice = Prompt.ask("Choice", choices=[item[0] for item in FLEET_MODEL_OPTIONS], default=default_choice)
+    return canonicalize_model(MODEL_CHOICES.get(choice, default_model), fallback=DEFAULT_COMMANDER_MODEL)
 
 
 @dataclass
@@ -278,7 +307,7 @@ def _run_doctor_for_deploy(
     cmd = [
         sys.executable,
         "-m",
-        "maestro.cli",
+        "maestro_fleet",
         "doctor",
         "--fix",
         "--store",
@@ -608,6 +637,7 @@ def _configure_company_openclaw(
             value = str(provider_keys.get(key, "")).strip()
             if value:
                 config["env"][key] = value
+    model = canonicalize_model(model, fallback=DEFAULT_COMMANDER_MODEL)
     provider_env_key = provider_env_key_for_model(model)
     if provider_env_key and isinstance(api_key, str) and api_key.strip():
         config["env"][provider_env_key] = api_key.strip()
@@ -1249,16 +1279,17 @@ def run_deploy(
     # FLEET_STEP_2_MODELS
     _step_header(2, total_steps, _deploy_step_title(2), enabled=interactive_setup)
     config, _ = _load_openclaw_config()
-    current_company = _resolve_company_agent(config)
-    default_model = str(current_company.get("model", "anthropic/claude-opus-4-6")).strip() or "anthropic/claude-opus-4-6"
-    selected_model = str(commander_model or model or "").strip() or default_model
+    agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
+    default_model = default_model_from_agents(agent_list, fallback=DEFAULT_COMMANDER_MODEL)
+    selected_model = canonicalize_model(commander_model or model or default_model, fallback=DEFAULT_COMMANDER_MODEL)
     if interactive_setup and not str(commander_model or model or "").strip():
         selected_model = _prompt_model_selection(
             title="Commander Model",
             default_model=selected_model,
             non_interactive=non_interactive,
         )
-    selected_project_model = str(project_model or "").strip() or selected_model
+    selected_project_model = canonicalize_model(project_model or selected_model, fallback=DEFAULT_PROJECT_MODEL)
     if interactive_setup and not str(project_model or "").strip():
         selected_project_model = _prompt_model_selection(
             title="Default Project Maestro Model",
@@ -1556,8 +1587,8 @@ def run_deploy(
         f"Profile: fleet",
         f"Store Root: {store_root}",
         f"Workspace Root: {company_cfg['workspace_root']}",
-        f"Commander Model: {selected_model}",
-        f"Project Model: {selected_project_model}",
+        f"Commander Model: {format_model_display(selected_model)}",
+        f"Project Model: {format_model_display(selected_project_model)}",
         "Project Provisioning: direct",
         f"Command Center: {command_center_url}",
         f"Command Center (local): {local_url}",

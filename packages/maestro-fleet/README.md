@@ -2,12 +2,13 @@
 
 Fleet/enterprise product package for Maestro.
 
-Current staging behavior:
+Current runtime behavior:
 
 - This package provides the dedicated `maestro-fleet` CLI.
-- Runtime behavior is delegated to the current Fleet runtime modules in `maestro/`.
-- `maestro-fleet up --tui` runs a Fleet-native setup monitor (separate from Solo monitor internals).
-- Solo and Fleet are split at the package + command level while Fleet internals are migrated into package-native modules.
+- Most command behavior is still delegated to the current Fleet runtime modules in `maestro/`.
+- `maestro-fleet up --tui` now uses Fleet-native runtime/state helpers plus the package-native `maestro_fleet.server` entrypoint.
+- Solo and Fleet are split at the package + command level, with Fleet commands now preferring package-native runtime modules and only falling back to compatibility shims where needed.
+- Fleet model defaults and labels are centralized in `maestro/fleet_constants.py`.
 
 ## Local install (development)
 
@@ -20,7 +21,7 @@ pip install -e /absolute/path/to/repo -e /absolute/path/to/repo/packages/maestro
 Install from pinned wheel URLs (no repo checkout):
 
 ```bash
-MAESTRO_FLEET_PACKAGE_SPEC="<root_wheel_url> <fleet_wheel_url>" \
+MAESTRO_FLEET_PACKAGE_SPEC="<engine_wheel_url> <root_wheel_url> <fleet_wheel_url>" \
 MAESTRO_INSTALL_BASE_URL="<pinned_install_script_url>" \
 curl -fsSL "<pinned_linux_wrapper_script_url>" | bash
 ```

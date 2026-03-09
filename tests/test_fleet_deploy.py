@@ -1060,8 +1060,10 @@ def test_start_detached_server_uses_windows_task_runner(monkeypatch, tmp_path: P
     assert calls == ["install", "start"]
     assert (state_dir / "run-fleet-server.ps1").exists()
     assert json.loads((state_dir / "serve.pid.json").read_text(encoding="utf-8"))["pid"] == 4242
-    assert str(store_root) in (state_dir / "run-fleet-server.ps1").read_text(encoding="utf-8")
-    assert str(log_path) in (state_dir / "run-fleet-server.ps1").read_text(encoding="utf-8")
+    script = (state_dir / "run-fleet-server.ps1").read_text(encoding="utf-8")
+    assert str(store_root) in script
+    assert str(log_path) in script
+    assert "maestro_fleet.server" in script
 
 
 def test_start_detached_server_windows_task_failure_returns_detail(monkeypatch, tmp_path: Path):
@@ -1103,6 +1105,37 @@ def test_ensure_windows_server_task_uses_schtasks_with_script_path(monkeypatch, 
     assert calls[0][:4] == ["schtasks", "/Create", "/TN", "Maestro Fleet Server (maestro-fleet)"]
     assert calls[0][4:8] == ["/TR", f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{tmp_path / "run-fleet-server.ps1"}"', "/SC", "ONCE"]
     assert calls[1] == ["schtasks", "/Query", "/TN", "Maestro Fleet Server (maestro-fleet)", "/FO", "LIST", "/V"]
+
+
+def test_run_doctor_for_deploy_uses_package_native_fleet_cli(monkeypatch, tmp_path: Path):
+    observed: dict[str, object] = {}
+
+    class _Proc:
+        pid = 4242
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def communicate(self, timeout=None):
+            return ("doctor ok", "")
+
+    def _fake_popen(cmd, **kwargs):
+        observed["cmd"] = list(cmd)
+        observed["env"] = dict(kwargs.get("env", {}))
+        return _Proc()
+
+    monkeypatch.setattr(fleet_deploy.subprocess, "Popen", _fake_popen)
+
+    result = fleet_deploy._run_doctor_for_deploy(store_root=tmp_path / "store")
+
+    assert result == {"code": 0, "timed_out": False, "output": "doctor ok"}
+    assert observed["cmd"][:4] == [fleet_deploy.sys.executable, "-m", "maestro_fleet", "doctor"]
+    assert "--fix" in observed["cmd"]
+    assert observed["env"].get("MAESTRO_OPENCLAW_PROFILE") == "maestro-fleet"
 
 
 def test_ensure_gateway_running_for_pairing_restarts_when_needed(monkeypatch):

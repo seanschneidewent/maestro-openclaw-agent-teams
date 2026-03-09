@@ -6,8 +6,10 @@ import asyncio
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.responses import JSONResponse
 
+from maestro.fleet.projects import awareness as project_awareness
 import maestro.server as server
 from maestro.control_plane import (
     build_awareness_state,
@@ -56,6 +58,7 @@ def test_registry_sync_discovers_projects(tmp_path: Path):
     assert project["project_slug"] == "alpha-project"
     assert project["project_name"] == "Alpha Project"
     assert project["project_store_path"] == str(project_dir.resolve())
+    assert not (tmp_path / ".command_center" / "fleet_registry.json").exists()
 
 
 def test_project_control_payload_needs_input_path(tmp_path: Path):
@@ -83,6 +86,11 @@ def test_create_project_node_and_move(tmp_path: Path):
     assert created["ok"] is True
     assert created["project_slug"] == "beta-build"
     assert (tmp_path / "beta-build").exists()
+    created_payload = json.loads((tmp_path / "beta-build" / "project.json").read_text(encoding="utf-8"))
+    assert created_payload["maestro"]["status"] == "setup"
+    assert created_payload["maestro"]["ingest_input_root"] == str(input_dir.resolve())
+    assert created_payload["maestro"]["superintendent"] == "Mike"
+    assert not (tmp_path / ".command_center" / "fleet_registry.json").exists()
 
     moved = move_project_store(
         store_root=tmp_path,
@@ -127,6 +135,9 @@ def test_onboard_project_store_moves_preingested_data(tmp_path: Path):
     assert result["final_registry_entry"]["project_slug"] == "alpha-project"
     assert (store_root / "alpha-project" / "project.json").exists()
     assert not incoming.exists()
+    onboarded_payload = json.loads((store_root / "alpha-project" / "project.json").read_text(encoding="utf-8"))
+    assert onboarded_payload["maestro"]["status"] == "active"
+    assert not (store_root / ".command_center" / "fleet_registry.json").exists()
 
 
 def test_awareness_state_contract(tmp_path: Path):
@@ -179,6 +190,19 @@ def test_awareness_state_treats_gateway_rpc_ok_as_running(tmp_path: Path):
 
     assert awareness["services"]["openclaw"]["running"] is True
     assert "OpenClaw gateway not running" not in awareness["degraded_reasons"]
+
+
+def test_legacy_build_purchase_status_warns(tmp_path: Path):
+    project_awareness._BUILD_PURCHASE_STATUS_DEPRECATED_WARNED = False
+    with pytest.deprecated_call(match=r"build_purchase_status\(\) is deprecated"):
+        payload = project_awareness.build_purchase_status(
+            tmp_path,
+            build_project_onboarding_status_fn=lambda root, registry=None: {"store_root": str(root), "registry": registry},
+            registry={"projects": []},
+        )
+
+    assert payload["store_root"] == str(tmp_path)
+    assert payload["registry"] == {"projects": []}
 
 
 def test_register_project_agent_adds_telegram_binding(tmp_path: Path):
@@ -377,6 +401,7 @@ def test_register_project_agent_rewrites_existing_workspace_store_env(tmp_path: 
     env_text = (project_workspace / ".env").read_text(encoding="utf-8")
     assert f"MAESTRO_STORE={tmp_path / 'alpha-project'}" in env_text
     assert "MAESTRO_AGENT_ROLE=project" in env_text
+    assert "MAESTRO_PROJECT_SLUG=alpha-project" in env_text
     assert "OPENAI_API_KEY=test-key" in env_text
 
 

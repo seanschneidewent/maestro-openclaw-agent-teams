@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import sys
 from contextlib import asynccontextmanager, suppress
@@ -64,7 +65,6 @@ from .commander_chat import (
 from .control_plane import (
     build_awareness_state,
     resolve_node_identity,
-    save_fleet_registry,
     sync_fleet_registry,
 )
 from .openclaw_profile import DEFAULT_FLEET_OPENCLAW_PROFILE, openclaw_config_path
@@ -136,8 +136,21 @@ fleet_registry: dict[str, Any] = {}
 awareness_state: dict[str, Any] = {}
 agent_project_slug_index: dict[str, str] = {}
 command_center_node_index: dict[str, dict[str, Any]] = {}
+command_center_state_backend: Any | None = None
+command_center_action_runner: Any | None = None
+fleet_runtime_hooks_installed = False
 COMMANDER_NODE_SLUG = "commander"
 _STATE_REFRESH_TTL_SECONDS = 15
+
+
+def set_command_center_state_backend(backend: Any | None) -> None:
+    global command_center_state_backend
+    command_center_state_backend = backend
+
+
+def set_command_center_action_runner(runner: Any | None) -> None:
+    global command_center_action_runner
+    command_center_action_runner = runner
 
 
 def _parse_state_timestamp(value: Any) -> datetime | None:
@@ -169,6 +182,43 @@ def _state_is_stale(state: dict[str, Any], *, timestamp_key: str, max_age_second
 
 def _fleet_mode_enabled() -> bool:
     return profile_fleet_enabled()
+
+
+def _load_package_fleet_module(module_name: str):
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        package_src = SCRIPT_DIR.parent / "packages" / "maestro-fleet" / "src"
+        if package_src.exists() and str(package_src) not in sys.path:
+            sys.path.insert(0, str(package_src))
+        return importlib.import_module(module_name)
+
+
+def _ensure_package_fleet_runtime_hooks() -> None:
+    global fleet_runtime_hooks_installed
+    if fleet_runtime_hooks_installed:
+        return
+    if not _fleet_mode_enabled():
+        return
+    config_path = openclaw_config_path(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
+    if not config_path.exists():
+        return
+    if command_center_state_backend is not None and command_center_action_runner is not None:
+        fleet_runtime_hooks_installed = True
+        return
+    try:
+        command_center_module = _load_package_fleet_module("maestro_fleet.command_center")
+        actions_module = _load_package_fleet_module("maestro_fleet.actions")
+    except ModuleNotFoundError:
+        return
+    install_backend = getattr(command_center_module, "install_fleet_command_center_backend", None)
+    install_action_runner = getattr(actions_module, "install_fleet_action_runner", None)
+    if callable(install_backend):
+        install_backend(sys.modules[__name__])
+    if callable(install_action_runner):
+        install_action_runner(sys.modules[__name__])
+    if command_center_state_backend is not None and command_center_action_runner is not None:
+        fleet_runtime_hooks_installed = True
 
 
 def _workspace_missing_project_response() -> JSONResponse:
@@ -305,6 +355,12 @@ def _refresh_command_center_state():
     """Recompute in-memory command-center state from the current store path."""
     global command_center_state
     global command_center_node_index
+    _ensure_package_fleet_runtime_hooks()
+    if command_center_state_backend is not None:
+        command_center_state, command_center_node_index = command_center_state_backend.refresh_command_center_state(
+            server_module=sys.modules[__name__],
+        )
+        return
     command_center_state, command_center_node_index = fleet_command_center_state.refresh_command_center_state(
         store_path=store_path,
         fleet_registry=fleet_registry,
@@ -321,6 +377,18 @@ def _refresh_control_plane_state():
     """Recompute fleet registry + machine-specific awareness state."""
     global fleet_registry, awareness_state, command_center_state, agent_project_slug_index
     global command_center_node_index
+    _ensure_package_fleet_runtime_hooks()
+    if command_center_state_backend is not None:
+        (
+            fleet_registry,
+            awareness_state,
+            agent_project_slug_index,
+            command_center_state,
+            command_center_node_index,
+        ) = command_center_state_backend.refresh_control_plane_state(
+            server_module=sys.modules[__name__],
+        )
+        return
     (
         fleet_registry,
         awareness_state,
@@ -342,6 +410,7 @@ def _refresh_control_plane_state():
 
 
 def _refresh_all_state():
+    _ensure_package_fleet_runtime_hooks()
     fleet_command_center_state.refresh_all_state(
         load_all_projects_fn=load_all_projects,
         refresh_command_center_state_fn=_refresh_command_center_state,
@@ -508,6 +577,7 @@ async def _broadcast_command_center_update():
 # Schedule data helpers moved to `maestro.server_schedule`.
 
 def _ensure_command_center_state():
+    _ensure_package_fleet_runtime_hooks()
     fleet_command_center_state.ensure_command_center_state(
         command_center_state=command_center_state,
         awareness_state=awareness_state,
@@ -522,6 +592,7 @@ def _ensure_command_center_state():
 
 
 def _ensure_awareness_state():
+    _ensure_package_fleet_runtime_hooks()
     fleet_command_center_state.ensure_awareness_state(
         awareness_state=awareness_state,
         command_center_state=command_center_state,
@@ -536,6 +607,7 @@ def _ensure_awareness_state():
 
 
 def _ensure_fleet_registry():
+    _ensure_package_fleet_runtime_hooks()
     fleet_command_center_state.ensure_fleet_registry(
         fleet_registry=fleet_registry,
         refresh_control_plane_state_fn=_refresh_control_plane_state,
@@ -607,9 +679,7 @@ def _send_node_message(slug: str, message: str, source: str) -> dict[str, Any]:
         projects=projects,
         store_path=store_path,
         fleet_registry=fleet_registry,
-        registry_entry_for_slug_fn=_registry_entry_for_slug,
         send_agent_message_fn=send_agent_message,
-        save_fleet_registry_fn=save_fleet_registry,
         max_message_chars=MAX_MESSAGE_CHARS,
         node_exists_fn=_node_exists,
         node_agent_id_for_slug_fn=_node_agent_id_for_slug,
@@ -620,6 +690,12 @@ def _send_node_message(slug: str, message: str, source: str) -> dict[str, Any]:
 
 
 async def _run_command_center_action_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    _ensure_package_fleet_runtime_hooks()
+    if command_center_action_runner is not None:
+        return await command_center_action_runner.run_command_center_action(
+            payload,
+            server_module=sys.modules[__name__],
+        )
     return await run_command_center_action(
         payload,
         store_path=store_path,

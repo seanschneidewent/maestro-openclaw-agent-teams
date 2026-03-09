@@ -744,6 +744,10 @@ class TestCommandCenterAPI:
     def test_specialist_node_conversation_uses_agent_id(self, single_project_store: Path, monkeypatch):
         server.store_path = single_project_store
         server.load_all_projects()
+        monkeypatch.setattr(server, "profile_fleet_enabled", lambda: False)
+        monkeypatch.setattr(server, "command_center_state_backend", None)
+        monkeypatch.setattr(server, "command_center_action_runner", None)
+        monkeypatch.setattr(server, "fleet_runtime_hooks_installed", False)
         monkeypatch.setattr(
             server,
             "_load_openclaw_config_for_command_center",

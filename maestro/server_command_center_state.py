@@ -23,8 +23,6 @@ EnsureFn = Callable[[], None]
 ApplyRegistryIdentityFn = Callable[[dict[str, Any], dict[str, Any] | None], None]
 ReadConversationFn = Callable[..., dict[str, Any]]
 SendMessageFn = Callable[..., dict[str, Any]]
-RegistryEntryGetterFn = Callable[[str], dict[str, Any] | None]
-SaveFleetRegistryFn = Callable[[Path, dict[str, Any]], None]
 ProjectDetailLoaderFn = Callable[[str], dict[str, Any]]
 NodeAgentIdForSlugFn = Callable[[str], str]
 NodeExistsFn = Callable[[str], bool]
@@ -371,9 +369,7 @@ def send_node_message(
     projects: dict[str, dict[str, Any]],
     store_path: Path,
     fleet_registry: dict[str, Any],
-    registry_entry_for_slug_fn: RegistryEntryGetterFn,
     send_agent_message_fn: SendMessageFn,
-    save_fleet_registry_fn: SaveFleetRegistryFn,
     max_message_chars: int,
     node_exists_fn: NodeExistsFn | None = None,
     node_agent_id_for_slug_fn: NodeAgentIdForSlugFn | None = None,
@@ -474,8 +470,6 @@ def send_node_message(
     if not bool(result.get("ok")):
         status_code = int(result.get("status_code", 503))
         raise ActionError(status_code, {"error": str(result.get("error", "Agent send failed"))})
-
-    _ = (projects, store_path, fleet_registry, registry_entry_for_slug_fn, save_fleet_registry_fn)
 
     return {
         "ok": True,

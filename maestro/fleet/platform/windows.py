@@ -68,7 +68,7 @@ def write_windows_server_task_script(
             f"\"`n[{now_iso()}] starting scheduled Fleet server on port {int(port)}\""
         ),
         (
-            "& $pythonExe '-m' 'maestro.cli' 'serve' '--port' "
+            "& $pythonExe '-m' 'maestro_fleet.server' '--port' "
             f"'{int(port)}' '--store' $storeRoot '--host' $hostName *>> $logPath"
         ),
     ]
@@ -100,4 +100,3 @@ def start_windows_server_task_runner(
     query_ok, query_out = run_cmd(["schtasks", "/Query", "/TN", task_name, "/FO", "LIST", "/V"], 30)
     detail = "\n".join(part for part in [start_out, query_out] if part).strip()
     return start_ok and query_ok, detail
-

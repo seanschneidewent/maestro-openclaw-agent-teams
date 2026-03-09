@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import platform
 import subprocess
@@ -31,6 +32,23 @@ from .install_state import (
 from .openclaw_profile import DEFAULT_FLEET_OPENCLAW_PROFILE, ensure_openclaw_profile_env
 from .profile import PROFILE_FLEET, PROFILE_SOLO, fleet_enabled, get_profile_state, resolve_profile, set_profile
 from .utils import slugify
+
+
+def _load_fleet_package_callable(module_name: str, attr_name: str, *, fallback: object | None = None):
+    try:
+        module = importlib.import_module(module_name)
+        return getattr(module, attr_name)
+    except ModuleNotFoundError:
+        package_src = Path(__file__).resolve().parents[1] / "packages" / "maestro-fleet" / "src"
+        if package_src.exists() and str(package_src) not in sys.path:
+            sys.path.insert(0, str(package_src))
+        try:
+            module = importlib.import_module(module_name)
+            return getattr(module, attr_name)
+        except ModuleNotFoundError:
+            if fallback is not None:
+                return fallback
+            raise
 
 
 def _add_ingest_parser(subparsers: argparse._SubParsersAction):
@@ -551,11 +569,27 @@ def _run_fleet(args: argparse.Namespace):
     from .fleet_deploy import run_deploy
     from .fleet_models import run_set_commander_model, run_set_project_model, run_set_project_telegram
     from .install_state import resolve_fleet_store_root
-    from .doctor import run_doctor
-    from .fleet.projects.provisioning import run_project_create
-    from .update import run_update
+    from .doctor import run_doctor as legacy_run_doctor
+    from .fleet.projects.provisioning import run_project_create as legacy_run_project_create
+    from .update import run_update as legacy_run_update
     from .openclaw_profile import DEFAULT_FLEET_OPENCLAW_PROFILE, ensure_openclaw_profile_env
     from .utils import slugify
+
+    run_doctor = _load_fleet_package_callable(
+        "maestro_fleet.doctor",
+        "run_doctor",
+        fallback=legacy_run_doctor,
+    )
+    run_project_create = _load_fleet_package_callable(
+        "maestro_fleet.provisioning",
+        "run_project_create",
+        fallback=legacy_run_project_create,
+    )
+    run_update = _load_fleet_package_callable(
+        "maestro_fleet.update",
+        "run_update",
+        fallback=legacy_run_update,
+    )
 
     ensure_openclaw_profile_env(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
 

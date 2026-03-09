@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
+import os
 import re
 import subprocess
+import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -15,15 +19,19 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
+from ...command_center import discover_project_dirs
 from ...control_plane import (
     create_project_node,
     ensure_telegram_account_bindings,
     onboard_project_store,
     project_control_payload,
     resolve_network_urls,
-    sync_fleet_registry,
 )
-from ...fleet_constants import FLEET_PROFILE, MODEL_LABELS
+from ...fleet_constants import (
+    FLEET_PROFILE,
+    MODEL_LABELS,
+    PROJECT_MODEL_OPTIONS,
+)
 from ...install_state import resolve_fleet_store_root
 from ...openclaw_guard import ensure_openclaw_override_allowed
 from ...openclaw_profile import (
@@ -35,25 +43,30 @@ from ...openclaw_profile import (
 from ...utils import load_json, save_json, slugify
 from ...workspace_templates import (
     provider_env_key_for_model,
-    render_project_agents_md,
-    render_project_tools_md,
-    render_workspace_awareness_md,
     render_workspace_env,
-    should_remove_generic_project_bootstrap,
-    should_refresh_generic_project_file,
+    sync_project_workspace_runtime_files,
 )
 
 
 console = Console()
 
-PROJECT_MODEL_OPTIONS = (
-    ("1", "inherit"),
-    ("2", "openai/gpt-5.4"),
-    ("3", "google/gemini-3-pro-preview"),
-    ("4", "anthropic/claude-opus-4-6"),
-)
+_PROJECT_METADATA_KEY = "maestro"
+_RUN_PURCHASE_DEPRECATED_WARNED = False
 
 VERTEX_API_KEY_RE = re.compile(r"^AIza[0-9A-Za-z_-]{24,}$")
+
+
+def _load_package_run_project_create():
+    try:
+        module = importlib.import_module("maestro_fleet.provisioning")
+        return getattr(module, "run_project_create")
+    except ModuleNotFoundError:
+        repo_root = Path(__file__).resolve().parents[3]
+        package_src = repo_root / "packages" / "maestro-fleet" / "src"
+        if package_src.exists() and str(package_src) not in sys.path:
+            sys.path.insert(0, str(package_src))
+        module = importlib.import_module("maestro_fleet.provisioning")
+        return getattr(module, "run_project_create")
 
 
 def _looks_like_vertex_api_key(value: str) -> bool:
@@ -197,15 +210,35 @@ def _validate_telegram_token(token: str) -> tuple[bool, str, str, str]:
     return True, str(username), str(display_name), "validated"
 
 
-def _project_exists(registry: dict[str, Any], slug: str) -> bool:
-    projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
-    for item in projects:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("project_slug", "")).strip().lower() == slug.lower():
-            if str(item.get("status", "active")).lower() != "archived":
-                return True
+def _project_exists(store_root: Path, slug: str) -> bool:
+    desired = slugify(slug)
+    for project_dir in discover_project_dirs(store_root):
+        payload = load_json(project_dir / "project.json", default={})
+        if not isinstance(payload, dict):
+            payload = {}
+        current_slug = slugify(
+            str(payload.get("slug", "")).strip()
+            or str(payload.get("name", "")).strip()
+            or project_dir.name
+        )
+        if current_slug == desired:
+            return True
     return False
+
+
+def _save_project_metadata(project_store_path: Path, metadata: dict[str, Any]) -> None:
+    payload = load_json(project_store_path / "project.json", default={})
+    if not isinstance(payload, dict):
+        payload = {}
+    current = payload.get(_PROJECT_METADATA_KEY) if isinstance(payload.get(_PROJECT_METADATA_KEY), dict) else {}
+    if not isinstance(current, dict):
+        current = {}
+    for key, value in metadata.items():
+        clean = str(value).strip() if value is not None else ""
+        if clean:
+            current[key] = clean
+    payload[_PROJECT_METADATA_KEY] = current
+    save_json(project_store_path / "project.json", payload)
 
 
 def _company_name(company_agent: dict[str, Any]) -> str:
@@ -265,6 +298,7 @@ def _update_openclaw_for_project(
         gemini_key=env.get("GEMINI_API_KEY") if isinstance(env.get("GEMINI_API_KEY"), str) else None,
         agent_role="project",
     )
+    workspace_env = workspace_env.rstrip("\n") + f"\nMAESTRO_PROJECT_SLUG={project_slug}\n"
     metadata = {
         "project_slug": project_slug,
         "project_name": project_name,
@@ -280,39 +314,17 @@ def _update_openclaw_for_project(
         save_json(config_path, config)
         project_workspace.mkdir(parents=True, exist_ok=True)
         (project_workspace / ".env").write_text(workspace_env, encoding="utf-8")
-        urls = resolve_network_urls(
+        _save_project_metadata(project_store_path, metadata)
+        sync_project_workspace_runtime_files(
+            project_workspace=project_workspace,
+            project_slug=project_slug,
+            model=model,
+            store_root=project_store_path,
+            generated_by="maestro purchase",
+            resolve_network_urls_fn=resolve_network_urls,
             web_port=_current_command_center_port(),
-            route_path=f"/{project_slug}/",
+            dry_run=False,
         )
-        (project_workspace / "AWARENESS.md").write_text(
-            render_workspace_awareness_md(
-                model=model,
-                preferred_url=str(urls.get("recommended_url", "")).strip(),
-                local_url=str(urls.get("localhost_url", "")).strip(),
-                tailnet_url=str(urls.get("tailnet_url") or "").strip(),
-                store_root=project_store_path,
-                surface_label="Workspace",
-                generated_by="maestro purchase",
-            ),
-            encoding="utf-8",
-        )
-        agents_path = project_workspace / "AGENTS.md"
-        current_agents = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
-        if (not agents_path.exists()) or should_refresh_generic_project_file("AGENTS.md", current_agents):
-            agents_path.write_text(render_project_agents_md(), encoding="utf-8")
-        tools_path = project_workspace / "TOOLS.md"
-        current_tools = tools_path.read_text(encoding="utf-8") if tools_path.exists() else ""
-        if (not tools_path.exists()) or should_refresh_generic_project_file("TOOLS.md", current_tools):
-            tools_path.write_text(
-                render_project_tools_md(provider_env_key_for_model(model)),
-                encoding="utf-8",
-            )
-        bootstrap_path = project_workspace / "BOOTSTRAP.md"
-        if bootstrap_path.exists():
-            bootstrap_content = bootstrap_path.read_text(encoding="utf-8")
-            if should_remove_generic_project_bootstrap(bootstrap_content):
-                bootstrap_path.unlink()
-        save_json(project_workspace / "project_agent.json", metadata)
 
     return {
         "agent_id": agent_id,
@@ -446,268 +458,40 @@ def run_project_create(
     skip_remote_validation: bool = False,
     allow_openclaw_override: bool = False,
 ) -> int:
-    _, config_path = _load_openclaw_config()
-    if not config_path.exists():
-        console.print("[red]OpenClaw config not found. Run maestro-setup first.[/]")
-        return 1
-
-    config, _ = _load_openclaw_config()
-    safe_override, override_message = ensure_openclaw_override_allowed(
-        config,
-        allow_override=allow_openclaw_override,
-    )
-    if not safe_override:
-        console.print(f"[red]{override_message}[/]")
-        return 1
-    company = _resolve_company_agent(config)
-    company_model = str(company.get("model", "google/gemini-3-pro-preview")).strip()
-    store_root = resolve_fleet_store_root(store_override)
-    registry = sync_fleet_registry(store_root, dry_run=dry_run)
-
-    if not project_name:
-        if non_interactive:
-            console.print("[red]Missing --project-name[/]")
-            return 1
-        project_name = Prompt.ask("Project name").strip()
-    if not assignee:
-        if non_interactive:
-            console.print("[red]Missing --assignee[/]")
-            return 1
-        assignee = Prompt.ask("Assignee (employee owner)").strip()
-
-    project_name = project_name.strip()
-    assignee = assignee.strip()
-    if not project_name or not assignee:
-        console.print("[red]Project name and assignee are required.[/]")
-        return 1
-
-    project_slug = slugify(project_name)
-    if _project_exists(registry, project_slug):
-        console.print(f"[red]Project slug already exists: {project_slug}[/]")
-        return 1
-
-    # Model selection
-    selected_model = model.strip() if isinstance(model, str) and model.strip() else ""
-    if not selected_model and not non_interactive:
-        lines = [f"1. Inherit company default ({company_model})"]
-        for choice, model_name in PROJECT_MODEL_OPTIONS[1:]:
-            label = MODEL_LABELS.get(model_name, model_name)
-            lines.append(f"{choice}. {label}")
-        console.print(Panel("\n".join([
-            "Select model for this project maestro:",
-            *lines,
-        ]), title="Model Selection"))
-        choice = Prompt.ask("Choice", choices=[item[0] for item in PROJECT_MODEL_OPTIONS], default="1")
-        model_choice = next((model_name for key, model_name in PROJECT_MODEL_OPTIONS if key == choice), "inherit")
-        selected_model = company_model if model_choice == "inherit" else model_choice
-    elif not selected_model:
-        selected_model = company_model
-
-    provider_env_key = provider_env_key_for_model(selected_model)
-    config_env = config.get("env", {}) if isinstance(config.get("env"), dict) else {}
-    selected_api_key = api_key.strip() if isinstance(api_key, str) and api_key.strip() else ""
-
-    if provider_env_key and not selected_api_key:
-        existing = config_env.get(provider_env_key)
-        existing_key = existing.strip() if isinstance(existing, str) else ""
-        if existing_key and not non_interactive:
-            use_existing = Confirm.ask(
-                f"Use existing {provider_env_key} from OpenClaw config ({_mask_secret(existing_key)})?",
-                default=True,
-            )
-            if use_existing:
-                selected_api_key = existing_key
-        elif existing_key:
-            selected_api_key = existing_key
-
-    if provider_env_key and not selected_api_key:
-        if non_interactive:
-            console.print(f"[red]Missing API key for {provider_env_key}[/]")
-            return 1
-        prompt_label = (
-            "Paste GEMINI_API_KEY (Gemini API or Vertex AI key)"
-            if provider_env_key == "GEMINI_API_KEY"
-            else f"Paste {provider_env_key}"
-        )
-        selected_api_key = Prompt.ask(prompt_label).strip()
-
-    if provider_env_key and selected_api_key and not skip_remote_validation:
-        ok, detail = _validate_api_key(provider_env_key, selected_api_key)
-        if not ok:
-            if non_interactive:
-                console.print(f"[red]API key validation failed: {detail}[/]")
-                return 1
-            proceed = Confirm.ask(f"API key validation failed ({detail}). Continue anyway?", default=False)
-            if not proceed:
-                return 1
-
-    # Telegram
-    selected_telegram_token = telegram_token.strip() if isinstance(telegram_token, str) and telegram_token.strip() else ""
-    if not selected_telegram_token:
-        if non_interactive:
-            console.print("[red]Missing --telegram-token[/]")
-            return 1
-        console.print(Panel(
-            "Create a dedicated Telegram bot for this Project Maestro:\n"
-            "1) Open @BotFather\n"
-            "2) /newbot\n"
-            "3) Paste token below",
-            title="Telegram Bot",
-        ))
-        selected_telegram_token = Prompt.ask("Project Telegram bot token").strip()
-
-    bot_username = ""
-    bot_display_name = ""
-    if not skip_remote_validation:
-        validation = _validate_telegram_token(selected_telegram_token)
-        if len(validation) == 4:
-            ok, bot_username, bot_display_name, detail = validation
-        else:  # Backward-compat for monkeypatched tests returning legacy tuple.
-            ok, bot_username, detail = validation  # type: ignore[misc]
-            bot_display_name = bot_username
-        if not ok:
-            if non_interactive:
-                console.print(f"[red]Telegram token validation failed: {detail}[/]")
-                return 1
-            proceed = Confirm.ask(f"Telegram token validation failed ({detail}). Continue anyway?", default=False)
-            if not proceed:
-                return 1
-        else:
-            console.print(f"[green]Telegram verified: @{bot_username}[/]")
-
-    existing_project_root = (store_root / "project.json").exists()
-    planned_store_path = store_root.resolve() if existing_project_root else (store_root / project_slug).resolve()
-
-    if existing_project_root:
-        result = onboard_project_store(
-            store_root=store_root,
-            source_path=str(store_root),
+    package_run_project_create = _load_package_run_project_create()
+    had_profile_env = "MAESTRO_OPENCLAW_PROFILE" in os.environ
+    if not had_profile_env:
+        os.environ["MAESTRO_OPENCLAW_PROFILE"] = "shared"
+    try:
+        return package_run_project_create(
             project_name=project_name,
-            project_slug=project_slug,
-            ingest_input_root=None,
-            superintendent=superintendent or assignee,
             assignee=assignee,
-            register_agent=True,
-            move_source=False,
-            agent_model=selected_model,
+            superintendent=superintendent,
+            model=model,
+            api_key=api_key,
+            telegram_token=telegram_token,
+            pairing_code=pairing_code,
+            store_override=store_override,
             dry_run=dry_run,
+            json_output=json_output,
+            non_interactive=non_interactive,
+            skip_remote_validation=skip_remote_validation,
+            allow_openclaw_override=allow_openclaw_override,
         )
-    else:
-        result = create_project_node(
-            store_root=store_root,
-            project_name=project_name,
-            project_slug=project_slug,
-            ingest_input_root=None,
-            superintendent=superintendent or assignee,
-            assignee=assignee,
-            telegram_bot_username=bot_username,
-            telegram_bot_display_name=bot_display_name,
-            register_agent=True,
-            agent_model=selected_model,
-            dry_run=dry_run,
-        )
-    if not result.get("ok"):
-        console.print(f"[red]Failed to create project maestro: {result}[/]")
-        return 1
-
-    project_entry = (
-        result.get("final_registry_entry", {})
-        if isinstance(result.get("final_registry_entry"), dict)
-        else result.get("project", {})
-        if isinstance(result.get("project"), dict)
-        else {}
-    )
-    project_store_path = Path(str(project_entry.get("project_store_path", planned_store_path))).resolve()
-    agent_registration = result.get("agent_registration", {}) if isinstance(result.get("agent_registration"), dict) else {}
-    workspace_path = (
-        Path(str(agent_registration.get("workspace", ""))).expanduser()
-        if agent_registration.get("workspace")
-        else openclaw_workspace_root(
-            enforce_profile=True,
-        ) / "projects" / project_slug
-    )
-
-    # Reload latest config first so we don't clobber project-agent registration.
-    config, _ = _load_openclaw_config()
-    openclaw_update = _update_openclaw_for_project(
-        config=config,
-        config_path=config_path,
-        project_slug=project_slug,
-        project_name=project_name,
-        model=selected_model,
-        provider_env_key=provider_env_key,
-        provider_key=selected_api_key,
-        telegram_token=selected_telegram_token,
-        telegram_bot_username=bot_username,
-        telegram_bot_display_name=bot_display_name,
-        assignee=assignee,
-        project_workspace=workspace_path,
-        project_store_path=project_store_path,
-        dry_run=dry_run,
-    )
-    gateway_restart = _restart_openclaw_gateway(dry_run=dry_run)
-    if gateway_restart.get("ok"):
-        console.print("[green]OpenClaw gateway restarted with project bot config.[/]")
-    else:
-        console.print(f"[yellow]Could not restart OpenClaw gateway automatically: {gateway_restart.get('detail', '')}[/]")
-        console.print("[bold white]Run:[/] openclaw gateway restart")
-
-    pairing_result = _complete_telegram_pairing(
-        bot_username=bot_username,
-        pairing_code=pairing_code,
-        non_interactive=non_interactive,
-        dry_run=dry_run,
-    )
-
-    control = project_control_payload(store_root, project_slug=project_slug)
-    output = {
-        "ok": True,
-        "dry_run": dry_run,
-        "project_slug": project_slug,
-        "project_name": project_name,
-        "assignee": assignee,
-        "telegram_bot_username": bot_username,
-        "telegram_bot_display_name": bot_display_name,
-        "store_root": str(store_root),
-        "project_store_path": str(project_store_path),
-        "model": selected_model,
-        "provider_env_key": provider_env_key,
-        "openclaw_update": openclaw_update,
-        "gateway_restart": gateway_restart,
-        "telegram_pairing": pairing_result,
-        "ingest_command": control.get("ingest", {}).get("command") if isinstance(control.get("ingest"), dict) else "",
-        "command_center_url": _current_command_center_url(),
-        "project_create_command": "maestro-fleet project create",
-    }
-
-    if json_output:
-        console.print_json(json.dumps(output))
-        return 0
-
-    console.print(Panel(
-        "\n".join([
-            "Project Maestro provisioned",
-            f"Project: {project_name} ({project_slug})",
-            f"Assignee: {assignee}",
-            f"Store: {project_store_path}",
-            f"Model: {selected_model}",
-            f"Gateway Reload: {'OK' if gateway_restart.get('ok') else 'Needs manual restart'}",
-            (
-                f"Telegram Pairing: {'Approved' if pairing_result.get('approved') else 'Pending'}"
-                if isinstance(pairing_result, dict) else "Telegram Pairing: Pending"
-            ),
-            f"Command Center: {output['command_center_url']}",
-            "",
-            f"Ingest command:",
-            output["ingest_command"] or "maestro ingest \"/abs/path/to/pdfs\"",
-        ]),
-        title="maestro-fleet project create",
-        border_style="cyan",
-    ))
-    return 0
+    finally:
+        if not had_profile_env:
+            os.environ.pop("MAESTRO_OPENCLAW_PROFILE", None)
 
 
 def run_purchase(*args, **kwargs):
+    global _RUN_PURCHASE_DEPRECATED_WARNED
+    if not _RUN_PURCHASE_DEPRECATED_WARNED:
+        warnings.warn(
+            "maestro.fleet.projects.provisioning.run_purchase() is deprecated; use `maestro_fleet.provisioning.run_project_create()` or `maestro-fleet project create`.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        _RUN_PURCHASE_DEPRECATED_WARNED = True
     return run_project_create(*args, **kwargs)
 
 

@@ -226,6 +226,16 @@ class TestKnowledgeQueries:
         assert observed["route_path"] == "/alpha-project/"
         assert urls["recommended_url"] == "http://localhost:3000/alpha-project/"
 
+    def test_workspace_root_is_not_inferred_from_awareness_file_alone(self, mock_store, tmp_path, monkeypatch):
+        workspace = tmp_path / "workspace-maestro" / "projects" / "alpha-project"
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "AWARENESS.md").write_text("# AWARENESS\n", encoding="utf-8")
+        monkeypatch.chdir(workspace)
+
+        tool = MaestroTools(store_path=mock_store)
+
+        assert tool._workspace_root is None
+
 
 class TestWorkspaces:
     def test_create_workspace(self, tools):

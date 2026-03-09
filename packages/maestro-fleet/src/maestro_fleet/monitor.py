@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -17,20 +19,32 @@ from typing import Any, Deque
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from maestro.fleet_constants import (
+    DEFAULT_COMMANDER_MODEL,
+    DEFAULT_PROJECT_MODEL,
+    canonicalize_model,
+    default_model_from_agents,
+    format_model_display,
+)
+
 from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.markup import escape
 from rich.panel import Panel
 
-from maestro.control_plane import resolve_network_urls
-from maestro.fleet.shared.subprocesses import sanitized_subprocess_env
-from maestro.install_state import load_install_state
-from maestro.openclaw_profile import (
-    openclaw_config_path,
+from .openclaw_runtime import (
     openclaw_state_root,
     prepend_openclaw_profile_args,
+    sanitized_subprocess_env,
 )
+from .runtime import (
+    is_fleet_server_process,
+    listener_pids,
+    read_process_command,
+    resolve_network_urls,
+)
+from .state import load_install_state, load_openclaw_config, resolve_commander_agent
 
 
 CYAN = "cyan"
@@ -95,6 +109,112 @@ class LogBuffer:
             return list(self._lines)[-count:]
 
 
+def _maestro_server_listener_pids(port: int) -> list[int]:
+    matched: list[int] = []
+    for pid in listener_pids(int(port)):
+        if is_fleet_server_process(
+            pid,
+            port=int(port),
+            read_command_fn=read_process_command,
+        ):
+            matched.append(int(pid))
+    return matched
+
+
+def _start_text_process(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.Popen[str]:
+    popen_kwargs: dict[str, Any] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "bufsize": 1,
+        "env": env if env is not None else sanitized_subprocess_env(),
+    }
+    if os.name == "nt":
+        creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        if creationflags:
+            popen_kwargs["creationflags"] = creationflags
+    else:
+        popen_kwargs["start_new_session"] = True
+    return subprocess.Popen(cmd, **popen_kwargs)
+
+
+def _pid_running(pid: int) -> bool:
+    try:
+        target = int(pid)
+    except Exception:
+        return False
+    if target <= 0:
+        return False
+    try:
+        os.kill(target, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _shutdown_pid(pid: int, *, timeout_sec: float):
+    try:
+        target = int(pid)
+    except Exception:
+        return
+    if target <= 0 or not _pid_running(target):
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(target), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            timeout=max(2, int(timeout_sec)),
+            check=False,
+        )
+        return
+    try:
+        os.kill(target, signal.SIGTERM)
+    except (PermissionError, ProcessLookupError, OSError):
+        return
+    deadline = time.time() + float(timeout_sec)
+    while time.time() < deadline:
+        if not _pid_running(target):
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(target, signal.SIGKILL)
+    except (PermissionError, ProcessLookupError, OSError):
+        return
+
+
+def _install_shutdown_signal_handlers() -> dict[int, Any]:
+    previous: dict[int, Any] = {}
+
+    def _raise_interrupt(_signum, _frame):
+        raise KeyboardInterrupt
+
+    for name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            previous[sig] = signal.getsignal(sig)
+            signal.signal(sig, _raise_interrupt)
+        except Exception:
+            continue
+    return previous
+
+
+def _restore_shutdown_signal_handlers(previous: dict[int, Any]):
+    for sig, handler in previous.items():
+        try:
+            signal.signal(sig, handler)
+        except Exception:
+            continue
+
+
 @dataclass
 class ProjectRow:
     slug: str
@@ -120,6 +240,8 @@ class MonitorState:
         tailnet_url: str | None,
         commander_agent_id: str,
         commander_workspace: str,
+        commander_model: str,
+        project_model: str,
     ):
         self.start_time = time.time()
         self.store_path = store_path
@@ -130,6 +252,8 @@ class MonitorState:
         self.tailnet_url = tailnet_url
         self.commander_agent_id = commander_agent_id
         self.commander_workspace = commander_workspace
+        self.commander_model = commander_model
+        self.project_model = project_model
 
         self.system_cpu_percent: float = 0.0
         self.system_ram_mb: float = 0.0
@@ -207,40 +331,26 @@ def _safe_run(args: list[str], timeout: int = 6) -> tuple[bool, str]:
 
 
 def _load_openclaw_config() -> dict[str, Any]:
-    config_path = openclaw_config_path(default_profile="maestro-fleet", enforce_profile=True)
-    if not config_path.exists():
-        return {}
-    try:
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    return load_openclaw_config()
 
 
 def _resolve_commander_agent() -> tuple[str, str]:
+    return resolve_commander_agent()
+
+
+def _resolve_fleet_models() -> tuple[str, str]:
     config = _load_openclaw_config()
-    agents_raw = config.get("agents", {}).get("list")
-    agents = [item for item in agents_raw if isinstance(item, dict)] if isinstance(agents_raw, list) else []
-
-    selected: dict[str, Any] | None = None
-    for item in agents:
-        if str(item.get("id", "")).strip() == "maestro-company":
-            selected = item
+    agents = config.get("agents", {}) if isinstance(config.get("agents"), dict) else {}
+    agent_list = agents.get("list", []) if isinstance(agents.get("list"), list) else []
+    commander_model = DEFAULT_COMMANDER_MODEL
+    for agent in agent_list:
+        if not isinstance(agent, dict):
+            continue
+        if str(agent.get("id", "")).strip() == "maestro-company":
+            commander_model = canonicalize_model(agent.get("model"), fallback=DEFAULT_COMMANDER_MODEL)
             break
-    if selected is None:
-        for item in agents:
-            if bool(item.get("default")):
-                selected = item
-                break
-    if selected is None and agents:
-        selected = agents[0]
-
-    if selected is None:
-        return "maestro-company", ""
-    return (
-        str(selected.get("id", "")).strip() or "maestro-company",
-        str(selected.get("workspace", "")).strip(),
-    )
+    project_model = default_model_from_agents(agent_list, fallback=DEFAULT_PROJECT_MODEL)
+    return commander_model, project_model
 
 
 def _load_token_stats(agent_id: str) -> tuple[int, int]:
@@ -347,6 +457,11 @@ def _update_command_center_state(state: MonitorState, activity_logs: LogBuffer):
     if not payload:
         state.last_state_error = "command-center state unavailable"
         return
+
+    commander = payload.get("commander") if isinstance(payload.get("commander"), dict) else {}
+    commander_model = canonicalize_model(commander.get("model"), fallback=state.commander_model or DEFAULT_COMMANDER_MODEL)
+    if commander_model:
+        state.commander_model = commander_model
 
     projects_raw = payload.get("projects")
     projects = [item for item in projects_raw if isinstance(item, dict)] if isinstance(projects_raw, list) else []
@@ -568,14 +683,7 @@ def _start_gateway_log_stream(stop_event: threading.Event, gateway_logs: LogBuff
         default_profile="maestro-fleet",
     )
     try:
-        process: subprocess.Popen[str] = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            env=sanitized_subprocess_env(),
-        )
+        process = _start_text_process(cmd)
     except Exception as exc:
         _append_gateway_event(
             gateway_logs,
@@ -597,11 +705,27 @@ def _start_gateway_log_stream(stop_event: threading.Event, gateway_logs: LogBuff
 def _shutdown_process(process: subprocess.Popen[str] | None, *, timeout_sec: float):
     if process is None or process.poll() is not None:
         return
-    process.terminate()
+    if os.name == "nt":
+        process.terminate()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except Exception:
+            process.terminate()
     try:
         process.wait(timeout=timeout_sec)
     except subprocess.TimeoutExpired:
-        process.kill()
+        if os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except Exception:
+                process.kill()
+        try:
+            process.wait(timeout=1.0)
+        except Exception:
+            pass
 
 
 def _render_header(state: MonitorState) -> Panel:
@@ -634,6 +758,8 @@ def _render_compute(state: MonitorState) -> Panel:
         f"  [{BRIGHT_CYAN}]Store Disk[/]       {state.store_disk_mb:.1f}MB",
         f"  [{BRIGHT_CYAN}]Store Path[/]       {escape(str(state.store_path))}",
         f"  [{BRIGHT_CYAN}]Commander Agent[/]  {escape(state.commander_agent_id)}",
+        f"  [{BRIGHT_CYAN}]Commander Model[/]  {escape(_truncate(format_model_display(state.commander_model), 52))}",
+        f"  [{BRIGHT_CYAN}]Project Model[/]    {escape(_truncate(format_model_display(state.project_model), 52))}",
         f"  [{BRIGHT_CYAN}]Workspace[/]        {workspace}",
     ]
     return Panel("\n".join(lines), border_style=CYAN, title=f"[bold {BRIGHT_CYAN}]COMPUTE[/]")
@@ -759,6 +885,7 @@ def run_up_tui(port: int, store: str, host: str):
     store_path = Path(store).resolve()
     network = resolve_network_urls(web_port=port, route_path="/command-center")
     commander_agent_id, commander_workspace = _resolve_commander_agent()
+    commander_model, project_model = _resolve_fleet_models()
     install_state = load_install_state()
     company_name = str(install_state.get("company_name", "")).strip() or "Company"
 
@@ -771,6 +898,8 @@ def run_up_tui(port: int, store: str, host: str):
         tailnet_url=str(network["tailnet_url"]) if network.get("tailnet_url") else None,
         commander_agent_id=commander_agent_id,
         commander_workspace=commander_workspace,
+        commander_model=commander_model,
+        project_model=project_model,
     )
 
     logs = LogBuffer()
@@ -781,8 +910,7 @@ def run_up_tui(port: int, store: str, host: str):
     cmd = [
         sys.executable,
         "-m",
-        "maestro.cli",
-        "serve",
+        "maestro_fleet.server",
         "--port",
         str(port),
         "--store",
@@ -790,35 +918,40 @@ def run_up_tui(port: int, store: str, host: str):
         "--host",
         host,
     ]
-    existing_state = _fetch_json(f"http://127.0.0.1:{int(port)}/api/command-center/state", timeout=0.8)
-    attach_only = existing_state is not None
+    attached_server_pids = _maestro_server_listener_pids(port)
+    existing_state = None if attached_server_pids else _fetch_json(
+        f"http://127.0.0.1:{int(port)}/api/command-center/state",
+        timeout=0.8,
+    )
+    attach_only = bool(attached_server_pids) or existing_state is not None
     process: subprocess.Popen[str] | None = None
-    if attach_only:
-        logs.add(f"Detected existing Fleet server on port {port}; attaching monitor.")
-    else:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            env=sanitized_subprocess_env(),
-        )
-        logs.add(f"Starting server: {' '.join(cmd)}")
-    activity_logs.add(f"Fleet monitor attached for {company_name}.")
-    activity_logs.add(f"Command Center URL: {state.primary_url}")
-
-    if process is not None:
-        log_thread = threading.Thread(
-            target=_stream_logs,
-            args=(process, logs, stop_event),
-            daemon=True,
-        )
-        log_thread.start()
-    gateway_process = _start_gateway_log_stream(stop_event, gateway_logs)
+    previous_signal_handlers = _install_shutdown_signal_handlers()
     interrupted = False
+    gateway_process: subprocess.Popen[str] | None = None
 
     try:
+        if attach_only:
+            if attached_server_pids:
+                logs.add(
+                    f"Detected existing Maestro server on port {port}; attaching monitor and will stop it on exit."
+                )
+            else:
+                logs.add(f"Detected existing Fleet server on port {port}; attaching monitor.")
+        else:
+            process = _start_text_process(cmd)
+            logs.add(f"Starting server: {' '.join(cmd)}")
+        activity_logs.add(f"Fleet monitor attached for {company_name}.")
+        activity_logs.add(f"Command Center URL: {state.primary_url}")
+
+        if process is not None:
+            log_thread = threading.Thread(
+                target=_stream_logs,
+                args=(process, logs, stop_event),
+                daemon=True,
+            )
+            log_thread.start()
+        gateway_process = _start_gateway_log_stream(stop_event, gateway_logs)
+
         with Live(
             _build_layout(state, logs, activity_logs, gateway_logs),
             console=console,
@@ -844,10 +977,13 @@ def run_up_tui(port: int, store: str, host: str):
     finally:
         stop_event.set()
         _shutdown_process(process, timeout_sec=8.0)
+        for pid in attached_server_pids:
+            _shutdown_pid(pid, timeout_sec=8.0)
         if process is not None and process.poll() is not None:
             state.server_running = False
             state.server_exit_code = process.returncode
         _shutdown_process(gateway_process, timeout_sec=5.0)
+        _restore_shutdown_signal_handlers(previous_signal_handlers)
 
     if interrupted:
         return

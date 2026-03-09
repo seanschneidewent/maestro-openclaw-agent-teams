@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import warnings
+
 from .fleet.projects.provisioning import *  # noqa: F401,F403
 from .fleet.projects.provisioning import run_project_create
 
 
 def run_purchase(*args, **kwargs):
+    warnings.warn(
+        "`maestro.purchase.run_purchase` is deprecated; use `maestro_fleet.provisioning.run_project_create` or `maestro-fleet project create`.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     return run_project_create(*args, **kwargs)
 
 

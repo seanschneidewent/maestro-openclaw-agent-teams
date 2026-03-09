@@ -126,6 +126,50 @@ def test_run_purchase_non_interactive_dry_run(monkeypatch, tmp_path: Path):
     assert not (store_root / "alpha-build").exists()
 
 
+def test_run_purchase_warns_as_deprecated_alias(monkeypatch):
+    monkeypatch.setattr(purchase, "run_project_create", lambda *args, **kwargs: 7)
+    monkeypatch.setattr(purchase, "_RUN_PURCHASE_DEPRECATED_WARNED", False)
+
+    with pytest.deprecated_call(match=r"run_purchase\(\) is deprecated"):
+        code = purchase.run_purchase(project_name="Alpha Build")
+
+    assert code == 7
+
+
+def test_root_run_project_create_delegates_to_package_owner(monkeypatch):
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "maestro_fleet.provisioning.run_project_create",
+        lambda **kwargs: (observed.setdefault("kwargs", kwargs), 0)[1],
+    )
+
+    code = purchase.run_project_create(
+        project_name="Alpha Build",
+        assignee="Andy",
+        telegram_token="123456:ABCDEF",
+        dry_run=True,
+        non_interactive=True,
+    )
+
+    assert code == 0
+    assert observed["kwargs"] == {
+        "project_name": "Alpha Build",
+        "assignee": "Andy",
+        "superintendent": None,
+        "model": None,
+        "api_key": None,
+        "telegram_token": "123456:ABCDEF",
+        "pairing_code": None,
+        "store_override": None,
+        "dry_run": True,
+        "json_output": False,
+        "non_interactive": True,
+        "skip_remote_validation": False,
+        "allow_openclaw_override": False,
+    }
+
+
 def test_run_purchase_has_no_payment_gate_after_free_slot(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     workspace = home / ".openclaw" / "workspace-maestro"
@@ -243,6 +287,55 @@ def test_run_purchase_preserves_registered_project_agent(monkeypatch, tmp_path: 
         "agentId": "maestro-project-alpha-build",
         "match": {"channel": "telegram", "accountId": "maestro-project-alpha-build"},
     } in bindings
+
+
+def test_update_openclaw_for_project_writes_project_metadata_to_store(monkeypatch, tmp_path: Path):
+    config_path = tmp_path / "openclaw.json"
+    project_workspace = tmp_path / "workspace" / "projects" / "alpha-build"
+    project_store = tmp_path / "store" / "alpha-build"
+    config = _base_config(tmp_path / "workspace")
+    _write_json(project_store / "project.json", {"name": "Alpha Build", "slug": "alpha-build"})
+
+    monkeypatch.setattr(
+        purchase,
+        "resolve_network_urls",
+        lambda **kwargs: {
+            "recommended_url": "http://localhost:3000/alpha-build/",
+            "localhost_url": "http://localhost:3000/alpha-build/",
+            "tailnet_url": "",
+        },
+    )
+    monkeypatch.setattr(purchase, "_current_command_center_port", lambda default_port=3000: 3000)
+
+    result = purchase._update_openclaw_for_project(
+        config=config,
+        config_path=config_path,
+        project_slug="alpha-build",
+        project_name="Alpha Build",
+        model="openai/gpt-5.2",
+        provider_env_key="OPENAI_API_KEY",
+        provider_key="sk-test-openai-key",
+        telegram_token="123456:ABCDEF",
+        telegram_bot_username="alpha_bot",
+        telegram_bot_display_name="Alpha Bot",
+        assignee="Andy",
+        project_workspace=project_workspace,
+        project_store_path=project_store,
+        dry_run=False,
+    )
+
+    assert result["workspace_env_written"] is True
+    env_text = (project_workspace / ".env").read_text(encoding="utf-8")
+    assert "MAESTRO_PROJECT_SLUG=alpha-build" in env_text
+    assert not (project_workspace / "project_agent.json").exists()
+
+    payload = json.loads((project_store / "project.json").read_text(encoding="utf-8"))
+    maestro_meta = payload.get("maestro", {})
+    assert maestro_meta["project_slug"] == "alpha-build"
+    assert maestro_meta["project_name"] == "Alpha Build"
+    assert maestro_meta["assignee"] == "Andy"
+    assert maestro_meta["model"] == "openai/gpt-5.2"
+    assert maestro_meta["telegram_bot_username"] == "alpha_bot"
 
 
 def test_current_command_center_url_prefers_active_fleet_port(monkeypatch, tmp_path: Path):

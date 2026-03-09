@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from ...fleet_constants import (
+    DEFAULT_PROJECT_MODEL,
+    canonicalize_model,
+    default_model_from_agents as default_fleet_model_from_agents,
+)
+
 NATIVE_PLUGIN_ID = "maestro-native-tools"
+_PROJECT_METADATA_KEY = "maestro"
 
 CreateControlPayloadFn = Callable[[Path, str], dict[str, Any]]
 SyncFleetRegistryFn = Callable[[Path], dict[str, Any]]
 FindRegistryProjectFn = Callable[[dict[str, Any], str], dict[str, Any] | None]
-SaveFleetRegistryFn = Callable[[Path, dict[str, Any]], None]
 ResolveNodeIdentityFn = Callable[[dict[str, Any]], tuple[str, str, str]]
 RegisterProjectAgentFn = Callable[..., dict[str, Any]]
 LoadOpenClawConfigFn = Callable[[Path | None], tuple[dict[str, Any], Path]]
@@ -23,6 +30,54 @@ LoadJsonFn = Callable[[Path], Any]
 SaveJsonFn = Callable[[Path, Any], None]
 NowIsoFn = Callable[[], str]
 SlugifyFn = Callable[[str], str]
+
+
+def _clean(value: Any) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _normalize_input_root(value: Any) -> str:
+    clean = _clean(value)
+    if not clean:
+        return ""
+    return str(Path(clean).expanduser().resolve())
+
+
+def _load_project_json(project_dir: Path) -> dict[str, Any]:
+    project_json_path = project_dir / "project.json"
+    if not project_json_path.exists():
+        return {}
+    try:
+        payload = json.loads(project_json_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_project_metadata(project_dir: Path, *, save_json_fn: SaveJsonFn, **fields: Any) -> None:
+    project_json_path = project_dir / "project.json"
+    payload = _load_project_json(project_dir)
+    metadata = payload.get(_PROJECT_METADATA_KEY) if isinstance(payload.get(_PROJECT_METADATA_KEY), dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    changed = False
+    for key, raw_value in fields.items():
+        if raw_value is None:
+            continue
+        value = _normalize_input_root(raw_value) if key == "ingest_input_root" else _clean(raw_value)
+        if not value:
+            continue
+        if metadata.get(key) == value:
+            continue
+        metadata[key] = value
+        changed = True
+
+    if not changed:
+        return
+
+    payload[_PROJECT_METADATA_KEY] = metadata
+    save_json_fn(project_json_path, payload)
 
 
 def _ensure_native_plugin_config(config: dict[str, Any]) -> bool:
@@ -72,17 +127,7 @@ def _sync_native_extension(workspace_root: Path) -> bool:
 
 
 def default_model_from_agents(agent_list: list[dict[str, Any]]) -> str:
-    for agent in agent_list:
-        if not isinstance(agent, dict):
-            continue
-        if agent.get("id") == "maestro-company" and isinstance(agent.get("model"), str):
-            return str(agent["model"])
-    for agent in agent_list:
-        if not isinstance(agent, dict):
-            continue
-        if isinstance(agent.get("model"), str) and agent.get("model").strip():
-            return str(agent["model"]).strip()
-    return "google/gemini-3-pro-preview"
+    return default_fleet_model_from_agents(agent_list, fallback=DEFAULT_PROJECT_MODEL)
 
 
 def create_project_node(
@@ -94,11 +139,9 @@ def create_project_node(
     save_json_fn: SaveJsonFn,
     sync_fleet_registry_fn: SyncFleetRegistryFn,
     find_registry_project_fn: FindRegistryProjectFn,
-    save_fleet_registry_fn: SaveFleetRegistryFn,
     resolve_node_identity_fn: ResolveNodeIdentityFn,
     project_control_payload_fn: CreateControlPayloadFn,
     register_project_agent_fn: RegisterProjectAgentFn,
-    registry_version: int,
     project_slug: str | None = None,
     project_dir_name: str | None = None,
     ingest_input_root: str | None = None,
@@ -176,6 +219,25 @@ def create_project_node(
             },
         )
 
+    normalized_username = ""
+    if telegram_bot_username and normalize_bot_username_fn is not None:
+        normalized_username = normalize_bot_username_fn(telegram_bot_username)
+    elif telegram_bot_username:
+        normalized_username = _clean(telegram_bot_username)
+
+    if not dry_run:
+        _save_project_metadata(
+            project_dir,
+            save_json_fn=save_json_fn,
+            status="setup",
+            ingest_input_root=ingest_input_root,
+            superintendent=superintendent,
+            assignee=assignee,
+            telegram_bot_username=normalized_username,
+            telegram_bot_display_name=telegram_bot_display_name,
+            model=agent_model,
+        )
+
     registry = sync_fleet_registry_fn(root)
     entry = find_registry_project_fn(registry, slug)
     if not entry:
@@ -196,7 +258,6 @@ def create_project_node(
             "telegram_bot_display_name": "",
             "last_conversation_at": "",
         }
-        registry.setdefault("projects", []).append(entry)
 
     if ingest_input_root:
         entry["ingest_input_root"] = str(Path(ingest_input_root).expanduser().resolve())
@@ -204,26 +265,14 @@ def create_project_node(
         entry["superintendent"] = superintendent.strip() or "Unknown"
     if assignee:
         entry["assignee"] = assignee.strip() or "Unassigned"
-    if telegram_bot_username and normalize_bot_username_fn is not None:
-        entry["telegram_bot_username"] = normalize_bot_username_fn(telegram_bot_username)
-    elif telegram_bot_username:
-        entry["telegram_bot_username"] = str(telegram_bot_username).strip()
+    if normalized_username:
+        entry["telegram_bot_username"] = normalized_username
     if telegram_bot_display_name:
         entry["telegram_bot_display_name"] = telegram_bot_display_name.strip()
     display_name, source, handle = resolve_node_identity_fn(entry)
     entry["node_display_name"] = display_name
     entry["node_identity_source"] = source
     entry["node_handle"] = handle
-
-    if not dry_run:
-        save_fleet_registry_fn(root, {
-            "version": registry_version,
-            "updated_at": now_iso_fn(),
-            "store_root": str(root),
-            "projects": sorted(registry.get("projects", []), key=lambda x: x.get("project_name", "").lower()),
-        })
-        registry = sync_fleet_registry_fn(root)
-        entry = find_registry_project_fn(registry, slug) or entry
 
     controls = project_control_payload_fn(root, slug)
     registration = None
@@ -261,14 +310,12 @@ def onboard_project_store(
     now_iso_fn: NowIsoFn,
     sync_fleet_registry_fn: SyncFleetRegistryFn,
     find_registry_project_fn: FindRegistryProjectFn,
-    save_fleet_registry_fn: SaveFleetRegistryFn,
     resolve_node_identity_fn: ResolveNodeIdentityFn,
     register_project_agent_fn: RegisterProjectAgentFn,
     build_ingest_command_fn: Callable[[Path, dict[str, Any], str | None, int], dict[str, Any]],
     build_ingest_preflight_fn: Callable[[Path, dict[str, Any], str | None], dict[str, Any]],
     resolve_network_urls_fn: Callable[..., dict[str, Any]],
     quote_path_fn: Callable[[str | Path], str],
-    registry_version: int,
     default_web_port: int,
     default_input_placeholder: str,
     project_name: str | None = None,
@@ -360,6 +407,15 @@ def onboard_project_store(
         destination_project["name"] = resolved_name
         destination_project["slug"] = resolved_slug
         save_json_fn(destination_dir / "project.json", destination_project)
+        _save_project_metadata(
+            destination_dir,
+            save_json_fn=save_json_fn,
+            status="active",
+            ingest_input_root=ingest_input_root,
+            superintendent=superintendent,
+            assignee=assignee,
+            model=agent_model,
+        )
 
     registry = sync_fleet_registry_fn(root)
     entry = find_registry_project_fn(registry, resolved_slug)
@@ -382,8 +438,6 @@ def onboard_project_store(
             "telegram_bot_display_name": "",
             "last_conversation_at": "",
         }
-        registry.setdefault("projects", []).append(entry)
-        entry_changed = True
     else:
         entry_changed = False
 
@@ -427,14 +481,6 @@ def onboard_project_store(
     if entry.get("node_handle") != handle:
         entry["node_handle"] = handle
         entry_changed = True
-
-    if entry_changed and not dry_run:
-        save_fleet_registry_fn(root, {
-            "version": registry_version,
-            "updated_at": now_iso_fn(),
-            "store_root": str(root),
-            "projects": sorted(registry.get("projects", []), key=lambda x: x.get("project_name", "").lower()),
-        })
 
     registration = None
     if register_agent:
@@ -574,7 +620,10 @@ def register_project_agent(
     project_workspace = workspace_root / "projects" / project_slug
     project_agent_id = f"maestro-project-{project_slug}"
 
-    selected_model = model.strip() if isinstance(model, str) and model.strip() else default_model_from_agents(agent_list)
+    selected_model = canonicalize_model(
+        model.strip() if isinstance(model, str) and model.strip() else default_model_from_agents(agent_list),
+        fallback=DEFAULT_PROJECT_MODEL,
+    )
 
     desired_agent = {
         "id": project_agent_id,
@@ -611,13 +660,15 @@ def register_project_agent(
         env_path = project_workspace / ".env"
         desired_env_line = f"MAESTRO_STORE={project_store_path}\n"
         role_line = "MAESTRO_AGENT_ROLE=project\n"
+        slug_line = f"MAESTRO_PROJECT_SLUG={project_slug}\n"
         if not env_path.exists():
-            env_path.write_text(desired_env_line + role_line, encoding="utf-8")
+            env_path.write_text(desired_env_line + role_line + slug_line, encoding="utf-8")
         else:
             current_lines = env_path.read_text(encoding="utf-8").splitlines()
             updated_lines: list[str] = []
             saw_store = False
             saw_role = False
+            saw_slug = False
             for raw in current_lines:
                 line = raw.rstrip("\n")
                 if line.startswith("MAESTRO_STORE="):
@@ -628,11 +679,17 @@ def register_project_agent(
                     updated_lines.append(role_line.rstrip("\n"))
                     saw_role = True
                     continue
+                if line.startswith("MAESTRO_PROJECT_SLUG="):
+                    updated_lines.append(slug_line.rstrip("\n"))
+                    saw_slug = True
+                    continue
                 updated_lines.append(line)
             if not saw_store:
                 updated_lines.append(desired_env_line.rstrip("\n"))
             if not saw_role:
                 updated_lines.append(role_line.rstrip("\n"))
+            if not saw_slug:
+                updated_lines.append(slug_line.rstrip("\n"))
             normalized = "\n".join(updated_lines).rstrip("\n") + "\n"
             env_path.write_text(normalized, encoding="utf-8")
         _sync_native_extension(project_workspace)

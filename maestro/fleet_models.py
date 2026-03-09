@@ -9,7 +9,8 @@ from typing import Any
 from rich.console import Console
 from rich.panel import Panel
 
-from .control_plane import ensure_telegram_account_bindings, save_fleet_registry, sync_fleet_registry
+from .command_center import discover_project_dirs
+from .control_plane import ensure_telegram_account_bindings
 from .fleet_deploy import (
     _approve_telegram_pairing_code,
     _fleet_gateway_port,
@@ -17,6 +18,7 @@ from .fleet_deploy import (
     _validate_api_key,
     _validate_telegram_token,
 )
+from .fleet_constants import canonicalize_model
 from .install_state import resolve_fleet_store_root
 from .openclaw_guard import ensure_openclaw_override_allowed
 from .openclaw_profile import (
@@ -28,6 +30,8 @@ from .workspace_templates import provider_env_key_for_model, render_workspace_en
 
 
 console = Console()
+
+_PROJECT_METADATA_KEY = "maestro"
 
 
 def _load_openclaw_config(home_dir: Path | None = None) -> tuple[dict[str, Any], Path]:
@@ -119,6 +123,7 @@ def _write_workspace_env(
     provider_key: str,
     gemini_key: str,
     agent_role: str,
+    project_slug: str | None = None,
 ):
     workspace = Path(str(workspace_path or "")).expanduser()
     if not str(workspace_path or "").strip():
@@ -131,7 +136,72 @@ def _write_workspace_env(
         gemini_key=gemini_key,
         agent_role=agent_role,
     )
+    clean_slug = str(project_slug or "").strip()
+    if clean_slug:
+        payload = payload.rstrip("\n") + f"\nMAESTRO_PROJECT_SLUG={clean_slug}\n"
     (workspace / ".env").write_text(payload, encoding="utf-8")
+
+
+def _load_project_json(project_dir: Path) -> dict[str, Any]:
+    payload = load_json(project_dir / "project.json", default={})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _project_store_entry(project_dir: Path) -> dict[str, Any]:
+    payload = _load_project_json(project_dir)
+    maestro_meta = payload.get(_PROJECT_METADATA_KEY) if isinstance(payload.get(_PROJECT_METADATA_KEY), dict) else {}
+    if not isinstance(maestro_meta, dict):
+        maestro_meta = {}
+    project_name = str(payload.get("name", "")).strip() or project_dir.name
+    project_slug = slugify(str(payload.get("slug", "")).strip() or project_name or project_dir.name)
+    return {
+        "project_slug": project_slug,
+        "project_name": project_name,
+        "project_store_path": str(project_dir.resolve()),
+        "project_dir": project_dir.resolve(),
+        "assignee": str(maestro_meta.get("assignee", "")).strip(),
+        "superintendent": str(maestro_meta.get("superintendent", "")).strip(),
+        "telegram_bot_username": str(maestro_meta.get("telegram_bot_username", "")).strip(),
+        "telegram_bot_display_name": str(maestro_meta.get("telegram_bot_display_name", "")).strip(),
+        "model": str(maestro_meta.get("model", "")).strip(),
+    }
+
+
+def _resolve_project_entry(store_root: Path, requested: str) -> dict[str, Any] | None:
+    requested_text = str(requested or "").strip()
+    if not requested_text:
+        return None
+    requested_slug = slugify(requested_text)
+    for project_dir in discover_project_dirs(store_root):
+        entry = _project_store_entry(project_dir)
+        slug = str(entry.get("project_slug", "")).strip()
+        name = str(entry.get("project_name", "")).strip()
+        if slug == requested_text or slug == requested_slug or name.lower() == requested_text.lower():
+            return entry
+    return None
+
+
+def _save_project_metadata(project_dir: Path, **fields: Any) -> None:
+    payload = _load_project_json(project_dir)
+    maestro_meta = payload.get(_PROJECT_METADATA_KEY) if isinstance(payload.get(_PROJECT_METADATA_KEY), dict) else {}
+    if not isinstance(maestro_meta, dict):
+        maestro_meta = {}
+
+    changed = False
+    for key, raw_value in fields.items():
+        value = str(raw_value or "").strip()
+        if not value:
+            continue
+        if maestro_meta.get(key) == value:
+            continue
+        maestro_meta[key] = value
+        changed = True
+
+    if not changed:
+        return
+
+    payload[_PROJECT_METADATA_KEY] = maestro_meta
+    save_json(project_dir / "project.json", payload)
 
 
 def run_set_commander_model(
@@ -142,7 +212,7 @@ def run_set_commander_model(
     allow_openclaw_override: bool = False,
     store_override: str | None = None,
 ) -> int:
-    selected_model = str(model or "").strip()
+    selected_model = canonicalize_model(model)
     provider_env_key = provider_env_key_for_model(selected_model)
     if not provider_env_key:
         console.print(f"[red]Unsupported model: {selected_model}[/]")
@@ -239,27 +309,15 @@ def run_set_project_model(
         console.print("[red]Project slug/name is required.[/]")
         return 1
 
-    selected_model = str(model or "").strip()
+    selected_model = canonicalize_model(model)
     provider_env_key = provider_env_key_for_model(selected_model)
     if not provider_env_key:
         console.print(f"[red]Unsupported model: {selected_model}[/]")
         return 1
 
     store_root = resolve_fleet_store_root(store_override)
-    registry = sync_fleet_registry(store_root)
-    projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
+    matched = _resolve_project_entry(store_root, requested)
     requested_slug = slugify(requested)
-    matched = next(
-        (
-            item for item in projects
-            if isinstance(item, dict) and (
-                str(item.get("project_slug", "")).strip() == requested
-                or str(item.get("project_slug", "")).strip() == requested_slug
-                or str(item.get("project_name", "")).strip().lower() == requested.lower()
-            )
-        ),
-        None,
-    )
     resolved_slug = str(matched.get("project_slug", "")).strip() if isinstance(matched, dict) else requested_slug
     if not resolved_slug:
         console.print(f"[red]Could not resolve project: {requested}[/]")
@@ -314,7 +372,12 @@ def run_set_project_model(
         provider_key=selected_key,
         gemini_key=gemini_key,
         agent_role="project",
+        project_slug=resolved_slug,
     )
+    if isinstance(matched, dict):
+        project_dir = matched.get("project_dir")
+        if isinstance(project_dir, Path):
+            _save_project_metadata(project_dir, model=selected_model)
 
     restart_ok, restart_detail = _restart_openclaw_gateway()
     console.print(
@@ -355,20 +418,8 @@ def run_set_project_telegram(
         return 1
 
     store_root = resolve_fleet_store_root(store_override)
-    registry = sync_fleet_registry(store_root)
-    projects = registry.get("projects", []) if isinstance(registry.get("projects"), list) else []
+    matched = _resolve_project_entry(store_root, requested)
     requested_slug = slugify(requested)
-    matched = next(
-        (
-            item for item in projects
-            if isinstance(item, dict) and (
-                str(item.get("project_slug", "")).strip() == requested
-                or str(item.get("project_slug", "")).strip() == requested_slug
-                or str(item.get("project_name", "")).strip().lower() == requested.lower()
-            )
-        ),
-        None,
-    )
     resolved_slug = str(matched.get("project_slug", "")).strip() if isinstance(matched, dict) else requested_slug
     if not resolved_slug:
         console.print(f"[red]Could not resolve project: {requested}[/]")
@@ -416,16 +467,14 @@ def run_set_project_telegram(
     binding_changes = ensure_telegram_account_bindings(config)
     save_json(config_path, config)
 
-    registry_changed = False
     if isinstance(matched, dict):
-        if username and str(matched.get("telegram_bot_username", "")).strip() != username:
-            matched["telegram_bot_username"] = username
-            registry_changed = True
-        if display_name and str(matched.get("telegram_bot_display_name", "")).strip() != display_name:
-            matched["telegram_bot_display_name"] = display_name
-            registry_changed = True
-        if registry_changed:
-            save_fleet_registry(store_root, registry)
+        project_dir = matched.get("project_dir")
+        if isinstance(project_dir, Path):
+            _save_project_metadata(
+                project_dir,
+                telegram_bot_username=username,
+                telegram_bot_display_name=display_name,
+            )
 
     pairing_result = "not requested"
     pairing_ok = True

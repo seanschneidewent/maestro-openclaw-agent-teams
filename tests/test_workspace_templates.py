@@ -39,6 +39,8 @@ def test_render_tools_md_includes_active_provider():
     assert "Verification Evidence" in content
     assert "Stop And Ask Rules" in content
     assert "Worked Examples" in content
+    assert "Use `AWARENESS.md` as the quick runtime summary for live URLs and access facts." in content
+    assert "Use `.env`, OpenClaw config, and `project.json` for machine-readable state." in content
 
 
 def test_render_workspace_env_for_non_gemini_primary():
@@ -141,6 +143,8 @@ def test_render_workspace_awareness_md_prefers_tailnet_when_available():
     assert "Recommended Workspace URL: `http://100.64.0.1:3000/alpha-project/`" in content
     assert "Tailnet Workspace URL: `http://100.64.0.1:3000/alpha-project/`" in content
     assert "Field Access Status: `ready`" in content
+    assert "Use this file as a quick summary for model, network, and access-link questions." in content
+    assert "If it conflicts with `.env`, OpenClaw config, or `project.json`, trust the machine-readable files." in content
 
 
 def test_render_company_identity_files_describe_company_setup_role():

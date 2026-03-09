@@ -111,6 +111,65 @@ def test_fleet_purchase_command_is_disabled(capsys):
     assert "disabled" in captured.out
 
 
+def test_run_fleet_project_create_uses_package_owner(monkeypatch):
+    parser = build_parser()
+    args = parser.parse_args([
+        "fleet",
+        "project",
+        "create",
+        "--project-name",
+        "ACME Tower",
+        "--assignee",
+        "Sean",
+        "--dry-run",
+    ])
+
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr("maestro_fleet.provisioning.run_project_create", lambda **kwargs: (observed.setdefault("kwargs", kwargs), 0)[1])
+    monkeypatch.setattr("maestro.cli.fleet_enabled", lambda: True)
+
+    _run_fleet(args)
+
+    assert observed["kwargs"] == {
+        "project_name": "ACME Tower",
+        "assignee": "Sean",
+        "superintendent": None,
+        "model": None,
+        "api_key": None,
+        "telegram_token": None,
+        "pairing_code": None,
+        "store_override": None,
+        "dry_run": True,
+        "json_output": False,
+        "non_interactive": False,
+        "skip_remote_validation": False,
+        "allow_openclaw_override": False,
+    }
+
+
+def test_run_fleet_enable_uses_package_update_and_doctor(monkeypatch, capsys):
+    parser = build_parser()
+    args = parser.parse_args(["fleet", "enable", "--no-restart"])
+
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr("maestro_fleet.update.run_update", lambda **kwargs: (observed.setdefault("update", kwargs), 0)[1])
+    monkeypatch.setattr("maestro_fleet.doctor.run_doctor", lambda **kwargs: (observed.setdefault("doctor", kwargs), 0)[1])
+    monkeypatch.setattr("maestro.cli.set_profile", lambda profile, fleet=False: {"profile": profile, "fleet_enabled": fleet})
+    monkeypatch.setattr(
+        "maestro.control_plane.resolve_network_urls",
+        lambda web_port=3000: {"recommended_url": f"http://localhost:{web_port}/command-center"},
+    )
+
+    _run_fleet(args)
+
+    assert observed["update"] == {"restart_gateway": False, "dry_run": False}
+    assert observed["doctor"] == {"fix": True, "restart_gateway": False, "json_output": False}
+    captured = capsys.readouterr()
+    assert "Fleet profile enabled" in captured.out
+
+
 def test_fleet_deploy_parser():
     parser = build_parser()
     args = parser.parse_args([

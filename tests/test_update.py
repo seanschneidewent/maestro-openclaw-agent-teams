@@ -67,7 +67,7 @@ def test_update_no_changes_when_already_current(tmp_path: Path):
                     "id": "maestro-company",
                     "name": "The Commander",
                     "default": True,
-                    "model": "google/gemini-3-pro-preview",
+                    "model": "google/gemini-3.1-pro-preview",
                     "workspace": str(workspace),
                 }
             ]
@@ -89,7 +89,7 @@ def test_update_no_changes_when_already_current(tmp_path: Path):
     (workspace / "knowledge_store").mkdir(exist_ok=True)
     (workspace / "AWARENESS.md").write_text(
         render_workspace_awareness_md(
-            model="google/gemini-3-pro-preview",
+            model="google/gemini-3.1-pro-preview",
             preferred_url="http://localhost:3000/command-center",
             local_url="http://localhost:3000/command-center",
             tailnet_url="",
@@ -246,6 +246,54 @@ def test_update_removes_duplicate_default_telegram_account_for_fleet(tmp_path: P
     assert accounts.get("maestro-company", {}).get("botToken") == "123456:ABC_DEF"
 
 
+def test_update_normalizes_legacy_fleet_model_ids(tmp_path: Path):
+    home = tmp_path / "home"
+    openclaw_dir = home / ".openclaw"
+    workspace = openclaw_dir / "workspace-maestro"
+    template_dir = _make_template_dir(tmp_path)
+
+    config = {
+        "agents": {
+            "list": [
+                {
+                    "id": "maestro-company",
+                    "name": "The Commander",
+                    "default": True,
+                    "model": "openai/gpt-5.2",
+                    "workspace": str(workspace),
+                },
+                {
+                    "id": "maestro-project-alpha",
+                    "name": "Maestro (Alpha)",
+                    "default": False,
+                    "model": "google/gemini-3-pro-preview",
+                    "workspace": str(workspace / "projects" / "alpha"),
+                },
+            ]
+        },
+        "channels": {"telegram": _default_telegram()},
+        "bindings": _default_bindings(),
+    }
+    config_path = openclaw_dir / "openclaw.json"
+    _write_json(config_path, config)
+
+    summary, code = perform_update(
+        restart_gateway=False,
+        home_dir=home,
+        template_dir=template_dir,
+        command_runner=lambda cmd: (False, ""),
+    )
+
+    assert code == 0
+    assert summary.config_changed
+    updated = json.loads(config_path.read_text(encoding="utf-8"))
+    agents = updated.get("agents", {}).get("list", [])
+    commander = next(item for item in agents if item.get("id") == "maestro-company")
+    project = next(item for item in agents if item.get("id") == "maestro-project-alpha")
+    assert commander["model"] == "openai/gpt-5.4"
+    assert project["model"] == "google/gemini-3.1-pro-preview"
+
+
 def test_update_backfills_project_workspace_awareness_and_agents(tmp_path: Path):
     home = tmp_path / "home"
     openclaw_dir = home / ".openclaw"
@@ -303,6 +351,113 @@ def test_update_backfills_project_workspace_awareness_and_agents(tmp_path: Path)
     tools_md = (project_workspace / "TOOLS.md").read_text(encoding="utf-8")
     assert "Read `AWARENESS.md` and use the recommended workspace URL." in tools_md
     assert not (project_workspace / "BOOTSTRAP.md").exists()
+
+
+def test_update_uses_project_store_metadata_when_project_agent_json_is_missing(tmp_path: Path):
+    home = tmp_path / "home"
+    openclaw_dir = home / ".openclaw"
+    workspace = openclaw_dir / "workspace-maestro"
+    project_workspace = workspace / "projects" / "alpha-project"
+    project_store = tmp_path / "alpha-store"
+    template_dir = _make_template_dir(tmp_path)
+
+    config = {
+        "agents": {
+            "list": [
+                {
+                    "id": "maestro-company",
+                    "name": "The Commander",
+                    "default": True,
+                    "model": "openai/gpt-5.4",
+                    "workspace": str(workspace),
+                },
+                {
+                    "id": "maestro-project-alpha-project",
+                    "name": "Maestro (Alpha Project)",
+                    "default": False,
+                    "workspace": str(project_workspace),
+                },
+            ]
+        },
+        "channels": {"telegram": _default_telegram()},
+        "bindings": _default_bindings(),
+    }
+    _write_json(openclaw_dir / "openclaw.json", config)
+    _write_json(project_store / "project.json", {"name": "Alpha Project", "slug": "alpha-project", "maestro": {"model": "anthropic/claude-opus-4-6"}})
+
+    project_workspace.mkdir(parents=True, exist_ok=True)
+    (project_workspace / ".env").write_text(
+        f"MAESTRO_AGENT_ROLE=project\nMAESTRO_STORE={project_store}\n",
+        encoding="utf-8",
+    )
+
+    summary, code = perform_update(
+        restart_gateway=False,
+        home_dir=home,
+        template_dir=template_dir,
+        command_runner=lambda cmd: (False, ""),
+    )
+
+    assert code == 0
+    assert summary.changed
+    awareness = (project_workspace / "AWARENESS.md").read_text(encoding="utf-8")
+    assert "- Model: `anthropic/claude-opus-4-6`" in awareness
+    assert not (project_workspace / "project_agent.json").exists()
+
+
+def test_update_ignores_legacy_project_agent_json_when_store_metadata_exists(tmp_path: Path):
+    home = tmp_path / "home"
+    openclaw_dir = home / ".openclaw"
+    workspace = openclaw_dir / "workspace-maestro"
+    project_workspace = workspace / "projects" / "alpha-project"
+    project_store = tmp_path / "alpha-store"
+    template_dir = _make_template_dir(tmp_path)
+
+    config = {
+        "agents": {
+            "list": [
+                {
+                    "id": "maestro-company",
+                    "name": "The Commander",
+                    "default": True,
+                    "model": "openai/gpt-5.4",
+                    "workspace": str(workspace),
+                },
+                {
+                    "id": "maestro-project-alpha-project",
+                    "name": "Maestro (Alpha Project)",
+                    "default": False,
+                    "workspace": str(project_workspace),
+                },
+            ]
+        },
+        "channels": {"telegram": _default_telegram()},
+        "bindings": _default_bindings(),
+    }
+    _write_json(openclaw_dir / "openclaw.json", config)
+    _write_json(
+        project_store / "project.json",
+        {"name": "Alpha Project", "slug": "alpha-project", "maestro": {"model": "anthropic/claude-opus-4-6"}},
+    )
+
+    project_workspace.mkdir(parents=True, exist_ok=True)
+    (project_workspace / ".env").write_text(
+        f"MAESTRO_AGENT_ROLE=project\nMAESTRO_STORE={project_store}\n",
+        encoding="utf-8",
+    )
+    _write_json(project_workspace / "project_agent.json", {"model": "openai/gpt-5.4"})
+
+    summary, code = perform_update(
+        restart_gateway=False,
+        home_dir=home,
+        template_dir=template_dir,
+        command_runner=lambda cmd: (False, ""),
+    )
+
+    assert code == 0
+    assert summary.changed
+    awareness = (project_workspace / "AWARENESS.md").read_text(encoding="utf-8")
+    assert "- Model: `anthropic/claude-opus-4-6`" in awareness
 
 
 def test_update_passes_command_runner_to_project_workspace_url_sync(tmp_path: Path, monkeypatch):
