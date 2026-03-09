@@ -94,8 +94,38 @@ function truncateText(value: unknown, limit = 2500): string {
   return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
+function queryTerms(query: string): { phrase: string; terms: string[] } {
+  const phrase = asString(query).toLowerCase();
+  if (!phrase) {
+    return { phrase: "", terms: [] };
+  }
+  const seen = new Set<string>();
+  const terms = phrase
+    .split(/[^a-z0-9]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+    .filter((token) => {
+      if (seen.has(token)) {
+        return false;
+      }
+      seen.add(token);
+      return true;
+    });
+  return { phrase, terms: terms.length > 0 ? terms : [phrase] };
+}
+
 function listSlice(value: unknown, limit = 12): unknown[] {
   return Array.isArray(value) ? value.slice(0, Math.max(0, limit)) : [];
+}
+
+function readWorkspaceEnv(workspaceDir: string, key: string): string {
+  const envPath = path.join(workspaceDir, ".env");
+  if (!fs.existsSync(envPath)) {
+    return "";
+  }
+  const content = fs.readFileSync(envPath, "utf-8");
+  const match = content.match(new RegExp(`^${key}=([^\\n]+)$`, "m"));
+  return match?.[1]?.trim() || "";
 }
 
 function resolveAwarenessUrls(workspaceDir: string): {
@@ -103,18 +133,8 @@ function resolveAwarenessUrls(workspaceDir: string): {
   tailnet_url: string;
   localhost_url: string;
 } {
-  const readWorkspaceEnv = (key: string): string => {
-    const envPath = path.join(workspaceDir, ".env");
-    if (!fs.existsSync(envPath)) {
-      return "";
-    }
-    const content = fs.readFileSync(envPath, "utf-8");
-    const match = content.match(new RegExp(`^${key}=([^\\n]+)$`, "m"));
-    return match?.[1]?.trim() || "";
-  };
-
   const resolveRoutePath = (): string => {
-    const role = readWorkspaceEnv("MAESTRO_AGENT_ROLE").toLowerCase();
+    const role = readWorkspaceEnv(workspaceDir, "MAESTRO_AGENT_ROLE").toLowerCase();
     if (role === "company") {
       return "/command-center";
     }
@@ -168,7 +188,7 @@ function resolveAwarenessUrls(workspaceDir: string): {
 
 function resolveStoreRoot(pluginConfig: AnyRecord, workspaceDir: string): string {
   const configStore = asString(pluginConfig.storeRoot);
-  const envStore = asString(process.env.MAESTRO_STORE);
+  const envStore = asString(process.env.MAESTRO_STORE) || readWorkspaceEnv(workspaceDir, "MAESTRO_STORE");
   const raw = configStore || envStore || "knowledge_store";
   if (path.isAbsolute(raw)) {
     return raw;
@@ -235,7 +255,10 @@ function resolveProject(pluginConfig: AnyRecord, workspaceDir: string): ProjectR
   }
 
   const installState = readInstallState();
-  const requestedSlug = asString(process.env.MAESTRO_ACTIVE_PROJECT_SLUG) || asString(installState.active_project_slug);
+  const requestedSlug =
+    asString(process.env.MAESTRO_ACTIVE_PROJECT_SLUG)
+    || readWorkspaceEnv(workspaceDir, "MAESTRO_PROJECT_SLUG")
+    || asString(installState.active_project_slug);
   if (requestedSlug) {
     const selected = projects.find((item) => item.slug.toLowerCase() === requestedSlug.toLowerCase());
     if (selected) {
@@ -708,6 +731,144 @@ function scorePageHit(
   map.set(pageName, current);
 }
 
+function matchStrength(text: unknown, phrase: string, terms: string[]): number {
+  const blob = asString(text).toLowerCase();
+  if (!blob) {
+    return 0;
+  }
+  const matchedTerms = terms.filter((term) => blob.includes(term)).length;
+  if (phrase && blob.includes(phrase)) {
+    return Math.max(matchedTerms, terms.length);
+  }
+  return matchedTerms;
+}
+
+function scoreConceptEvidence(project: ProjectRef, query: string) {
+  const { phrase, terms } = queryTerms(query);
+  const pageScores = new Map<string, { score: number; reasons: string[]; matchedTerms: Set<string> }>();
+  const index = loadProjectIndex(project);
+  const allPages = listProjectPages(project);
+  const materials: AnyRecord[] = [];
+  const keywords: AnyRecord[] = [];
+  const pointerHits: AnyRecord[] = [];
+  const pageHits: AnyRecord[] = [];
+
+  const ensurePage = (pageName: string) => {
+    const current = pageScores.get(pageName) || { score: 0, reasons: [], matchedTerms: new Set<string>() };
+    pageScores.set(pageName, current);
+    return current;
+  };
+
+  const applyPageScore = (pageName: string, score: number, reason: string, matchedTerms: string[] = []) => {
+    if (!pageName || score <= 0) {
+      return;
+    }
+    const current = ensurePage(pageName);
+    current.score += score;
+    if (!current.reasons.includes(reason)) {
+      current.reasons.push(reason);
+    }
+    for (const term of matchedTerms) {
+      current.matchedTerms.add(term);
+    }
+  };
+
+  const readMatchedTerms = (value: unknown) => terms.filter((term) => asString(value).toLowerCase().includes(term));
+
+  for (const [term, refsRaw] of Object.entries(asRecord(index.materials))) {
+    const strength = matchStrength(term, phrase, terms);
+    if (strength === 0 || !Array.isArray(refsRaw)) {
+      continue;
+    }
+    const matchedTerms = readMatchedTerms(term);
+    materials.push({ text: term, strength, matched_terms: matchedTerms, found_in: refsRaw.slice(0, 20) });
+    for (const ref of refsRaw.slice(0, 80)) {
+      const refPage = asString(asRecord(ref).page);
+      if (refPage) {
+        applyPageScore(refPage, strength * 6, `material:${term}`, matchedTerms);
+      }
+    }
+  }
+
+  for (const [term, refsRaw] of Object.entries(asRecord(index.keywords))) {
+    const strength = matchStrength(term, phrase, terms);
+    if (strength === 0 || !Array.isArray(refsRaw)) {
+      continue;
+    }
+    const matchedTerms = readMatchedTerms(term);
+    keywords.push({ text: term, strength, matched_terms: matchedTerms, found_in: refsRaw.slice(0, 20) });
+    for (const ref of refsRaw.slice(0, 80)) {
+      const refPage = asString(asRecord(ref).page);
+      if (refPage) {
+        applyPageScore(refPage, strength * 5, `keyword:${term}`, matchedTerms);
+      }
+    }
+  }
+
+  for (const pageName of allPages) {
+    const pageNameStrength = matchStrength(pageName, phrase, terms);
+    if (pageNameStrength > 0) {
+      const matchedTerms = readMatchedTerms(pageName);
+      pageHits.push({ page_name: pageName, kind: "page_name", strength: pageNameStrength, matched_terms: matchedTerms });
+      applyPageScore(pageName, pageNameStrength, "page_name", matchedTerms);
+    }
+
+    const pass1 = loadPass1(project, pageName);
+    const reflection = asString(pass1.sheet_reflection);
+    const reflectionStrength = matchStrength(reflection, phrase, terms);
+    if (reflectionStrength > 0) {
+      const matchedTerms = readMatchedTerms(reflection);
+      pageHits.push({
+        page_name: pageName,
+        kind: "sheet_reflection",
+        strength: reflectionStrength,
+        matched_terms: matchedTerms,
+        excerpt: truncateText(reflection, 240),
+      });
+      applyPageScore(pageName, reflectionStrength * 4, "sheet_reflection", matchedTerms);
+    }
+
+    const pointers = asRecord(pass1.pointers);
+    for (const [regionId, pointerRaw] of Object.entries(pointers)) {
+      const detail = asString(asRecord(pointerRaw).content_markdown);
+      const pointerStrength = matchStrength(detail, phrase, terms);
+      if (pointerStrength === 0) {
+        continue;
+      }
+      const matchedTerms = readMatchedTerms(detail);
+      pointerHits.push({
+        page_name: pageName,
+        region_id: regionId,
+        strength: pointerStrength,
+        matched_terms: matchedTerms,
+        excerpt: truncateText(detail, 240),
+      });
+      applyPageScore(pageName, pointerStrength * 3, `pointer:${regionId}`, matchedTerms);
+    }
+  }
+
+  const topPages = [...pageScores.entries()]
+    .map(([pageName, meta]) => {
+      const pass1 = loadPass1(project, pageName);
+      return {
+        page_name: pageName,
+        score: meta.score,
+        reasons: meta.reasons.slice(0, 6),
+        matched_terms: [...meta.matchedTerms].sort(),
+        discipline: asString(pass1.discipline) || "General",
+        summary: truncateText(pass1.sheet_reflection, 420),
+      };
+    })
+    .sort((a, b) => b.score - a.score || b.matched_terms.length - a.matched_terms.length || a.page_name.localeCompare(b.page_name));
+
+  materials.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.text).localeCompare(String(b.text)));
+  keywords.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.text).localeCompare(String(b.text)));
+  pointerHits.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.page_name).localeCompare(String(b.page_name)));
+  pageHits.sort((a, b) => Number(b.strength) - Number(a.strength) || String(a.page_name).localeCompare(String(b.page_name)));
+
+  return { phrase, terms, materials, keywords, pointerHits, pageHits, topPages };
+}
+
 function toolResult(payload: AnyRecord): AnyRecord {
   return {
     content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
@@ -808,7 +969,7 @@ export default function register(api: {
       },
       {
         name: `${TOOL_PREFIX}search`,
-        description: "Search indexed project keywords/materials and score relevant sheets.",
+        description: "Search for concept evidence across materials, keywords, summaries, regions, and supporting sheets.",
         parameters: {
           type: "object",
           additionalProperties: false,
@@ -825,69 +986,95 @@ export default function register(api: {
               throw new Error("query is required.");
             }
             const limit = Math.max(1, Math.min(50, Math.trunc(asNumber(payload.limit, defaultSearchLimit))));
-            const queryLower = query.toLowerCase();
-            const index = loadProjectIndex(project);
-            const scores = new Map<string, { score: number; reasons: string[] }>();
-
-            const allPages = listProjectPages(project);
-            for (const pageName of allPages) {
-              if (pageName.toLowerCase().includes(queryLower)) {
-                scorePageHit(scores, pageName, 5, "page_name");
-              }
-            }
-
-            const keywords = asRecord(index.keywords);
-            for (const [term, refsRaw] of Object.entries(keywords)) {
-              if (!term.toLowerCase().includes(queryLower)) {
-                continue;
-              }
-              if (!Array.isArray(refsRaw)) {
-                continue;
-              }
-              for (const ref of refsRaw.slice(0, 80)) {
-                const refPage = asString(asRecord(ref).page);
-                if (refPage) {
-                  scorePageHit(scores, refPage, 3, `keyword:${term}`);
-                }
-              }
-            }
-
-            const materials = asRecord(index.materials);
-            for (const [term, refsRaw] of Object.entries(materials)) {
-              if (!term.toLowerCase().includes(queryLower)) {
-                continue;
-              }
-              if (!Array.isArray(refsRaw)) {
-                continue;
-              }
-              for (const ref of refsRaw.slice(0, 80)) {
-                const refPage = asString(asRecord(ref).page);
-                if (refPage) {
-                  scorePageHit(scores, refPage, 2, `material:${term}`);
-                }
-              }
-            }
-
-            const ranked = [...scores.entries()]
-              .map(([pageName, meta]) => {
-                const pass1 = loadPass1(project, pageName);
-                return {
-                  page_name: pageName,
-                  score: meta.score,
-                  reasons: meta.reasons.slice(0, 6),
-                  discipline: asString(pass1.discipline) || "General",
-                  summary: truncateText(pass1.sheet_reflection, 380),
-                };
-              })
-              .sort((a, b) => b.score - a.score || a.page_name.localeCompare(b.page_name))
-              .slice(0, limit);
+            const evidence = scoreConceptEvidence(project, query);
+            const ranked = evidence.topPages.slice(0, limit);
 
             return {
               ok: true,
               project_slug: project.slug,
               query,
+              matched_terms: evidence.terms,
+              evidence: {
+                materials: evidence.materials.slice(0, Math.min(limit, 8)),
+                keywords: evidence.keywords.slice(0, Math.min(limit, 8)),
+                pointer_hits: evidence.pointerHits.slice(0, Math.min(limit, 8)),
+                page_hits: evidence.pageHits.slice(0, Math.min(limit, 8)),
+              },
               count: ranked.length,
               results: ranked,
+            };
+          })(params),
+      },
+      {
+        name: `${TOOL_PREFIX}concept_trace`,
+        description: "Build a concept-evidence packet before rendering a workspace or action plan.",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            query: { type: "string" },
+            limit: { type: "integer", minimum: 1, maximum: 12 },
+          },
+          required: ["query"],
+        },
+        execute: (_id: string, params: unknown) =>
+          withProject((project, payload) => {
+            const query = asString(payload.query);
+            if (!query) {
+              throw new Error("query is required.");
+            }
+            const limit = Math.max(1, Math.min(12, Math.trunc(asNumber(payload.limit, 6))));
+            const evidence = scoreConceptEvidence(project, query);
+            const topPages = evidence.topPages.slice(0, limit);
+            const supportingRegions = evidence.pointerHits.slice(0, Math.max(limit, 4)).map((entry) => ({
+              page_name: entry.page_name,
+              region_id: entry.region_id,
+              matched_terms: entry.matched_terms,
+              excerpt: entry.excerpt,
+            }));
+            const explicit = topPages
+              .filter((row) => row.reasons.some((reason) => reason.startsWith("material:") || reason.startsWith("keyword:") || reason === "sheet_reflection"))
+              .slice(0, 6);
+            const inferred = topPages
+              .filter((row) => !row.reasons.some((reason) => reason.startsWith("material:") || reason.startsWith("keyword:") || reason === "sheet_reflection"))
+              .slice(0, 6);
+            const confidence = explicit.length >= 2 && (evidence.materials.length + evidence.keywords.length) >= 4
+              ? "high"
+              : topPages.length >= 2
+                ? "medium"
+                : "low";
+            const gaps: string[] = [];
+            if (evidence.pointerHits.length === 0) {
+              gaps.push("No region-level evidence matched directly; verify the concept with sheet summaries before rendering a workspace.");
+            }
+            if (evidence.materials.length === 0) {
+              gaps.push("No material matches were found directly; this concept currently leans on keywords and sheet reflections.");
+            }
+            if (topPages.length < 2) {
+              gaps.push("Very few sheets support this concept so far; treat the result as exploratory rather than final.");
+            }
+
+            return {
+              ok: true,
+              project_slug: project.slug,
+              query,
+              matched_terms: evidence.terms,
+              confidence,
+              concept_evidence: {
+                materials: evidence.materials.slice(0, 8),
+                keywords: evidence.keywords.slice(0, 8),
+                supporting_regions: supportingRegions,
+                top_pages: topPages,
+              },
+              claims: {
+                explicit,
+                inferred,
+              },
+              gaps,
+              next_moves: [
+                "Inspect the strongest sheets and regions before creating or updating a workspace.",
+                "If this concept affects execution, convert unresolved gaps into notes or schedule constraints after verifying the evidence.",
+              ],
             };
           })(params),
       },

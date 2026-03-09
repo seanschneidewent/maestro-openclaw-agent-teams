@@ -174,6 +174,26 @@ class TestKnowledgeQueries:
         assert isinstance(results, list)
         assert any(r["type"] == "pointer" for r in results)
 
+    def test_search_multi_term_query_matches_related_page(self, tools):
+        results = tools.search("brick waterproofing")
+        assert isinstance(results, list)
+        assert len(results) > 0
+        assert any(r["match"] == "A101_Floor_Plan_p001" for r in results if r["type"] == "page")
+
+    def test_concept_trace_returns_evidence_bundle(self, tools):
+        result = tools.concept_trace("brick waterproofing", limit=4)
+        assert isinstance(result, dict)
+        assert result["query"] == "brick waterproofing"
+        assert result["confidence"] in {"low", "medium", "high"}
+        assert result["concept_evidence"]["materials"]
+        assert result["concept_evidence"]["top_pages"]
+        assert any(page["page_name"] == "A101_Floor_Plan_p001" for page in result["concept_evidence"]["top_pages"])
+
+    def test_concept_trace_requires_query(self, tools):
+        result = tools.concept_trace("")
+        assert isinstance(result, str)
+        assert "required" in result.lower()
+
     def test_search_no_results(self, tools):
         result = tools.search("xyznonexistent")
         assert isinstance(result, str)

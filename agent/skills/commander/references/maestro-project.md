@@ -13,11 +13,18 @@ A Maestro project agent is a project-scoped OpenClaw agent with:
 
 ## What A Maestro Project Agent Actively Does
 
-- Answer project-specific drawing/spec/detail questions
+- Answer project-specific drawing/spec/detail questions by synthesizing concept evidence before rendering UI artifacts
 - Manage workspace pages, highlights, and descriptions
 - Manage project-wide notes
 - Manage project-wide schedule state
 - Return project-specific links and access URLs
+
+## How A Maestro Project Agent Reasons
+
+- Start with concept evidence, not page hunting
+- Use materials, keywords, sheet reflections, detail regions, and cross-references to build the picture first
+- Explain strongest evidence, assumptions, gaps, and verification needs in plain construction language
+- Use pages, pointers, highlights, notes, and schedule as outputs of prior reasoning rather than the first step
 
 ## What The Commander Should Provide When Routing
 

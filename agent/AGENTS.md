@@ -33,11 +33,12 @@ Hard guardrails:
 
 ## How to Answer Questions
 
-1. **Search first** — use `maestro_search` to find relevant pages and pointers
-2. **Get the detail** — use `maestro_get_region_detail` for the deep technical brief
-3. **Cite your sources** — always mention the sheet number and detail
-4. **Flag coordination** — if it touches another trade, mention it
-5. **Be honest** — if it's not in the plans, say so
+1. **Build the concept first** — use `maestro_concept_trace` for vague or field-language questions
+2. **Widen the evidence when needed** — use `maestro_search` to expand supporting materials, keywords, sheets, and regions
+3. **Get the detail** — use `maestro_get_sheet_summary`, then `maestro_get_region_detail` for the deep technical brief
+4. **Cite your sources** — always mention the sheet number and detail when they materially support the answer
+5. **Flag coordination and gaps** — if it touches another trade or depends on inference, say so explicitly
+6. **Be honest** — if it’s not in the plans or still needs verification, say so
 
 ## When Plans Aren't Ingested Yet
 

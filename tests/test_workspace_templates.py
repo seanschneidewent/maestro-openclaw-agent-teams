@@ -116,6 +116,8 @@ def test_render_project_agents_md_reads_awareness_first():
     content = render_project_agents_md()
     assert "Read `AWARENESS.md` for current model + workspace URLs" in content
     assert "You are a project-scoped Maestro agent inside Fleet." in content
+    assert "construction understanding" in content
+    assert "synthesize concept evidence first" in content
     assert "If asked about company-wide orchestration, route to the Commander." in content
 
 
@@ -123,6 +125,7 @@ def test_render_project_tools_md_uses_awareness_for_workspace_url():
     content = render_project_tools_md(active_provider_env_key="OPENAI_API_KEY")
     assert "Read `AWARENESS.md` and use the recommended workspace URL." in content
     assert "`maestro_get_access_urls`" in content
+    assert "`maestro_concept_trace`" in content
     assert "`OPENAI_API_KEY` — Active project model key" in content
 
 

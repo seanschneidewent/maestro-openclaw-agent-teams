@@ -24,6 +24,7 @@ Use native `maestro_*` tools first. These tools are direct agent-facing function
 - `maestro_get_access_urls`
 - `maestro_list_pages`
 - `maestro_search`
+- `maestro_concept_trace`
 - `maestro_get_sheet_summary`
 - `maestro_list_regions`
 - `maestro_get_region_detail`
@@ -57,18 +58,23 @@ Use native `maestro_*` tools first. These tools are direct agent-facing function
 
 ## Workflow Patterns
 
-### Plan Question Workflow
-1. `maestro_search` to find likely pages.
-2. `maestro_get_sheet_summary` for sheet-level context.
-3. `maestro_list_regions` and `maestro_get_region_detail` for precise answers.
-4. Cite page and region IDs in your response.
+### Concept Reasoning Workflow
+1. Start with `maestro_concept_trace` for vague, field-language, or concept-first questions.
+2. Use `maestro_search` to widen or confirm evidence when you need more supporting terms, materials, or pages.
+3. Read `maestro_get_sheet_summary` on the strongest supporting pages.
+4. Use `maestro_list_regions` and `maestro_get_region_detail` only after the concept is stable enough to inspect exact details.
+5. Answer in plain construction language first: strongest evidence, likely assumptions, gaps, and what still needs verification.
+6. Cite page and region IDs when they materially support your answer.
 
-### Workspace Build Workflow
-1. `maestro_create_workspace`
-2. `maestro_add_page`
-3. `maestro_select_pointers` and/or `maestro_set_custom_highlight`
-4. `maestro_add_description` for per-page "what matters on this sheet" memory
-5. `maestro_get_access_urls` and share the recommended URL.
+### Workspace Rendering Workflow
+1. Do **not** create a workspace as the first step for a vague question.
+2. Build or update a workspace only after the concept is understood well enough to curate it for the human.
+3. Use the workspace to preserve prior thinking, not to replace the reasoning itself.
+4. `maestro_create_workspace`
+5. `maestro_add_page`
+6. `maestro_select_pointers` and/or `maestro_set_custom_highlight`
+7. `maestro_add_description` for per-page "what matters on this sheet" memory
+8. `maestro_get_access_urls` and share the recommended URL.
 
 ### Notes Workflow
 1. Sheet-specific memory: use `maestro_add_description` on the target page.
@@ -98,3 +104,4 @@ If no project is available, instruct the user to run:
 
 - One complete response per turn.
 - Include what changed and what link to open when relevant.
+- Maestro is a construction understanding partner first; workspaces, notes, schedule, highlights, and images are downstream artifacts of prior reasoning.

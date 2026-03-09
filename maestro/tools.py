@@ -68,6 +68,33 @@ def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _query_terms(query: str) -> tuple[str, list[str]]:
+    phrase = str(query or "").strip().lower()
+    if not phrase:
+        return "", []
+    normalized = "".join(ch if ch.isalnum() else " " for ch in phrase)
+    terms: list[str] = []
+    seen: set[str] = set()
+    for token in normalized.split():
+        if len(token) < 2 or token in seen:
+            continue
+        seen.add(token)
+        terms.append(token)
+    if not terms:
+        terms = [phrase]
+    return phrase, terms
+
+
+def _match_strength(text: Any, full_query: str, terms: list[str]) -> int:
+    blob = str(text or "").lower()
+    if not blob:
+        return 0
+    matched_terms = sum(1 for term in terms if term in blob)
+    if full_query and full_query in blob:
+        return max(matched_terms, len(terms))
+    return matched_terms
+
+
 def _derive_schedule_variance_days(current_update: dict[str, Any]) -> int:
     activity_updates = current_update.get("activity_updates") if isinstance(current_update.get("activity_updates"), list) else []
     delays: list[int] = []
@@ -378,28 +405,262 @@ class MaestroTools:
             return f"Region '{region_id}' not found on '{page.get('name', page_name)}'."
         return pointer.get("content_markdown", "No detail available")
 
-    @requires_license
-    def search(self, query: str) -> list[dict[str, Any]] | str:
-        query_lower = query.lower()
-        results: list[dict[str, Any]] = []
-        idx = self.project.get("index", {})
+    def _score_pages_for_query(self, query: str) -> tuple[str, list[str], list[dict[str, Any]], dict[str, Any]]:
+        full_query, query_terms = _query_terms(query)
+        if not full_query:
+            return "", [], [], {"materials": [], "keywords": [], "pointer_hits": [], "page_hits": []}
 
-        if isinstance(idx, dict):
-            for material, sources in idx.get("materials", {}).items():
-                if query_lower in str(material).lower():
-                    results.append({"type": "material", "match": material, "found_in": sources})
-            for keyword, sources in idx.get("keywords", {}).items():
-                if query_lower in str(keyword).lower():
-                    results.append({"type": "keyword", "match": keyword, "found_in": sources})
+        page_scores: dict[str, dict[str, Any]] = {}
+        evidence = {
+            "materials": [],
+            "keywords": [],
+            "pointer_hits": [],
+            "page_hits": [],
+        }
+
+        def ensure_page(page_name: str) -> dict[str, Any]:
+            current = page_scores.get(page_name)
+            if current is None:
+                page = self.project.get("pages", {}).get(page_name, {})
+                current = {
+                    "page_name": page_name,
+                    "score": 0,
+                    "reasons": [],
+                    "discipline": str(page.get("discipline", "") or "General"),
+                    "summary": str(page.get("sheet_reflection", "") or ""),
+                    "matched_terms": set(),
+                }
+                page_scores[page_name] = current
+            return current
+
+        def apply_page_score(page_name: str, score: int, reason: str, matched_terms: list[str] | None = None):
+            if not page_name or score <= 0:
+                return
+            row = ensure_page(page_name)
+            row["score"] += score
+            if reason not in row["reasons"]:
+                row["reasons"].append(reason)
+            for term in matched_terms or []:
+                row["matched_terms"].add(term)
+
+        idx = self.project.get("index", {}) if isinstance(self.project.get("index", {}), dict) else {}
+
+        for material, sources in idx.get("materials", {}).items():
+            strength = _match_strength(material, full_query, query_terms)
+            if strength <= 0:
+                continue
+            material_text = str(material)
+            matched_terms = [term for term in query_terms if term in material_text.lower()]
+            evidence["materials"].append({
+                "text": material_text,
+                "strength": strength,
+                "matched_terms": matched_terms,
+                "found_in": sources if isinstance(sources, list) else [],
+            })
+            for source in sources if isinstance(sources, list) else []:
+                page_name = str(source.get("page", "") or "")
+                apply_page_score(page_name, strength * 6, f"material:{material_text}", matched_terms)
+
+        for keyword, sources in idx.get("keywords", {}).items():
+            strength = _match_strength(keyword, full_query, query_terms)
+            if strength <= 0:
+                continue
+            keyword_text = str(keyword)
+            matched_terms = [term for term in query_terms if term in keyword_text.lower()]
+            evidence["keywords"].append({
+                "text": keyword_text,
+                "strength": strength,
+                "matched_terms": matched_terms,
+                "found_in": sources if isinstance(sources, list) else [],
+            })
+            for source in sources if isinstance(sources, list) else []:
+                page_name = str(source.get("page", "") or "")
+                apply_page_score(page_name, strength * 5, f"keyword:{keyword_text}", matched_terms)
 
         for page_name, page in self.project.get("pages", {}).items():
-            if query_lower in str(page.get("sheet_reflection", "")).lower():
-                results.append({"type": "page", "match": page_name, "context": "sheet_reflection"})
-            for pointer_id, pointer in page.get("pointers", {}).items():
-                if query_lower in str(pointer.get("content_markdown", "")).lower():
-                    results.append({"type": "pointer", "match": f"{page_name}/{pointer_id}", "context": "content_markdown"})
+            page_name_strength = _match_strength(page_name, full_query, query_terms)
+            if page_name_strength > 0:
+                matched_terms = [term for term in query_terms if term in page_name.lower()]
+                evidence["page_hits"].append({
+                    "page_name": page_name,
+                    "kind": "page_name",
+                    "strength": page_name_strength,
+                    "matched_terms": matched_terms,
+                })
+                apply_page_score(page_name, page_name_strength, "page_name", matched_terms)
 
-        return results if results else f"No results for '{query}'"
+            reflection = str(page.get("sheet_reflection", "") or "")
+            reflection_strength = _match_strength(reflection, full_query, query_terms)
+            if reflection_strength > 0:
+                matched_terms = [term for term in query_terms if term in reflection.lower()]
+                evidence["page_hits"].append({
+                    "page_name": page_name,
+                    "kind": "sheet_reflection",
+                    "strength": reflection_strength,
+                    "matched_terms": matched_terms,
+                    "excerpt": reflection[:240],
+                })
+                apply_page_score(page_name, reflection_strength * 4, "sheet_reflection", matched_terms)
+
+            for pointer_id, pointer in page.get("pointers", {}).items():
+                detail = str(pointer.get("content_markdown", "") or "")
+                pointer_strength = _match_strength(detail, full_query, query_terms)
+                if pointer_strength <= 0:
+                    continue
+                matched_terms = [term for term in query_terms if term in detail.lower()]
+                evidence["pointer_hits"].append({
+                    "page_name": page_name,
+                    "region_id": pointer_id,
+                    "strength": pointer_strength,
+                    "matched_terms": matched_terms,
+                    "excerpt": detail[:240],
+                })
+                apply_page_score(page_name, pointer_strength * 3, f"pointer:{pointer_id}", matched_terms)
+
+        ranked_pages = sorted(
+            (
+                {
+                    **row,
+                    "reasons": row["reasons"][:6],
+                    "matched_terms": sorted(row["matched_terms"]),
+                }
+                for row in page_scores.values()
+            ),
+            key=lambda row: (-int(row["score"]), -len(row["matched_terms"]), str(row["page_name"]).lower()),
+        )
+
+        evidence["materials"] = sorted(
+            evidence["materials"],
+            key=lambda row: (-int(row["strength"]), -len(row["matched_terms"]), str(row["text"]).lower()),
+        )
+        evidence["keywords"] = sorted(
+            evidence["keywords"],
+            key=lambda row: (-int(row["strength"]), -len(row["matched_terms"]), str(row["text"]).lower()),
+        )
+        evidence["pointer_hits"] = sorted(
+            evidence["pointer_hits"],
+            key=lambda row: (-int(row["strength"]), str(row["page_name"]).lower(), str(row["region_id"]).lower()),
+        )
+        evidence["page_hits"] = sorted(
+            evidence["page_hits"],
+            key=lambda row: (-int(row["strength"]), str(row["page_name"]).lower(), str(row.get("kind", "")).lower()),
+        )
+        return full_query, query_terms, ranked_pages, evidence
+
+    @requires_license
+    def search(self, query: str) -> list[dict[str, Any]] | str:
+        query_lower, _, ranked_pages, evidence = self._score_pages_for_query(query)
+        if not query_lower:
+            return "Search query is required"
+        results: list[dict[str, Any]] = []
+        for row in evidence["materials"][:20]:
+            results.append({"type": "material", "match": row["text"], "strength": row["strength"], "matched_terms": row["matched_terms"], "found_in": row["found_in"]})
+        for row in evidence["keywords"][:20]:
+            results.append({"type": "keyword", "match": row["text"], "strength": row["strength"], "matched_terms": row["matched_terms"], "found_in": row["found_in"]})
+        for row in evidence["page_hits"][:15]:
+            results.append({"type": "page", "match": row["page_name"], "context": row["kind"], "strength": row["strength"], "matched_terms": row["matched_terms"], "excerpt": row.get("excerpt", "")})
+        for row in evidence["pointer_hits"][:20]:
+            results.append({"type": "pointer", "match": f"{row['page_name']}/{row['region_id']}", "context": "content_markdown", "strength": row["strength"], "matched_terms": row["matched_terms"], "excerpt": row.get("excerpt", "")})
+        if results:
+            return results
+        if ranked_pages:
+            return [
+                {
+                    "type": "page",
+                    "match": row["page_name"],
+                    "context": "ranked_page",
+                    "score": row["score"],
+                    "reasons": row["reasons"],
+                    "matched_terms": row["matched_terms"],
+                }
+                for row in ranked_pages[:20]
+            ]
+        return f"No results for '{query}'"
+
+    @requires_license
+    def concept_trace(self, query: str, limit: int = 8) -> dict[str, Any] | str:
+        full_query, query_terms, ranked_pages, evidence = self._score_pages_for_query(query)
+        if not full_query:
+            return "Concept query is required"
+
+        top_pages = ranked_pages[: max(1, min(limit, 12))]
+        explicit_claims: list[dict[str, Any]] = []
+        inferred_claims: list[dict[str, Any]] = []
+        for row in top_pages:
+            claim = {
+                "page_name": row["page_name"],
+                "discipline": row["discipline"],
+                "matched_terms": row["matched_terms"],
+                "reasons": row["reasons"],
+                "summary": str(row["summary"] or "")[:420],
+            }
+            if any(reason.startswith("material:") or reason.startswith("keyword:") or reason == "sheet_reflection" for reason in row["reasons"]):
+                explicit_claims.append(claim)
+            else:
+                inferred_claims.append(claim)
+
+        supporting_regions: list[dict[str, Any]] = []
+        seen_regions: set[tuple[str, str]] = set()
+        for hit in evidence["pointer_hits"]:
+            key = (str(hit["page_name"]), str(hit["region_id"]))
+            if key in seen_regions:
+                continue
+            seen_regions.add(key)
+            supporting_regions.append({
+                "page_name": hit["page_name"],
+                "region_id": hit["region_id"],
+                "matched_terms": hit["matched_terms"],
+                "excerpt": hit.get("excerpt", ""),
+            })
+            if len(supporting_regions) >= max(4, limit):
+                break
+
+        evidence_terms = [row["text"] for row in evidence["materials"][:6]] + [row["text"] for row in evidence["keywords"][:6]]
+        confidence = "low"
+        if explicit_claims and len(top_pages) >= 3 and (len(evidence["materials"]) + len(evidence["keywords"])) >= 4:
+            confidence = "high"
+        elif explicit_claims or len(top_pages) >= 2:
+            confidence = "medium"
+
+        gaps: list[str] = []
+        if not evidence["pointer_hits"]:
+            gaps.append("No region-level evidence matched directly; answer relies on sheet-level/index evidence.")
+        if not evidence["materials"]:
+            gaps.append("No material hits matched directly; concept is currently driven more by keywords and summaries.")
+        if len(top_pages) < 2:
+            gaps.append("Concept is supported by very few sheets; verify before turning it into a workspace or schedule decision.")
+
+        return {
+            "query": full_query,
+            "matched_terms": query_terms,
+            "confidence": confidence,
+            "concept_evidence": {
+                "materials": evidence["materials"][:8],
+                "keywords": evidence["keywords"][:8],
+                "supporting_regions": supporting_regions,
+                "top_pages": [
+                    {
+                        "page_name": row["page_name"],
+                        "discipline": row["discipline"],
+                        "score": row["score"],
+                        "matched_terms": row["matched_terms"],
+                        "reasons": row["reasons"],
+                        "summary": str(row["summary"] or "")[:420],
+                    }
+                    for row in top_pages
+                ],
+            },
+            "claims": {
+                "explicit": explicit_claims[:6],
+                "inferred": inferred_claims[:6],
+            },
+            "gaps": gaps,
+            "next_moves": [
+                "Use the top pages to inspect sheet summaries and region details before rendering a workspace.",
+                "If the concept will drive execution, compare evidence across details/spec language and record any unresolved gap as a note or schedule item.",
+            ],
+            "evidence_terms": evidence_terms,
+        }
 
     @requires_license
     def find_cross_references(self, page_name: str) -> dict[str, Any] | str:

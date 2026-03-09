@@ -130,6 +130,7 @@ def render_personal_tools_md(
         "- `maestro_get_access_urls`\n"
         "- `maestro_list_pages`\n"
         "- `maestro_search`\n"
+        "- `maestro_concept_trace`\n"
         "- `maestro_get_sheet_summary`\n"
         "- `maestro_list_regions`\n"
         "- `maestro_get_region_detail`\n"
