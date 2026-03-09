@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 
 ResolveNetworkUrlsFn = Callable[..., dict[str, Any]]
+NATIVE_PLUGIN_ID = "maestro-native-tools"
 
 
 def _skill_template_source(skill_name: str, template_root: Path | None = None) -> Path | None:
@@ -63,6 +64,31 @@ def _remove_workspace_skill_bundle(*, workspace: Path, skill_name: str, dry_run:
         return False
     if not dry_run:
         shutil.rmtree(destination)
+    return True
+
+
+def _native_extension_source() -> Path | None:
+    repo_root = Path(__file__).resolve().parents[1]
+    candidate = repo_root / "agent" / "extensions" / NATIVE_PLUGIN_ID
+    return candidate if candidate.exists() else None
+
+
+def sync_workspace_native_extension(*, workspace: Path, dry_run: bool = False) -> bool:
+    source = _native_extension_source()
+    if source is None:
+        return False
+
+    destination = workspace / ".openclaw" / "extensions" / NATIVE_PLUGIN_ID
+    desired = _skill_snapshot(source)
+    current = _skill_snapshot(destination) if destination.exists() else None
+    if current == desired:
+        return False
+
+    if not dry_run:
+        if destination.exists():
+            shutil.rmtree(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     return True
 
 
@@ -750,6 +776,10 @@ def sync_project_workspace_runtime_files(
         workspace=project_workspace,
         dry_run=dry_run,
     )
+    native_extension_synced = sync_workspace_native_extension(
+        workspace=project_workspace,
+        dry_run=dry_run,
+    )
 
     awareness_updated = sync_workspace_awareness_file(
         workspace=project_workspace,
@@ -799,6 +829,7 @@ def sync_project_workspace_runtime_files(
         "bootstrap_removed": bootstrap_removed,
         "maestro_skill_synced": bool(skill_sync.get("maestro_skill_synced")),
         "commander_skill_removed": bool(skill_sync.get("commander_skill_removed")),
+        "native_extension_synced": native_extension_synced,
     }
 
 

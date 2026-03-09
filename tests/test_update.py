@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from maestro.profile import PROFILE_FLEET
@@ -110,6 +111,10 @@ def test_update_no_changes_when_already_current(tmp_path: Path):
         "# Maestro Project Reference\n",
         encoding="utf-8",
     )
+    plugin_src = Path(__file__).resolve().parents[1] / "agent" / "extensions" / "maestro-native-tools"
+    plugin_dst = workspace / ".openclaw" / "extensions" / "maestro-native-tools"
+    plugin_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(plugin_src, plugin_dst)
     sessions.mkdir(parents=True, exist_ok=True)
 
     before = config_path.read_text(encoding="utf-8")
@@ -167,9 +172,11 @@ def test_update_replaces_commander_skill_layout(tmp_path: Path):
     assert summary.workspace_changed
     assert "Synced Commander skill bundle in workspace" in summary.changes
     assert "Removed Maestro project skill bundle from Commander workspace" in summary.changes
+    assert "Synced Commander native extension in workspace" in summary.changes
     assert (workspace / "skills" / "commander" / "SKILL.md").exists()
     assert (workspace / "skills" / "commander" / "references" / "maestro-project.md").exists()
     assert not (workspace / "skills" / "maestro").exists()
+    assert (workspace / ".openclaw" / "extensions" / "maestro-native-tools" / "openclaw.plugin.json").exists()
 
 
 def test_update_migrates_legacy_agent_and_preserves_telegram(tmp_path: Path):

@@ -45,6 +45,7 @@ from .workspace_templates import (
     sync_company_workspace_skill_bundles,
     sync_project_workspace_runtime_files,
     sync_project_workspace_skill_bundles,
+    sync_workspace_native_extension,
     sync_workspace_awareness_file,
 )
 from .install_state import load_install_state, save_install_state
@@ -506,6 +507,10 @@ def _sync_workspace_assets(
         if skill_sync["commander_skill_removed"]:
             changes.append("Removed Commander skill bundle from project workspace")
 
+    if profile == PROFILE_FLEET:
+        if sync_workspace_native_extension(workspace=workspace, dry_run=dry_run):
+            changes.append("Synced Commander native extension in workspace")
+
     desired_agents = render_company_agents_md() if profile == PROFILE_FLEET else render_personal_agents_md()
     desired_role = "company" if profile == PROFILE_FLEET else "project"
     desired_tools = (
@@ -733,6 +738,9 @@ def _sync_fleet_project_workspace_assets(
 
         if sync_result["commander_skill_removed"]:
             changes.append(f"Removed Commander skill from project workspace: {slug}")
+
+        if sync_result["native_extension_synced"]:
+            changes.append(f"Synced project workspace native extension: {slug}")
 
         if sync_result["bootstrap_removed"]:
             changes.append(f"Removed generic project BOOTSTRAP.md: {slug}")
