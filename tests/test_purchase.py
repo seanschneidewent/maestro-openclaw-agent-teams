@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -403,3 +404,71 @@ def test_run_purchase_json_reports_active_command_center_url(monkeypatch, tmp_pa
     )
     assert code == 0
     assert captured["payload"]["command_center_url"] == "http://localhost:3401/command-center"
+
+
+def test_restart_openclaw_gateway_installs_when_start_reports_service_not_loaded(monkeypatch):
+    calls: list[list[str]] = []
+    status_payloads = iter([
+        {"service": {"loaded": False, "runtime": {"status": "unknown"}}, "rpc": {"ok": False}, "port": {"status": "free", "listeners": []}},
+        {"service": {"loaded": False, "runtime": {"status": "unknown"}}, "rpc": {"ok": False}, "port": {"status": "free", "listeners": []}},
+        {"service": {"loaded": False, "runtime": {"status": "unknown"}}, "rpc": {"ok": False}, "port": {"status": "free", "listeners": []}},
+        {"service": {"loaded": True, "runtime": {"status": "running"}}, "rpc": {"ok": True}, "port": {"status": "busy", "listeners": [{"pid": 123}]}},
+    ])
+
+    monkeypatch.setattr(purchase, "prepend_openclaw_profile_args", lambda args, default_profile="": args)
+
+    def _fake_run(args, **kwargs):
+        command = list(args)
+        calls.append(command)
+        if command[-3:] == ["gateway", "status", "--json"]:
+            payload = next(status_payloads)
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+        if command[-2:] == ["gateway", "restart"]:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="restart failed")
+        if command[-2:] == ["gateway", "start"]:
+            if sum(1 for item in calls if item[-2:] == ["gateway", "start"]) == 1:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="Gateway service not loaded.\nStart with: openclaw --profile maestro-fleet gateway install",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(command, 0, stdout="Gateway started", stderr="")
+        if "install" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="Gateway installed", stderr="")
+        raise AssertionError(f"Unexpected command: {command}")
+
+    monkeypatch.setattr(purchase.subprocess, "run", _fake_run)
+
+    result = purchase._restart_openclaw_gateway(dry_run=False)
+
+    assert result["ok"] is True
+    assert any("install" in item for command in calls for item in command)
+
+
+def test_restart_openclaw_gateway_defaults_to_fleet_profile(monkeypatch):
+    observed_profiles: list[str] = []
+
+    monkeypatch.setattr(
+        purchase,
+        "prepend_openclaw_profile_args",
+        lambda args, default_profile="": observed_profiles.append(default_profile) or args,
+    )
+
+    running_status = {
+        "service": {"loaded": True, "runtime": {"status": "running"}},
+        "rpc": {"ok": True},
+        "port": {"status": "busy", "listeners": [{"pid": 123}]},
+    }
+
+    monkeypatch.setattr(
+        purchase.subprocess,
+        "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=json.dumps(running_status), stderr=""),
+    )
+
+    result = purchase._restart_openclaw_gateway(dry_run=False)
+
+    assert result["ok"] is True
+    assert observed_profiles
+    assert all(profile == purchase.FLEET_PROFILE for profile in observed_profiles)

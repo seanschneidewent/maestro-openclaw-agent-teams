@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from maestro.fleet_constants import canonicalize_model, format_model_display
@@ -154,3 +155,71 @@ def test_fleet_model_catalog_normalizes_legacy_defaults():
     assert format_model_display("google/gemini-3-pro-preview") == (
         "Google Gemini 3.1 Pro (google/gemini-3.1-pro-preview)"
     )
+
+
+def test_fleet_model_gateway_restart_installs_when_start_reports_service_not_loaded(monkeypatch):
+    calls: list[list[str]] = []
+    status_payloads = iter([
+        {"service": {"loaded": False, "runtime": {"status": "unknown"}}, "rpc": {"ok": False}, "port": {"status": "free", "listeners": []}},
+        {"service": {"loaded": False, "runtime": {"status": "unknown"}}, "rpc": {"ok": False}, "port": {"status": "free", "listeners": []}},
+        {"service": {"loaded": False, "runtime": {"status": "unknown"}}, "rpc": {"ok": False}, "port": {"status": "free", "listeners": []}},
+        {"service": {"loaded": True, "runtime": {"status": "running"}}, "rpc": {"ok": True}, "port": {"status": "busy", "listeners": [{"pid": 123}]}},
+    ])
+
+    monkeypatch.setattr(fleet_models, "prepend_openclaw_profile_args", lambda args, default_profile="": args)
+
+    def _fake_run(args, **kwargs):
+        command = list(args)
+        calls.append(command)
+        if command[-3:] == ["gateway", "status", "--json"]:
+            payload = next(status_payloads)
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+        if command[-2:] == ["gateway", "restart"]:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="restart failed")
+        if command[-2:] == ["gateway", "start"]:
+            if sum(1 for item in calls if item[-2:] == ["gateway", "start"]) == 1:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout="Gateway service not loaded.\nStart with: openclaw --profile maestro-fleet gateway install",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(command, 0, stdout="Gateway started", stderr="")
+        if "install" in command:
+            return subprocess.CompletedProcess(command, 0, stdout="Gateway installed", stderr="")
+        raise AssertionError(f"Unexpected command: {command}")
+
+    monkeypatch.setattr(fleet_models.subprocess, "run", _fake_run)
+
+    ok, detail = fleet_models._restart_openclaw_gateway()
+
+    assert ok is True
+    assert "Gateway installed" in detail
+
+
+def test_fleet_model_gateway_restart_defaults_to_fleet_profile(monkeypatch):
+    observed_profiles: list[str] = []
+
+    monkeypatch.setattr(
+        fleet_models,
+        "prepend_openclaw_profile_args",
+        lambda args, default_profile="": observed_profiles.append(default_profile) or args,
+    )
+
+    running_status = {
+        "service": {"loaded": True, "runtime": {"status": "running"}},
+        "rpc": {"ok": True},
+        "port": {"status": "busy", "listeners": [{"pid": 123}]},
+    }
+
+    monkeypatch.setattr(
+        fleet_models.subprocess,
+        "run",
+        lambda args, **kwargs: subprocess.CompletedProcess(args, 0, stdout=json.dumps(running_status), stderr=""),
+    )
+
+    ok, _detail = fleet_models._restart_openclaw_gateway()
+
+    assert ok is True
+    assert observed_profiles
+    assert all(profile == fleet_models.FLEET_PROFILE for profile in observed_profiles)
