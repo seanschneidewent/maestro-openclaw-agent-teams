@@ -235,12 +235,26 @@ function resolveAwarenessUrls(workspaceDir: string): {
 
 function resolveStoreRoot(pluginConfig: AnyRecord, workspaceDir: string): string {
   const configStore = asString(pluginConfig.storeRoot);
-  const envStore = asString(process.env.MAESTRO_STORE) || readWorkspaceEnv(workspaceDir, "MAESTRO_STORE");
-  const raw = configStore || envStore || "knowledge_store";
+  const workspaceEnvStore = readWorkspaceEnv(workspaceDir, "MAESTRO_STORE");
+  const processEnvStore = asString(process.env.MAESTRO_STORE);
+  const raw = workspaceEnvStore || configStore || processEnvStore || "knowledge_store";
   if (path.isAbsolute(raw)) {
     return raw;
   }
   return path.resolve(workspaceDir, raw);
+}
+
+function resolveWorkspaceProjectSlug(workspaceDir: string): string {
+  const explicitSlug = readWorkspaceEnv(workspaceDir, "MAESTRO_PROJECT_SLUG");
+  if (explicitSlug) {
+    return explicitSlug;
+  }
+  const parts = workspaceDir.split(path.sep);
+  const projectsIndex = parts.lastIndexOf("projects");
+  if (projectsIndex >= 0 && projectsIndex + 1 < parts.length) {
+    return parts[projectsIndex + 1]?.trim() || "";
+  }
+  return "";
 }
 
 type ProjectRef = {
@@ -304,13 +318,17 @@ function resolveProject(pluginConfig: AnyRecord, workspaceDir: string): ProjectR
   const installState = readInstallState();
   const requestedSlug =
     asString(process.env.MAESTRO_ACTIVE_PROJECT_SLUG)
-    || readWorkspaceEnv(workspaceDir, "MAESTRO_PROJECT_SLUG")
+    || resolveWorkspaceProjectSlug(workspaceDir)
     || asString(installState.active_project_slug);
   if (requestedSlug) {
     const selected = projects.find((item) => item.slug.toLowerCase() === requestedSlug.toLowerCase());
     if (selected) {
       return selected;
     }
+    throw new Error(
+      `Project slug '${requestedSlug}' not found under ${storeRoot}. `
+      + `Update MAESTRO_PROJECT_SLUG or point MAESTRO_STORE at the intended project directory.`
+    );
   }
 
   const requestedName = asString(installState.active_project_name);
@@ -319,9 +337,22 @@ function resolveProject(pluginConfig: AnyRecord, workspaceDir: string): ProjectR
     if (selected) {
       return selected;
     }
+    throw new Error(
+      `Project '${requestedName}' not found under ${storeRoot}. `
+      + `Update MAESTRO_STORE or MAESTRO_PROJECT_SLUG for this workspace.`
+    );
   }
 
-  return projects[0];
+  if (projects.length === 1) {
+    return projects[0];
+  }
+
+  const available = projects.map((item) => item.slug).join(", ");
+  throw new Error(
+    `Multiple ingested projects found under ${storeRoot}. `
+    + `Fleet project agents must set MAESTRO_PROJECT_SLUG or point MAESTRO_STORE at the project directory. `
+    + `Available project slugs: ${available}`
+  );
 }
 
 function loadProjectIndex(project: ProjectRef): AnyRecord {

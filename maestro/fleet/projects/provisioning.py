@@ -15,6 +15,12 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from ..._package_imports import ensure_package_src
+
+ensure_package_src("maestro_fleet")
+
+import maestro_fleet.gateway as fleet_gateway_module
+from maestro_fleet.gateway import restart_openclaw_gateway_report
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
@@ -33,8 +39,6 @@ from ...fleet_constants import (
     MODEL_LABELS,
     PROJECT_MODEL_OPTIONS,
 )
-from ...fleet.runtime import gateway as fleet_gateway_runtime
-from ...fleet.shared.subprocesses import parse_json_from_output
 from ...install_state import resolve_fleet_store_root
 from ...openclaw_guard import ensure_openclaw_override_allowed
 from ...openclaw_profile import (
@@ -44,11 +48,8 @@ from ...openclaw_profile import (
     resolve_openclaw_profile,
 )
 from ...utils import load_json, save_json, slugify
-from ...workspace_templates import (
-    provider_env_key_for_model,
-    render_workspace_env,
-    sync_project_workspace_runtime_files,
-)
+from ...workspace_templates import provider_env_key_for_model, render_workspace_env
+from maestro_fleet.workspace import sync_project_workspace_runtime_files
 
 
 console = Console()
@@ -408,92 +409,15 @@ def _complete_telegram_pairing(
 
 
 def _restart_openclaw_gateway(*, dry_run: bool) -> dict[str, Any]:
-    if dry_run:
-        return {"ok": True, "dry_run": True, "detail": "Skipped gateway restart in dry-run mode"}
-
-    def _run_gateway(args: list[str], timeout: int) -> tuple[bool, str]:
-        try:
-            result = subprocess.run(
-                prepend_openclaw_profile_args(args, default_profile=FLEET_PROFILE),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                check=False,
-            )
-        except FileNotFoundError:
-            return False, "openclaw CLI not found on PATH"
-        except Exception as exc:
-            return False, str(exc)
-        output = (result.stdout or result.stderr or "").strip()
-        return result.returncode == 0, output
-
-    def _status_snapshot(timeout: int = 12) -> tuple[bool, dict[str, Any], str]:
-        return fleet_gateway_runtime.gateway_status_snapshot(
-            run_cmd=_run_gateway,
-            parse_json=parse_json_from_output,
-            timeout=timeout,
-        )
-
-    actions: list[str] = []
-
-    gw_ok, gw_status, gw_out = _status_snapshot(12)
-    if fleet_gateway_runtime.gateway_cli_ready(gw_status):
-        return {"ok": True, "detail": gw_out or "Gateway already running", "gateway_status_ok": gw_ok}
-
-    restart_ok, restart_out = _run_gateway(["openclaw", "gateway", "restart"], 35)
-    actions.append(f"gateway restart: {'ok' if restart_ok else 'failed'}")
-    if restart_out:
-        actions.append(restart_out)
-
-    recheck_ok, recheck_status, recheck_out = _status_snapshot(12)
-    if fleet_gateway_runtime.gateway_cli_ready(recheck_status):
-        return {
-            "ok": True,
-            "detail": "\n".join(item for item in actions if item).strip() or recheck_out or "Gateway restarted",
-            "gateway_status_ok": recheck_ok,
-        }
-
-    start_ok, start_out = _run_gateway(["openclaw", "gateway", "start"], 35)
-    actions.append(f"gateway start: {'ok' if start_ok else 'failed'}")
-    if start_out:
-        actions.append(start_out)
-
-    recheck_ok, recheck_status, recheck_out = _status_snapshot(12)
-    if fleet_gateway_runtime.gateway_cli_ready(recheck_status):
-        return {
-            "ok": True,
-            "detail": "\n".join(item for item in actions if item).strip() or recheck_out or "Gateway started",
-            "gateway_status_ok": recheck_ok,
-        }
-
-    install_ok, install_out = _run_gateway(
-        ["openclaw", "gateway", "install", "--force", "--port", str(FLEET_GATEWAY_PORT)],
-        60,
-    )
-    actions.append(f"gateway install --force: {'ok' if install_ok else 'failed'}")
-    if install_out:
-        actions.append(install_out)
-
-    start2_ok, start2_out = _run_gateway(["openclaw", "gateway", "start"], 35)
-    actions.append(f"gateway start (post-install): {'ok' if start2_ok else 'failed'}")
-    if start2_out:
-        actions.append(start2_out)
-
-    recheck2_ok, recheck2_status, recheck2_out = _status_snapshot(12)
-    if fleet_gateway_runtime.gateway_cli_ready(recheck2_status):
-        return {
-            "ok": True,
-            "detail": "\n".join(item for item in actions if item).strip() or recheck2_out or "Gateway reinstalled and started",
-            "gateway_status_ok": recheck2_ok,
-        }
-
-    return {
-        "ok": False,
-        "detail": "\n".join(item for item in actions if item).strip() or recheck2_out or "Failed to restart gateway",
-        "gateway_status_ok": recheck2_ok,
-    }
+    original_prepend = fleet_gateway_module.prepend_openclaw_profile_args
+    original_subprocess = fleet_gateway_module.subprocess
+    try:
+        fleet_gateway_module.prepend_openclaw_profile_args = prepend_openclaw_profile_args
+        fleet_gateway_module.subprocess = subprocess
+        return restart_openclaw_gateway_report(dry_run=dry_run)
+    finally:
+        fleet_gateway_module.prepend_openclaw_profile_args = original_prepend
+        fleet_gateway_module.subprocess = original_subprocess
 
 
 def run_project_create(

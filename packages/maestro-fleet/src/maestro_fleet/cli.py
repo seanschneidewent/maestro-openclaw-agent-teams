@@ -212,7 +212,8 @@ def _run_fleet_command_center(args: argparse.Namespace) -> int:
 
 
 def _run_fleet_deploy(args: argparse.Namespace) -> int:
-    run_deploy = _load_legacy_attr("maestro.fleet_deploy", "run_deploy")
+    from .deploy import run_deploy
+
     return int(
         run_deploy(
             company_name=args.company_name,

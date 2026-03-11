@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "maestro-conagent-teams"
-version = "0.1.49"
+version = "0.1.50"
 description = "AI that actually understands your construction plans"
 readme = "README.md"
 license = "LicenseRef-Proprietary"

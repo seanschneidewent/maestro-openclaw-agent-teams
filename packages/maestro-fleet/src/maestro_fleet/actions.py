@@ -8,10 +8,14 @@ from typing import Any
 import maestro.control_plane_core as legacy_control_plane
 from maestro.fleet.projects import ingest_commands as legacy_ingest_commands
 from maestro.fleet.projects import lifecycle as legacy_lifecycle
-from maestro.fleet.projects import registry as legacy_registry
 from maestro.server_actions import run_command_center_action as legacy_run_command_center_action
 
-from .command_center import build_derived_registry
+from .command_center import (
+    build_derived_registry,
+    find_registry_project,
+    normalize_bot_username,
+    resolve_node_identity,
+)
 from .doctor import build_doctor_report as build_fleet_doctor_report
 
 _PROJECT_METADATA_KEY = "maestro"
@@ -26,7 +30,7 @@ def _derived_registry(store_root: Path) -> dict[str, Any]:
 
 
 def _lookup_project_entry(store_root: Path, project_slug: str) -> dict[str, Any] | None:
-    return legacy_registry.find_registry_project(_derived_registry(store_root), project_slug)
+    return find_registry_project(_derived_registry(store_root), project_slug)
 
 
 def _normalize_input_root(value: str | None) -> str:
@@ -101,7 +105,7 @@ def project_control_payload(
         Path(store_root).resolve(),
         project_slug,
         sync_fleet_registry_fn=_derived_registry,
-        find_registry_project_fn=legacy_registry.find_registry_project,
+        find_registry_project_fn=find_registry_project,
         workspace_routes_fn=legacy_ingest_commands.workspace_routes,
         input_root_override=input_root_override,
         dpi=dpi,
@@ -168,8 +172,8 @@ def create_project_node(
         now_iso_fn=legacy_control_plane._now_iso,
         save_json_fn=legacy_control_plane.save_json,
         sync_fleet_registry_fn=_derived_registry,
-        find_registry_project_fn=legacy_registry.find_registry_project,
-        resolve_node_identity_fn=legacy_registry.resolve_node_identity,
+        find_registry_project_fn=find_registry_project,
+        resolve_node_identity_fn=resolve_node_identity,
         project_control_payload_fn=lambda path, slug: project_control_payload(path, project_slug=slug),
         register_project_agent_fn=register_project_agent,
         project_slug=project_slug,
@@ -182,7 +186,7 @@ def create_project_node(
         agent_model=agent_model,
         telegram_bot_username=telegram_bot_username,
         telegram_bot_display_name=telegram_bot_display_name,
-        normalize_bot_username_fn=legacy_registry.normalize_bot_username,
+        normalize_bot_username_fn=normalize_bot_username,
         dry_run=dry_run,
     )
     if not bool(result.get("ok")):
@@ -230,8 +234,8 @@ def onboard_project_store(
         slugify_fn=legacy_control_plane.slugify,
         now_iso_fn=legacy_control_plane._now_iso,
         sync_fleet_registry_fn=_derived_registry,
-        find_registry_project_fn=legacy_registry.find_registry_project,
-        resolve_node_identity_fn=legacy_registry.resolve_node_identity,
+        find_registry_project_fn=find_registry_project,
+        resolve_node_identity_fn=resolve_node_identity,
         register_project_agent_fn=register_project_agent,
         build_ingest_command_fn=legacy_ingest_commands.build_ingest_command,
         build_ingest_preflight_fn=legacy_ingest_commands.build_ingest_preflight,
@@ -293,7 +297,7 @@ def move_project_store(
         project_slug=project_slug,
         new_dir_name=new_dir_name,
         sync_fleet_registry_fn=_derived_registry,
-        find_registry_project_fn=legacy_registry.find_registry_project,
+        find_registry_project_fn=find_registry_project,
         quote_path_fn=legacy_ingest_commands.quote_path,
         dry_run=dry_run,
     )

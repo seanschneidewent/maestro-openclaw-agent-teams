@@ -6,27 +6,20 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from ._package_imports import ensure_package_src
+
+
+ensure_package_src("maestro_fleet")
+
 
 ResolveNetworkUrlsFn = Callable[..., dict[str, Any]]
 NATIVE_PLUGIN_ID = "maestro-native-tools"
 
 
 def _skill_template_source(skill_name: str, template_root: Path | None = None) -> Path | None:
-    if template_root is not None:
-        candidate = template_root / "skills" / skill_name
-        if candidate.exists():
-            return candidate
+    from maestro_fleet.workspace import skill_template_source
 
-    package_root = Path(__file__).resolve().parent
-    repo_root = package_root.parent
-    candidates = [
-        package_root / "agent" / "skills" / skill_name,
-        repo_root / "agent" / "skills" / skill_name,
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
+    return skill_template_source(skill_name, template_root=template_root)
 
 
 def _skill_snapshot(root: Path) -> dict[str, bytes]:
@@ -75,35 +68,15 @@ def _remove_workspace_skill_bundle(*, workspace: Path, skill_name: str, dry_run:
 
 
 def _native_extension_source() -> Path | None:
-    package_root = Path(__file__).resolve().parent
-    repo_root = package_root.parent
-    candidates = [
-        package_root / "agent" / "extensions" / NATIVE_PLUGIN_ID,
-        repo_root / "agent" / "extensions" / NATIVE_PLUGIN_ID,
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
+    from maestro_fleet.workspace import native_extension_source
+
+    return native_extension_source()
 
 
 def sync_workspace_native_extension(*, workspace: Path, dry_run: bool = False) -> bool:
-    source = _native_extension_source()
-    if source is None:
-        return False
+    from maestro_fleet.workspace import sync_workspace_native_extension as sync_workspace_native_extension_impl
 
-    destination = workspace / ".openclaw" / "extensions" / NATIVE_PLUGIN_ID
-    desired = _skill_snapshot(source)
-    current = _skill_snapshot(destination) if destination.exists() else None
-    if current == desired:
-        return False
-
-    if not dry_run:
-        if destination.exists():
-            shutil.rmtree(destination)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(source, destination, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    return True
+    return sync_workspace_native_extension_impl(workspace=workspace, dry_run=dry_run)
 
 
 def sync_company_workspace_skill_bundles(
@@ -112,19 +85,13 @@ def sync_company_workspace_skill_bundles(
     template_root: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, bool]:
-    return {
-        "commander_skill_synced": _sync_workspace_skill_bundle(
-            workspace=workspace,
-            skill_name="commander",
-            template_root=template_root,
-            dry_run=dry_run,
-        ),
-        "maestro_skill_removed": _remove_workspace_skill_bundle(
-            workspace=workspace,
-            skill_name="maestro",
-            dry_run=dry_run,
-        ),
-    }
+    from maestro_fleet.workspace import sync_company_workspace_skill_bundles as sync_company_workspace_skill_bundles_impl
+
+    return sync_company_workspace_skill_bundles_impl(
+        workspace=workspace,
+        template_root=template_root,
+        dry_run=dry_run,
+    )
 
 
 def sync_project_workspace_skill_bundles(
@@ -133,19 +100,13 @@ def sync_project_workspace_skill_bundles(
     template_root: Path | None = None,
     dry_run: bool = False,
 ) -> dict[str, bool]:
-    return {
-        "maestro_skill_synced": _sync_workspace_skill_bundle(
-            workspace=workspace,
-            skill_name="maestro",
-            template_root=template_root,
-            dry_run=dry_run,
-        ),
-        "commander_skill_removed": _remove_workspace_skill_bundle(
-            workspace=workspace,
-            skill_name="commander",
-            dry_run=dry_run,
-        ),
-    }
+    from maestro_fleet.workspace import sync_project_workspace_skill_bundles as sync_project_workspace_skill_bundles_impl
+
+    return sync_project_workspace_skill_bundles_impl(
+        workspace=workspace,
+        template_root=template_root,
+        dry_run=dry_run,
+    )
 
 
 def provider_env_key_for_model(model: str | None) -> str | None:
@@ -279,12 +240,12 @@ def render_tools_md(company_name: str, active_provider_env_key: str | None = Non
         "## Tool Decision Rules\n"
         "- Use `maestro-fleet project create` only when the user wants a new project maestro and no pre-ingested Maestro project root is being supplied.\n"
         "- Use existing-project onboarding semantics when the provided path already contains a real Maestro project store.\n"
-        "- Use `maestro-fleet doctor --fix` for runtime drift, routing failures, or gateway health problems.\n"
+        "- Do not execute runtime-mutating repair commands from a live Commander chat turn. For runtime drift, gather read-only evidence first and hand the exact repair command to the operator.\n"
         "- Use direct project-maestro dispatch when the request depends on project-specific drawing/spec detail.\n"
         "- Do not report success from command exit code alone; report success only from verified postconditions.\n\n"
         "## Operations\n"
         "- `maestro-fleet deploy` — one-session customer deployment\n"
-        "- `maestro-fleet doctor --fix` — repair runtime drift\n"
+        "- Runtime repair is operator-only — do not self-run `openclaw ... gateway restart/start/install/stop` or `maestro-fleet doctor --fix` from Commander chat turns\n"
         "- After provisioning or onboarding, verify page count and pointer count before saying the project is ready\n"
         "\n"
         "## Verification Evidence\n"
@@ -427,7 +388,7 @@ def render_company_agents_md() -> str:
         "- If a supplied path is a multi-project store root, onboard the specific child project directory rather than appending a new nested slug blindly.\n"
         "- Do not append `/<slug>` under a path that is already the real project root unless the human explicitly wants a fresh nested project.\n"
         "- For ingestion requests, provide exact ingest command for the target project.\n"
-        "- For runtime issues, run/advise `maestro-fleet doctor --fix` and report outcomes.\n"
+        "- For runtime issues, use read-only checks first, advise `maestro-fleet doctor --fix`, and do not execute gateway-control or doctor-repair commands from a live Commander chat turn unless the human explicitly requests operator-level runtime surgery.\n"
         "- For live links, use the recommended URL from `AWARENESS.md`.\n"
         "- Before declaring a project maestro ready, verify: resolved store path, nonzero page count, nonzero pointer count, matching workspace URL, and that the project bot `MAESTRO_STORE` matches the Fleet store copy.\n"
         "\n"
@@ -463,7 +424,7 @@ def render_company_agents_md() -> str:
         "## What You Can Do\n"
         "- Create and register project maestros\n"
         "- Generate exact ingest/index/start commands for project nodes\n"
-        "- Diagnose runtime issues (`maestro doctor --fix`)\n"
+        "- Diagnose runtime issues with read-only checks first; escalate `maestro doctor --fix` to the operator instead of executing it from chat\n"
         "- Keep command center and fleet registry healthy\n\n"
         "## Messaging Discipline\n"
         "- One complete response per turn\n"
@@ -753,29 +714,20 @@ def sync_workspace_awareness_file(
     web_port: int | None = None,
     dry_run: bool = False,
 ) -> bool:
-    resolver_kwargs: dict[str, Any] = {"route_path": route_path}
-    if command_runner is not None:
-        resolver_kwargs["command_runner"] = command_runner
-    if web_port is not None:
-        resolver_kwargs["web_port"] = web_port
-    urls = resolve_network_urls_fn(**resolver_kwargs)
-    desired_awareness = render_workspace_awareness_md(
+    from maestro_fleet.workspace import sync_workspace_awareness_file as sync_workspace_awareness_file_impl
+
+    return sync_workspace_awareness_file_impl(
+        workspace=workspace,
         model=model,
-        preferred_url=str(urls.get("recommended_url", "")).strip(),
-        local_url=str(urls.get("localhost_url", "")).strip(),
-        tailnet_url=str(urls.get("tailnet_url") or "").strip(),
         store_root=store_root,
+        route_path=route_path,
+        resolve_network_urls_fn=resolve_network_urls_fn,
         surface_label=surface_label,
         generated_by=generated_by,
+        command_runner=command_runner,
+        web_port=web_port,
+        dry_run=dry_run,
     )
-    awareness_path = workspace / "AWARENESS.md"
-    current_awareness = awareness_path.read_text(encoding="utf-8") if awareness_path.exists() else ""
-    if current_awareness == desired_awareness:
-        return False
-    if not dry_run:
-        workspace.mkdir(parents=True, exist_ok=True)
-        awareness_path.write_text(desired_awareness, encoding="utf-8")
-    return True
 
 
 def sync_project_workspace_runtime_files(
@@ -790,68 +742,19 @@ def sync_project_workspace_runtime_files(
     web_port: int | None = None,
     dry_run: bool = False,
 ) -> dict[str, bool]:
-    if not dry_run:
-        project_workspace.mkdir(parents=True, exist_ok=True)
+    from maestro_fleet.workspace import sync_project_workspace_runtime_files as sync_project_workspace_runtime_files_impl
 
-    skill_sync = sync_project_workspace_skill_bundles(
-        workspace=project_workspace,
-        dry_run=dry_run,
-    )
-    native_extension_synced = sync_workspace_native_extension(
-        workspace=project_workspace,
-        dry_run=dry_run,
-    )
-
-    awareness_updated = sync_workspace_awareness_file(
-        workspace=project_workspace,
+    return sync_project_workspace_runtime_files_impl(
+        project_workspace=project_workspace,
+        project_slug=project_slug,
         model=model,
         store_root=store_root,
-        route_path=f"/{project_slug}/",
-        resolve_network_urls_fn=resolve_network_urls_fn,
-        surface_label="Workspace",
         generated_by=generated_by,
+        resolve_network_urls_fn=resolve_network_urls_fn,
         command_runner=command_runner,
         web_port=web_port,
         dry_run=dry_run,
     )
-
-    agents_updated = False
-    agents_path = project_workspace / "AGENTS.md"
-    current_agents = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
-    if (not agents_path.exists()) or should_refresh_generic_project_file("AGENTS.md", current_agents):
-        if not dry_run:
-            agents_path.write_text(render_project_agents_md(), encoding="utf-8")
-        agents_updated = True
-
-    tools_updated = False
-    tools_path = project_workspace / "TOOLS.md"
-    current_tools = tools_path.read_text(encoding="utf-8") if tools_path.exists() else ""
-    if (not tools_path.exists()) or should_refresh_generic_project_file("TOOLS.md", current_tools):
-        if not dry_run:
-            tools_path.write_text(
-                render_project_tools_md(provider_env_key_for_model(model)),
-                encoding="utf-8",
-            )
-        tools_updated = True
-
-    bootstrap_removed = False
-    bootstrap_path = project_workspace / "BOOTSTRAP.md"
-    if bootstrap_path.exists():
-        bootstrap_content = bootstrap_path.read_text(encoding="utf-8")
-        if should_remove_generic_project_bootstrap(bootstrap_content):
-            if not dry_run:
-                bootstrap_path.unlink()
-            bootstrap_removed = True
-
-    return {
-        "awareness_updated": awareness_updated,
-        "agents_updated": agents_updated,
-        "tools_updated": tools_updated,
-        "bootstrap_removed": bootstrap_removed,
-        "maestro_skill_synced": bool(skill_sync.get("maestro_skill_synced")),
-        "commander_skill_removed": bool(skill_sync.get("commander_skill_removed")),
-        "native_extension_synced": native_extension_synced,
-    }
 
 
 def should_refresh_generic_project_file(filename: str, current_content: str) -> bool:

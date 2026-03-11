@@ -7,6 +7,12 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from ..._package_imports import ensure_package_src
+
+ensure_package_src("maestro_fleet")
+
+from maestro_fleet.workspace import native_extension_source, sync_workspace_native_extension
+
 from ...fleet_constants import (
     DEFAULT_PROJECT_MODEL,
     canonicalize_model,
@@ -108,29 +114,11 @@ def _ensure_native_plugin_config(config: dict[str, Any]) -> bool:
 
 
 def _native_extension_source() -> Path | None:
-    package_root = Path(__file__).resolve().parents[2]
-    repo_root = package_root.parent
-    candidates = [
-        package_root / "agent" / "extensions" / NATIVE_PLUGIN_ID,
-        repo_root / "agent" / "extensions" / NATIVE_PLUGIN_ID,
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
+    return native_extension_source()
 
 
 def _sync_native_extension(workspace_root: Path) -> bool:
-    source = _native_extension_source()
-    if source is None:
-        return False
-
-    destination = workspace_root / ".openclaw" / "extensions" / NATIVE_PLUGIN_ID
-    if destination.exists():
-        shutil.rmtree(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, destination)
-    return True
+    return sync_workspace_native_extension(workspace=workspace_root, dry_run=False)
 
 
 def default_model_from_agents(agent_list: list[dict[str, Any]]) -> str:

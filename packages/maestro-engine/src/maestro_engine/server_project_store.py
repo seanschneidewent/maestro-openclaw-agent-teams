@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .utils import load_json, slugify
 
@@ -93,36 +93,23 @@ def load_project(project_dir: Path, slug: str) -> dict[str, Any]:
     return proj
 
 
-def _is_project_dir(path: Path) -> bool:
-    return path.is_dir() and (path / "project.json").exists()
-
-
-def _discover_project_dirs(store_path: Path) -> list[Path]:
-    root = Path(store_path)
-    if not root.exists():
-        return []
-    if _is_project_dir(root):
-        return [root]
-    projects: list[Path] = []
-    for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-        if _is_project_dir(child):
-            projects.append(child)
-    return projects
-
-
-def load_all_projects(store_path: Path) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+def load_all_projects(
+    store_path: Path,
+    *,
+    discover_project_dirs_fn: Callable[[Path], list[Path]],
+    build_project_snapshot_fn: Callable[[Path], dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
     projects: dict[str, dict[str, Any]] = {}
     project_dir_slug_index: dict[str, str] = {}
 
     if not store_path.exists():
         return projects, project_dir_slug_index
 
-    for project_dir in _discover_project_dirs(store_path):
-        project_meta = load_json(project_dir / "project.json")
-        if isinstance(project_meta, dict):
-            raw = str(project_meta.get("slug", "")).strip()
-            slug = slugify(raw) if raw else slugify(project_dir.name)
-        else:
+    for project_dir in discover_project_dirs_fn(store_path):
+        try:
+            cc_snapshot = build_project_snapshot_fn(project_dir)
+            slug = str(cc_snapshot.get("slug", "")) or slugify(project_dir.name)
+        except Exception:
             slug = slugify(project_dir.name)
         project_dir_slug_index[project_dir.name] = slug
         projects[slug] = load_project(project_dir, slug)

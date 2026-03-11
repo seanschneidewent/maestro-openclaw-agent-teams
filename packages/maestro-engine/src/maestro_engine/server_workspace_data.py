@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,6 @@ from .utils import load_json, slugify_underscore
 
 PROJECT_NOTES_FILE = "project_notes.json"
 NOTE_COLORS = {"slate", "blue", "green", "amber", "red", "purple"}
-NOTE_STATUSES = {"open", "archived"}
 
 
 def _text(value: Any) -> str:
@@ -121,24 +121,23 @@ def load_project_notes(proj: dict[str, Any]) -> dict[str, Any]:
 
     categories: list[dict[str, Any]] = []
     categories_by_id: dict[str, dict[str, Any]] = {}
-    raw_categories = payload.get("categories")
-    if isinstance(raw_categories, list):
-        for idx, entry in enumerate(raw_categories):
-            if not isinstance(entry, dict):
-                continue
-            category_id = slugify_underscore(_text(entry.get("id") or entry.get("name")))
-            if not category_id:
-                continue
-            category = {
-                "id": category_id,
-                "name": _text(entry.get("name")) or category_id.replace("_", " ").title(),
-                "color": _normalize_note_color(entry.get("color")),
-                "order": int(entry.get("order")) if isinstance(entry.get("order"), int) else idx * 10,
-                "created_at": _text(entry.get("created_at")),
-                "updated_at": _text(entry.get("updated_at")),
-            }
-            categories.append(category)
-            categories_by_id[category_id] = category
+
+    for idx, entry in enumerate(payload.get("categories", []) if isinstance(payload.get("categories"), list) else []):
+        if not isinstance(entry, dict):
+            continue
+        category_id = slugify_underscore(_text(entry.get("id")) or _text(entry.get("name"))) or "category"
+        if not category_id:
+            continue
+        category = {
+            "id": category_id,
+            "name": _text(entry.get("name")) or category_id.replace("_", " ").title(),
+            "color": _normalize_note_color(entry.get("color")),
+            "order": int(entry.get("order")) if isinstance(entry.get("order"), int) else idx * 10,
+            "created_at": _text(entry.get("created_at")),
+            "updated_at": _text(entry.get("updated_at")),
+        }
+        categories_by_id[category_id] = category
+        categories.append(category)
 
     if "general" not in categories_by_id:
         general = {
@@ -154,60 +153,137 @@ def load_project_notes(proj: dict[str, Any]) -> dict[str, Any]:
 
     notes: list[dict[str, Any]] = []
     seen_note_ids: set[str] = set()
-    raw_notes = payload.get("notes")
-    if isinstance(raw_notes, list):
-        for idx, entry in enumerate(raw_notes):
-            if not isinstance(entry, dict):
-                continue
-            text = _text(entry.get("text"))
-            if not text:
-                continue
-            note_id = slugify_underscore(_text(entry.get("id") or entry.get("note_id")))
-            if not note_id:
-                note_id = f"note_{idx + 1}"
-            if note_id in seen_note_ids:
-                note_id = f"{note_id}_{idx + 1}"
-            seen_note_ids.add(note_id)
+    raw_notes = payload.get("notes", []) if isinstance(payload.get("notes"), list) else []
+    for idx, entry in enumerate(raw_notes):
+        if not isinstance(entry, dict):
+            continue
+        text = _text(entry.get("text"))
+        if not text:
+            continue
+        note_id = slugify_underscore(_text(entry.get("id") or entry.get("note_id")))
+        if not note_id:
+            note_id = f"note_{idx + 1}"
+        if note_id in seen_note_ids:
+            note_id = f"{note_id}_{idx + 1}"
+        seen_note_ids.add(note_id)
 
-            category_id = slugify_underscore(_text(entry.get("category_id") or entry.get("category"))) or "general"
-            if category_id not in categories_by_id:
-                category = {
-                    "id": category_id,
-                    "name": category_id.replace("_", " ").title(),
-                    "color": "slate",
-                    "order": len(categories) * 10,
-                    "created_at": "",
-                    "updated_at": "",
-                }
-                categories.append(category)
-                categories_by_id[category_id] = category
+        category_id = slugify_underscore(_text(entry.get("category_id") or entry.get("category"))) or "general"
+        if category_id not in categories_by_id:
+            categories_by_id[category_id] = {
+                "id": category_id,
+                "name": _text(entry.get("category_name")) or category_id.replace("_", " ").title(),
+                "color": _normalize_note_color(entry.get("category_color") or entry.get("color")),
+                "order": len(categories_by_id) * 10,
+                "created_at": "",
+                "updated_at": "",
+            }
+            categories.append(categories_by_id[category_id])
 
-            source_pages = _normalize_source_pages(entry)
-            status = _text(entry.get("status")).lower() or "open"
-            if status not in NOTE_STATUSES:
-                status = "open"
+        source_pages = _normalize_source_pages(entry)
+        legacy_source_page = source_pages[0]["page_name"] if source_pages else ""
+        status = _text(entry.get("status")).lower() or "open"
+        if status not in {"open", "archived"}:
+            status = "open"
 
-            notes.append(
-                {
-                    "id": note_id,
-                    "text": text,
-                    "category_id": category_id,
-                    "source_pages": source_pages,
-                    "source_page": source_pages[0]["page_name"] if source_pages else "",
-                    "pinned": _bool(entry.get("pinned")),
-                    "status": status,
-                    "created_at": _text(entry.get("created_at")),
-                    "updated_at": _text(entry.get("updated_at")),
-                }
-            )
+        notes.append(
+            {
+                "id": note_id,
+                "text": text,
+                "category_id": category_id,
+                "source_pages": source_pages,
+                "source_page": legacy_source_page,
+                "pinned": _bool(entry.get("pinned")),
+                "status": status,
+                "created_at": _text(entry.get("created_at")),
+                "updated_at": _text(entry.get("updated_at")),
+            }
+        )
 
     categories.sort(key=lambda c: (int(c.get("order", 0)), _text(c.get("name")).lower()))
+
     return {
         "version": int(payload.get("version")) if isinstance(payload.get("version"), int) else 1,
         "updated_at": _text(payload.get("updated_at")),
         "categories": categories,
         "notes": notes,
     }
+
+
+def save_project_notes(proj: dict[str, Any], payload: dict[str, Any]) -> None:
+    categories = payload.get("categories", []) if isinstance(payload.get("categories"), list) else []
+    notes = payload.get("notes", []) if isinstance(payload.get("notes"), list) else []
+    out_categories: list[dict[str, Any]] = []
+    seen_category_ids: set[str] = set()
+    for idx, entry in enumerate(categories):
+        if not isinstance(entry, dict):
+            continue
+        category_id = slugify_underscore(_text(entry.get("id")) or _text(entry.get("name")), "category")
+        if category_id in seen_category_ids:
+            continue
+        seen_category_ids.add(category_id)
+        out_categories.append(
+            {
+                "id": category_id,
+                "name": _text(entry.get("name")) or category_id.replace("_", " ").title(),
+                "color": _normalize_note_color(entry.get("color")),
+                "order": int(entry.get("order")) if isinstance(entry.get("order"), int) else idx * 10,
+                "created_at": _text(entry.get("created_at")),
+                "updated_at": _text(entry.get("updated_at")),
+            }
+        )
+    if "general" not in seen_category_ids:
+        out_categories.insert(
+            0,
+            {"id": "general", "name": "General", "color": "slate", "order": 0, "created_at": "", "updated_at": ""},
+        )
+
+    out_notes: list[dict[str, Any]] = []
+    seen_note_ids: set[str] = set()
+    for idx, entry in enumerate(notes):
+        if not isinstance(entry, dict):
+            continue
+        text = _text(entry.get("text"))
+        if not text:
+            continue
+        note_id = slugify_underscore(_text(entry.get("id") or entry.get("note_id")), "")
+        if not note_id:
+            note_id = f"note_{idx + 1}"
+        if note_id in seen_note_ids:
+            note_id = f"{note_id}_{idx + 1}"
+        seen_note_ids.add(note_id)
+
+        category_id = slugify_underscore(_text(entry.get("category_id") or entry.get("category")), "general")
+        source_pages = _normalize_source_pages(entry)
+        status = _text(entry.get("status")).lower() or "open"
+        if status not in {"open", "archived"}:
+            status = "open"
+        out_notes.append(
+            {
+                "id": note_id,
+                "text": text,
+                "category_id": category_id,
+                "source_pages": source_pages,
+                "source_page": source_pages[0]["page_name"] if source_pages else "",
+                "pinned": _bool(entry.get("pinned")),
+                "status": status,
+                "created_at": _text(entry.get("created_at")),
+                "updated_at": _text(entry.get("updated_at")),
+            }
+        )
+
+    project_notes_path(proj).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": _text(payload.get("updated_at")),
+                "categories": out_categories,
+                "notes": out_notes,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def get_page_bboxes(proj: dict[str, Any], page_name: str, pointer_ids: list[str]) -> list[dict[str, Any]]:

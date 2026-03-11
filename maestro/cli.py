@@ -51,6 +51,11 @@ def _load_fleet_package_callable(module_name: str, attr_name: str, *, fallback: 
             raise
 
 
+def _load_legacy_attr(module_name: str, attr_name: str):
+    module = importlib.import_module(module_name)
+    return getattr(module, attr_name)
+
+
 def _add_ingest_parser(subparsers: argparse._SubParsersAction):
     parser = subparsers.add_parser("ingest", help="Ingest PDFs into knowledge store")
     parser.add_argument("folder", help="Path to folder containing PDFs")
@@ -580,7 +585,6 @@ def _open_url(url: str):
 
 def _run_fleet(args: argparse.Namespace):
     from .control_plane import resolve_network_urls
-    from .fleet_deploy import run_deploy
     from .fleet_models import run_set_commander_model, run_set_project_model, run_set_project_telegram
     from .install_state import resolve_fleet_store_root
     from .doctor import run_doctor as legacy_run_doctor
@@ -603,6 +607,11 @@ def _run_fleet(args: argparse.Namespace):
         "maestro_fleet.update",
         "run_update",
         fallback=legacy_run_update,
+    )
+    run_deploy = _load_fleet_package_callable(
+        "maestro_fleet.deploy",
+        "run_deploy",
+        fallback=_load_legacy_attr("maestro.fleet_deploy", "run_deploy"),
     )
 
     ensure_openclaw_profile_env(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)

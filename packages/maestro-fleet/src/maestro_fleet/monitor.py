@@ -19,7 +19,7 @@ from typing import Any, Deque
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from maestro.fleet_constants import (
+from .constants import (
     DEFAULT_COMMANDER_MODEL,
     DEFAULT_PROJECT_MODEL,
     canonicalize_model,
@@ -33,6 +33,7 @@ from rich.live import Live
 from rich.markup import escape
 from rich.panel import Panel
 
+from .gateway import restart_openclaw_gateway_report, stop_openclaw_gateway_report
 from .openclaw_runtime import (
     openclaw_state_root,
     prepend_openclaw_profile_args,
@@ -44,7 +45,7 @@ from .runtime import (
     read_process_command,
     resolve_network_urls,
 )
-from .state import load_install_state, load_openclaw_config, resolve_commander_agent
+from .state import fleet_runtime_state_dir, load_install_state, load_openclaw_config, resolve_commander_agent
 
 
 CYAN = "cyan"
@@ -187,6 +188,90 @@ def _shutdown_pid(pid: int, *, timeout_sec: float):
         os.kill(target, signal.SIGKILL)
     except (PermissionError, ProcessLookupError, OSError):
         return
+
+
+def _detached_server_pid_path() -> Path:
+    return fleet_runtime_state_dir() / "serve.pid.json"
+
+
+def _load_detached_server_pid() -> int:
+    path = _detached_server_pid_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    try:
+        return int(payload.get("pid", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _clear_detached_server_state() -> None:
+    try:
+        _detached_server_pid_path().unlink(missing_ok=True)
+    except Exception:
+        return
+
+
+def _stop_existing_fleet_server(port: int, *, timeout_sec: float) -> list[int]:
+    managed: list[int] = []
+    seen: set[int] = set()
+    for pid in _maestro_server_listener_pids(port):
+        clean_pid = int(pid)
+        if clean_pid > 0 and clean_pid not in seen:
+            managed.append(clean_pid)
+            seen.add(clean_pid)
+
+    detached_pid = _load_detached_server_pid()
+    if (
+        detached_pid > 0
+        and detached_pid not in seen
+        and _pid_running(detached_pid)
+        and is_fleet_server_process(detached_pid, read_command_fn=read_process_command)
+    ):
+        managed.append(detached_pid)
+        seen.add(detached_pid)
+
+    foreign = [pid for pid in listener_pids(int(port)) if int(pid) not in seen]
+    if foreign:
+        raise SystemExit(
+            f"Port {int(port)} is already in use by non-Fleet listener(s): " + ", ".join(str(pid) for pid in foreign)
+        )
+
+    for pid in managed:
+        _shutdown_pid(pid, timeout_sec=timeout_sec)
+    _clear_detached_server_state()
+    return managed
+
+
+def _restart_fleet_gateway_for_tui(gateway_logs: LogBuffer) -> dict[str, Any]:
+    stop_report = stop_openclaw_gateway_report()
+    if str(stop_report.get("detail", "")).strip() and not bool(stop_report.get("already_stopped")):
+        _append_gateway_event(gateway_logs, f"Resetting Fleet gateway: {stop_report.get('detail')}")
+
+    report = restart_openclaw_gateway_report(dry_run=False)
+    detail = str(report.get("detail", "")).strip()
+    if detail:
+        _append_gateway_event(
+            gateway_logs,
+            f"Fleet gateway {'ready' if report.get('ok') else 'restart issue'}: {detail}",
+            level_hint=None if report.get("ok") else "warn",
+        )
+    return report
+
+
+def _stop_fleet_gateway_for_tui(gateway_logs: LogBuffer) -> dict[str, Any]:
+    report = stop_openclaw_gateway_report()
+    detail = str(report.get("detail", "")).strip()
+    if detail:
+        _append_gateway_event(
+            gateway_logs,
+            f"Fleet gateway shutdown {'complete' if report.get('ok') else 'issue'}: {detail}",
+            level_hint=None if report.get("ok") else "warn",
+        )
+    return report
 
 
 def _install_shutdown_signal_handlers() -> dict[int, Any]:
@@ -918,30 +1003,27 @@ def run_up_tui(port: int, store: str, host: str):
         "--host",
         host,
     ]
-    attached_server_pids = _maestro_server_listener_pids(port)
-    existing_state = None if attached_server_pids else _fetch_json(
-        f"http://127.0.0.1:{int(port)}/api/command-center/state",
-        timeout=0.8,
-    )
-    attach_only = bool(attached_server_pids) or existing_state is not None
     process: subprocess.Popen[str] | None = None
     previous_signal_handlers = _install_shutdown_signal_handlers()
     interrupted = False
     gateway_process: subprocess.Popen[str] | None = None
+    restarted_gateway = False
 
     try:
-        if attach_only:
-            if attached_server_pids:
-                logs.add(
-                    f"Detected existing Maestro server on port {port}; attaching monitor and will stop it on exit."
-                )
-            else:
-                logs.add(f"Detected existing Fleet server on port {port}; attaching monitor.")
-        else:
-            process = _start_text_process(cmd)
-            logs.add(f"Starting server: {' '.join(cmd)}")
+        stopped_server_pids = _stop_existing_fleet_server(int(port), timeout_sec=8.0)
+        if stopped_server_pids:
+            logs.add(
+                f"Stopped existing Fleet server pid(s): {', '.join(str(pid) for pid in stopped_server_pids)}"
+            )
+
+        process = _start_text_process(cmd)
+        logs.add(f"Starting server: {' '.join(cmd)}")
         activity_logs.add(f"Fleet monitor attached for {company_name}.")
         activity_logs.add(f"Command Center URL: {state.primary_url}")
+        gateway_report = _restart_fleet_gateway_for_tui(gateway_logs)
+        restarted_gateway = True
+        if not gateway_report.get("ok"):
+            activity_logs.add("Fleet gateway restart reported an issue; server monitor continuing.")
 
         if process is not None:
             log_thread = threading.Thread(
@@ -977,11 +1059,12 @@ def run_up_tui(port: int, store: str, host: str):
     finally:
         stop_event.set()
         _shutdown_process(process, timeout_sec=8.0)
-        for pid in attached_server_pids:
-            _shutdown_pid(pid, timeout_sec=8.0)
+        _clear_detached_server_state()
         if process is not None and process.poll() is not None:
             state.server_running = False
             state.server_exit_code = process.returncode
+        if restarted_gateway:
+            _stop_fleet_gateway_for_tui(gateway_logs)
         _shutdown_process(gateway_process, timeout_sec=5.0)
         _restore_shutdown_signal_handlers(previous_signal_handlers)
 

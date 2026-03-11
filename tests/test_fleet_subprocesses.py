@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -82,10 +83,12 @@ def test_maybe_reexec_without_disabled_malloc_stack_logging_reexecs_clean_module
     assert "MallocStackLogging" not in observed["env"]
 
 
-def test_run_up_tui_reuses_existing_maestro_server_listener_and_stops_it_on_exit(monkeypatch, tmp_path):
+def test_run_up_tui_restarts_existing_maestro_server_listener_and_stops_gateway_on_exit(monkeypatch, tmp_path):
     store = tmp_path / "fleet-store"
     store.mkdir()
     stopped: list[tuple[int, float]] = []
+    started: list[list[str]] = []
+    gateway_events: list[str] = []
 
     monkeypatch.setattr(
         monitor,
@@ -97,14 +100,25 @@ def test_run_up_tui_reuses_existing_maestro_server_listener_and_stops_it_on_exit
         },
     )
     monkeypatch.setattr(monitor, "_resolve_commander_agent", lambda: ("commander-agent", "/tmp/workspace"))
+    monkeypatch.setattr(monitor, "_resolve_fleet_models", lambda: ("openai/gpt-5.4", "google/gemini-3.1-pro-preview"))
     monkeypatch.setattr(monitor, "load_install_state", lambda: {"company_name": "ACME"})
     monkeypatch.setattr(monitor, "_maestro_server_listener_pids", lambda port: [4242])
-    monkeypatch.setattr(monitor, "_fetch_json", lambda *args, **kwargs: None)
+    monkeypatch.setattr(monitor, "listener_pids", lambda port: [4242])
     monkeypatch.setattr(monitor, "_start_gateway_log_stream", lambda *args, **kwargs: None)
     monkeypatch.setattr(monitor, "_install_shutdown_signal_handlers", lambda: {})
     monkeypatch.setattr(monitor, "_restore_shutdown_signal_handlers", lambda previous: None)
     monkeypatch.setattr(monitor, "_shutdown_process", lambda process, *, timeout_sec: None)
     monkeypatch.setattr(monitor, "_shutdown_pid", lambda pid, *, timeout_sec: stopped.append((pid, timeout_sec)))
+    monkeypatch.setattr(
+        monitor,
+        "_restart_fleet_gateway_for_tui",
+        lambda gateway_logs: gateway_events.append("restart") or {"ok": True},
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_stop_fleet_gateway_for_tui",
+        lambda gateway_logs: gateway_events.append("stop") or {"ok": True},
+    )
     monkeypatch.setattr(monitor, "_update_metrics", lambda *args, **kwargs: None)
     monkeypatch.setattr(monitor, "_build_layout", lambda *args, **kwargs: object())
     monkeypatch.setattr(
@@ -113,10 +127,14 @@ def test_run_up_tui_reuses_existing_maestro_server_listener_and_stops_it_on_exit
         lambda seconds: (_ for _ in ()).throw(KeyboardInterrupt()),
     )
 
-    def _fail_start(*args, **kwargs):
-        raise AssertionError("should not start a new server when a managed listener already exists")
+    fake_process = SimpleNamespace(pid=5151, returncode=None, stdout=None)
+    fake_process.poll = lambda: None
 
-    monkeypatch.setattr(monitor, "_start_text_process", _fail_start)
+    monkeypatch.setattr(
+        monitor,
+        "_start_text_process",
+        lambda cmd, **kwargs: started.append(list(cmd)) or fake_process,
+    )
 
     class FakeLive:
         def __init__(self, *args, **kwargs):
@@ -136,6 +154,36 @@ def test_run_up_tui_reuses_existing_maestro_server_listener_and_stops_it_on_exit
     monitor.run_up_tui(port=3000, store=str(store), host="0.0.0.0")
 
     assert stopped == [(4242, 8.0)]
+    assert started
+    assert started[0][0:3] == [monitor.sys.executable, "-m", "maestro_fleet.server"]
+    assert gateway_events == ["restart", "stop"]
+
+
+def test_stop_existing_fleet_server_uses_pidfile_state_and_clears_it(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    state_dir = home / ".maestro" / "fleet"
+    state_dir.mkdir(parents=True)
+    pid_path = state_dir / "serve.pid.json"
+    pid_path.write_text(json.dumps({"pid": 4242, "port": 3000}), encoding="utf-8")
+
+    stopped: list[tuple[int, float]] = []
+
+    monkeypatch.setattr(monitor, "_maestro_server_listener_pids", lambda port: [])
+    monkeypatch.setattr(monitor, "listener_pids", lambda port: [])
+    monkeypatch.setattr(monitor, "_pid_running", lambda pid: pid == 4242)
+    monkeypatch.setattr(
+        monitor,
+        "read_process_command",
+        lambda pid: "python -m maestro_fleet.server --port 3000 --store /tmp/fleet-store --host 0.0.0.0",
+    )
+    monkeypatch.setattr(monitor, "_shutdown_pid", lambda pid, *, timeout_sec: stopped.append((pid, timeout_sec)))
+
+    result = monitor._stop_existing_fleet_server(3000, timeout_sec=8.0)
+
+    assert result == [4242]
+    assert stopped == [(4242, 8.0)]
+    assert not pid_path.exists()
 
 
 def test_start_text_process_uses_new_session_on_posix(monkeypatch):

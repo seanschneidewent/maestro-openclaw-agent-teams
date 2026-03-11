@@ -11,7 +11,6 @@ from typing import Any
 
 from maestro.command_center import build_command_center_state, build_project_snapshot, discover_project_dirs
 import maestro.control_plane_core as legacy_control_plane
-from maestro.fleet.projects import registry as legacy_registry
 from maestro.system_directives import summarize_system_directives
 
 from .openclaw_runtime import DEFAULT_FLEET_OPENCLAW_PROFILE, openclaw_config_path
@@ -40,6 +39,7 @@ _AVAILABLE_ACTIONS = [
     "conversation_read",
     "conversation_send",
 ]
+_REGISTRY_VERSION = 1
 
 
 def _now_iso() -> str:
@@ -48,6 +48,147 @@ def _now_iso() -> str:
 
 def _clean(value: Any) -> str:
     return str(value).strip() if value is not None else ""
+
+
+REGISTRY_VERSION = _REGISTRY_VERSION
+
+
+def clean_registry_text(value: Any) -> str:
+    return _clean(value)
+
+
+def normalize_bot_username(value: Any) -> str:
+    username = _clean(value)
+    if not username:
+        return ""
+    if not username.startswith("@"):
+        username = f"@{username.lstrip('@')}"
+    return username
+
+
+def resolve_node_identity(entry: dict[str, Any]) -> tuple[str, str, str]:
+    username = normalize_bot_username(entry.get("telegram_bot_username"))
+    display = _clean(entry.get("telegram_bot_display_name"))
+    assignee = _clean(entry.get("assignee"))
+    project_name = _clean(entry.get("project_name"))
+    slug = _clean(entry.get("project_slug"))
+
+    if username:
+        return username, "telegram_bot", username
+    if display:
+        return display, "telegram_bot", ""
+    if assignee and assignee.lower() != "unassigned":
+        return assignee, "assignee", ""
+    if project_name:
+        return project_name, "project", ""
+    return slug or "Project Node", "project", ""
+
+
+def fleet_registry_path(store_root: Path) -> Path:
+    return Path(store_root).resolve() / ".command_center" / "fleet_registry.json"
+
+
+def default_registry(store_root: Path) -> dict[str, Any]:
+    return {
+        "version": REGISTRY_VERSION,
+        "updated_at": "",
+        "store_root": str(Path(store_root).resolve()),
+        "projects": [],
+    }
+
+
+def find_registry_project(registry: dict[str, Any], project_slug: str) -> dict[str, Any] | None:
+    needle = project_slug.strip().lower()
+    for item in registry.get("projects", []):
+        if not isinstance(item, dict):
+            continue
+        slug = _clean(item.get("project_slug")).lower()
+        if slug == needle:
+            return item
+    return None
+
+
+def load_fleet_registry(store_root: Path, *, load_json_fn: Any) -> dict[str, Any]:
+    root = Path(store_root).resolve()
+    payload = load_json_fn(fleet_registry_path(root), default=default_registry(root))
+    if not isinstance(payload, dict):
+        payload = {}
+    projects = payload.get("projects") if isinstance(payload.get("projects"), list) else []
+    normalized: list[dict[str, Any]] = []
+    for item in projects:
+        if not isinstance(item, dict):
+            continue
+        slug = _clean(item.get("project_slug"))
+        if not slug:
+            continue
+        normalized_item = dict(item)
+        normalized_item["project_slug"] = slug
+        normalized_item["project_name"] = _clean(item.get("project_name")) or slug
+        normalized_item["project_dir_name"] = _clean(item.get("project_dir_name")) or slug
+        normalized_item["project_store_path"] = _clean(item.get("project_store_path")) or str(root / normalized_item["project_dir_name"])
+        normalized_item["maestro_agent_id"] = _clean(item.get("maestro_agent_id")) or f"maestro-project-{slug}"
+        normalized_item["ingest_input_root"] = _clean(item.get("ingest_input_root"))
+        normalized_item["superintendent"] = _clean(item.get("superintendent")) or "Unknown"
+        normalized_item["assignee"] = _clean(item.get("assignee")) or "Unassigned"
+        normalized_item["status"] = _clean(item.get("status")) or "active"
+        normalized_item["last_ingest_at"] = _clean(item.get("last_ingest_at"))
+        normalized_item["last_index_at"] = _clean(item.get("last_index_at"))
+        normalized_item["last_updated"] = _clean(item.get("last_updated"))
+        normalized_item["telegram_bot_username"] = normalize_bot_username(item.get("telegram_bot_username"))
+        normalized_item["telegram_bot_display_name"] = _clean(item.get("telegram_bot_display_name"))
+        normalized_item["last_conversation_at"] = _clean(item.get("last_conversation_at"))
+        display_name, source, handle = resolve_node_identity(normalized_item)
+        normalized_item["node_display_name"] = display_name
+        normalized_item["node_identity_source"] = source
+        normalized_item["node_handle"] = handle
+        normalized.append(normalized_item)
+    return {
+        "version": int(payload.get("version", REGISTRY_VERSION)),
+        "updated_at": _clean(payload.get("updated_at")),
+        "store_root": str(root),
+        "projects": sorted(normalized, key=lambda x: _clean(x.get("project_name")).lower()),
+    }
+
+
+def registries_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    left_core = {
+        "version": int(left.get("version", REGISTRY_VERSION)),
+        "store_root": str(left.get("store_root", "")),
+        "projects": left.get("projects", []),
+    }
+    right_core = {
+        "version": int(right.get("version", REGISTRY_VERSION)),
+        "store_root": str(right.get("store_root", "")),
+        "projects": right.get("projects", []),
+    }
+    return json.dumps(left_core, sort_keys=True) == json.dumps(right_core, sort_keys=True)
+
+
+def save_fleet_registry(store_root: Path, registry: dict[str, Any], *, save_json_fn: Any) -> None:
+    _ = (store_root, registry, save_json_fn)
+
+
+def sync_fleet_registry(
+    store_root: Path,
+    *,
+    discover_project_dirs_fn: Any,
+    build_project_snapshot_fn: Any,
+    load_json_fn: Any,
+    save_json_fn: Any,
+    project_index_timestamp_fn: Any,
+    now_iso_fn: Any,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    _ = (
+        discover_project_dirs_fn,
+        build_project_snapshot_fn,
+        load_json_fn,
+        save_json_fn,
+        project_index_timestamp_fn,
+        now_iso_fn,
+        dry_run,
+    )
+    return build_derived_registry(Path(store_root).resolve())
 
 
 def _load_json(path: Path, *, default: Any) -> Any:
@@ -363,10 +504,31 @@ def _matching_binding(bindings: list[dict[str, Any]], slug: str, project_dir: Pa
 
 
 def _load_legacy_registry(root: Path) -> dict[str, Any]:
-    return legacy_registry.load_fleet_registry(
-        root,
-        load_json_fn=lambda path, default=None: _load_json(Path(path), default=default),
-    )
+    payload = _load_json(fleet_registry_path(root), default={})
+    if not isinstance(payload, dict):
+        payload = {}
+    projects = payload.get("projects") if isinstance(payload.get("projects"), list) else []
+    normalized: list[dict[str, Any]] = []
+    for item in projects:
+        if not isinstance(item, dict):
+            continue
+        slug = _clean(item.get("project_slug"))
+        if not slug:
+            continue
+        normalized_item = dict(item)
+        normalized_item["project_slug"] = slug
+        normalized_item["telegram_bot_username"] = normalize_bot_username(item.get("telegram_bot_username"))
+        display_name, source, handle = resolve_node_identity(normalized_item)
+        normalized_item["node_display_name"] = display_name
+        normalized_item["node_identity_source"] = source
+        normalized_item["node_handle"] = handle
+        normalized.append(normalized_item)
+    return {
+        "version": int(payload.get("version", _REGISTRY_VERSION)),
+        "updated_at": _clean(payload.get("updated_at")),
+        "store_root": str(root.resolve()),
+        "projects": normalized,
+    }
 
 
 def _legacy_registry_by_slug(root: Path) -> dict[str, dict[str, Any]]:
@@ -423,7 +585,7 @@ def _registry_entry(
         "workspace": _clean((binding or {}).get("workspace")),
         "model": _clean((binding or {}).get("model")) or _clean(maestro_meta.get("model")),
     }
-    display_name, source, handle = legacy_registry.resolve_node_identity(entry)
+    display_name, source, handle = resolve_node_identity(entry)
     entry["node_display_name"] = display_name
     entry["node_identity_source"] = source
     entry["node_handle"] = handle
@@ -460,7 +622,7 @@ def build_derived_registry(store_root: Path, *, home_dir: Path | None = None) ->
         ))
 
     registry = {
-        "version": int(getattr(legacy_registry, "REGISTRY_VERSION", 1)),
+        "version": int(_REGISTRY_VERSION),
         "updated_at": _now_iso(),
         "store_root": str(root),
         "projects": sorted(projects, key=lambda item: _clean(item.get("project_name")).lower()),
@@ -637,7 +799,7 @@ def build_derived_awareness_state(
         "network": network,
         "paths": {
             "store_root": str(root),
-            "registry_path": str(legacy_registry.fleet_registry_path(root)),
+            "registry_path": str(fleet_registry_path(root)),
             "workspace_root": _clean(company_agent.get("workspace")),
         },
         "services": services,

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
 from .openclaw_runtime import (
     DEFAULT_FLEET_OPENCLAW_PROFILE,
     openclaw_config_path,
+    resolve_openclaw_profile,
 )
 
 
@@ -26,6 +28,16 @@ def _load_json(path: Path, *, default: Any) -> Any:
 def install_state_path(home_dir: Path | None = None) -> Path:
     home = (home_dir or Path.home()).resolve()
     return home / ".maestro" / "install.json"
+
+
+def fleet_runtime_state_dir(home_dir: Path | None = None) -> Path:
+    home = (home_dir or Path.home()).resolve()
+    base = home / ".maestro" / "fleet"
+    profile = resolve_openclaw_profile(default_profile=DEFAULT_FLEET_OPENCLAW_PROFILE)
+    if profile and profile != DEFAULT_FLEET_OPENCLAW_PROFILE:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", profile).strip("._-") or "profile"
+        return base / "profiles" / safe
+    return base
 
 
 def load_install_state(home_dir: Path | None = None) -> dict[str, Any]:
@@ -152,6 +164,7 @@ def resolve_fleet_store_root(
 
 
 __all__ = [
+    "fleet_runtime_state_dir",
     "install_state_path",
     "load_install_state",
     "load_openclaw_config",

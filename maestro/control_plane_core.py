@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ._package_imports import ensure_package_src
 from .command_center import build_project_snapshot, discover_project_dirs
 from .fleet.projects import awareness as project_awareness
 from .fleet.projects import ingest_commands as project_ingest_commands
@@ -28,9 +29,10 @@ from .openclaw_profile import (
 from .profile import PROFILE_FLEET, resolve_profile
 from .system_directives import summarize_system_directives
 from .utils import load_json, save_json, slugify
-from .workspace_templates import (
-    sync_project_workspace_runtime_files,
-)
+
+ensure_package_src("maestro_fleet")
+
+from maestro_fleet.workspace import sync_project_workspace_runtime_files
 
 
 REGISTRY_VERSION = 1

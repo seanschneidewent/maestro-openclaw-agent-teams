@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ._package_imports import ensure_package_src
 from .control_plane import (
     ensure_telegram_account_bindings,
     resolve_network_urls,
@@ -42,11 +43,17 @@ from .workspace_templates import (
     render_personal_tools_md,
     render_tools_md,
     render_workspace_env,
+)
+
+ensure_package_src("maestro_fleet")
+
+from maestro_fleet.workspace import (
+    sync_company_workspace_runtime_files,
     sync_company_workspace_skill_bundles,
     sync_project_workspace_runtime_files,
     sync_project_workspace_skill_bundles,
-    sync_workspace_native_extension,
     sync_workspace_awareness_file,
+    sync_workspace_native_extension,
 )
 from .install_state import load_install_state, save_install_state
 

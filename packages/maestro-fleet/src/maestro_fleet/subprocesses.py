@@ -1,0 +1,70 @@
+"""Fleet subprocess helpers owned by the package-native runtime."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from typing import Any, Callable
+
+from .openclaw_runtime import sanitized_subprocess_env
+
+
+def run_profiled_cmd(
+    args: list[str],
+    *,
+    timeout: int,
+    prepend_profile_args: Callable[[list[str]], list[str]],
+) -> tuple[bool, str]:
+    profiled_args = prepend_profile_args(args)
+    try:
+        result = subprocess.run(
+            profiled_args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            env=sanitized_subprocess_env(),
+        )
+    except Exception as exc:
+        return False, str(exc)
+    output = (result.stdout or "").strip() or (result.stderr or "").strip()
+    return result.returncode == 0, output
+
+
+def parse_json_from_output(text: str) -> dict[str, Any]:
+    raw = str(text or "")
+    idx = raw.find("{")
+    if idx < 0:
+        return {}
+    snippet = raw[idx:].strip()
+    try:
+        payload = json.loads(snippet)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def run_cmd_raw(
+    args: list[str],
+    *,
+    timeout: int,
+    clear_profile_env: bool = False,
+) -> tuple[bool, str]:
+    env = sanitized_subprocess_env(clear_profile_env=clear_profile_env)
+    try:
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
+            env=env,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    output = (result.stdout or "").strip() or (result.stderr or "").strip()
+    return result.returncode == 0, output

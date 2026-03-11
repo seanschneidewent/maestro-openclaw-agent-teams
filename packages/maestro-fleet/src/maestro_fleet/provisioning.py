@@ -8,7 +8,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
-from maestro.fleet_constants import (
+from .constants import (
     DEFAULT_PROJECT_MODEL,
     PROJECT_MODEL_OPTIONS,
     canonicalize_model,
@@ -16,6 +16,7 @@ from maestro.fleet_constants import (
 )
 
 from .actions import create_project_node, project_control_payload
+from .gateway import restart_openclaw_gateway_report
 from .openclaw_runtime import ensure_openclaw_profile_env
 from .state import resolve_fleet_store_root
 
@@ -72,7 +73,7 @@ def _update_openclaw_for_project(*args, **kwargs):
 
 
 def _restart_openclaw_gateway(*args, **kwargs):
-    return _legacy_provisioning_module()._restart_openclaw_gateway(*args, **kwargs)
+    return restart_openclaw_gateway_report(*args, **kwargs)
 
 
 def _complete_telegram_pairing(*args, **kwargs):
